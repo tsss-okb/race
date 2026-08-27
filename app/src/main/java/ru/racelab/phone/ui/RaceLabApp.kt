@@ -71,16 +71,7 @@ fun RaceLabApp(
         Scaffold(
             containerColor = Bg,
             bottomBar = {
-                NavigationBar(containerColor = Color(0xFF0E1410)) {
-                    Tab.entries.forEach { item ->
-                        NavigationBarItem(
-                            selected = tab == item,
-                            onClick = { tab = item },
-                            icon = { Text(item.label.take(1), fontWeight = FontWeight.Black) },
-                            label = { Text(item.label, fontSize = 10.sp) }
-                        )
-                    }
-                }
+                CompactTabBar(selected = tab, onSelect = { tab = it })
             }
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
@@ -89,6 +80,63 @@ fun RaceLabApp(
                     Tab.VIDEO -> VideoScreen(state, onRequestPermissions)
                     Tab.SENSORS -> SensorsScreen(state)
                     Tab.BLE -> ConnectionsScreen(state, bleGps, obd)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    Surface(color = Color(0xFF0E1410), tonalElevation = 0.dp) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .height(48.dp)
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Tab.entries.forEach { item ->
+                val active = selected == item
+                val glyph = when (item) {
+                    Tab.DRIVE -> "▶"
+                    Tab.VIDEO -> "●"
+                    Tab.SENSORS -> "◉"
+                    Tab.BLE -> "BT"
+                }
+                Surface(
+                    onClick = { onSelect(item) },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (active) Color(0xFF19351D) else Color.Transparent
+                ) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            glyph,
+                            color = if (active) Green else Muted,
+                            fontSize = if (item == Tab.BLE) 11.sp else 15.sp,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            when (item) {
+                                Tab.DRIVE -> "ЗАЕЗД"
+                                Tab.VIDEO -> "ВИДЕО"
+                                Tab.SENSORS -> "IMU"
+                                Tab.BLE -> "OBD"
+                            },
+                            color = if (active) Color.White else Muted,
+                            fontSize = 9.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
