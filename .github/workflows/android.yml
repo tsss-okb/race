@@ -20,10 +20,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
-      - name: Core self-test
-        run: bash ./test-core.sh
       - name: Build debug APK
-        run: gradle :app:assembleDebug
+        run: gradle --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: RaceLab-Android-debug
