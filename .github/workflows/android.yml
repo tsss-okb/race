@@ -21,7 +21,7 @@ jobs:
         with:
           gradle-version: '9.5.0'
       - name: Core self-test
-        run: ./test-core.sh
+        run: bash ./test-core.sh
       - name: Build debug APK
         run: gradle :app:assembleDebug
       - uses: actions/upload-artifact@v4
