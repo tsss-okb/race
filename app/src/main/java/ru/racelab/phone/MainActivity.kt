@@ -14,11 +14,13 @@ import ru.racelab.phone.ble.BleNmeaManager
 import ru.racelab.phone.ble.Elm327Manager
 import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.service.RecordingService
+import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
     private lateinit var obd: Elm327Manager
+    private lateinit var phoneSensors: PhoneSensorMonitor
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val denied = grants.filterValues { !it }.keys
@@ -32,6 +34,7 @@ class MainActivity : ComponentActivity() {
 
         bleGps = BleNmeaManager(this) { RaceRuntime.ingestPoint(it) }
         obd = Elm327Manager(this) { RaceRuntime.updateObd(it) }
+        phoneSensors = PhoneSensorMonitor(this)
         requestCorePermissions()
 
         setContent {
@@ -76,6 +79,16 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) list += Manifest.permission.POST_NOTIFICATIONS
         val missing = list.distinct().filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        phoneSensors.start()
+    }
+
+    override fun onPause() {
+        phoneSensors.stop()
+        super.onPause()
     }
 
     override fun onDestroy() {
