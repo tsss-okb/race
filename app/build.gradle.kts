@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "ru.racelab.phone"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ru.racelab.phone"
