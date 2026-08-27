@@ -166,7 +166,7 @@ object RaceRuntime {
     }
 
     @Synchronized
-    fun updateSensor(ts: Long, sensor: Sensor, accuracy: Int, values: FloatArray) {
+    fun updateSensor(ts: Long, sensor: Sensor, accuracy: Int, values: FloatArray, persist: Boolean = true) {
         val id = "${sensor.type}:${sensor.name}"
         val prevTs = sensorLastTs[id]
         val hz = if (prevTs != null && ts > prevTs) 1000.0 / (ts - prevTs) else 0.0
@@ -180,7 +180,7 @@ object RaceRuntime {
             gZ = values[2] / 9.80665
             gTotal = sqrt(gX * gX + gY * gY + gZ * gZ)
         }
-        writer?.writeSensor(ts, sensor, accuracy, hz, values)
+        if (persist) writer?.writeSensor(ts, sensor, accuracy, hz, values)
 
         if (ts - lastSensorUiPush >= 100) {
             lastSensorUiPush = ts
