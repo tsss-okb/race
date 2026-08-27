@@ -85,5 +85,5 @@ class SessionFileWriter(context: Context) {
         File(directory, "meta.json").writeText(meta.toString(2))
     }
 
-    private fun quote(s: String): String = "\"\${s.replace("\"", "\"\"")}\""
+    private fun quote(s: String): String = "\\\"" + s.replace("\\\"", "\\\"\\\"") + "\\\""
 }
