@@ -52,6 +52,8 @@ import ru.racelab.phone.video.VideoCodecMode
 import ru.racelab.phone.video.VideoQualityMode
 import ru.racelab.phone.video.VideoSettings
 import ru.racelab.phone.video.VideoSettingsRepository
+import ru.racelab.phone.remote.RemoteAction
+import ru.racelab.phone.remote.RemoteControlSettingsRepository
 import kotlin.math.abs
 
 private val Bg = Color(0xFF050607)
@@ -81,6 +83,22 @@ fun RaceLabApp(
 ) {
     val state by RaceRuntime.state.collectAsStateWithLifecycle()
     var tab by remember { mutableStateOf(Tab.DASHBOARD) }
+
+    LaunchedEffect(state.remoteActionSeq) {
+        when (state.remoteAction) {
+            RemoteAction.PREVIOUS_TAB -> {
+                val index = Tab.entries.indexOf(tab)
+                tab = Tab.entries[(index - 1 + Tab.entries.size) % Tab.entries.size]
+            }
+            RemoteAction.NEXT_TAB -> {
+                val index = Tab.entries.indexOf(tab)
+                tab = Tab.entries[(index + 1) % Tab.entries.size]
+            }
+            RemoteAction.DASHBOARD -> tab = Tab.DASHBOARD
+            RemoteAction.DATA -> tab = Tab.DATA
+            RemoteAction.NONE -> Unit
+        }
+    }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -226,6 +244,7 @@ private fun SettingsHubScreen(
     state: AppState,
     onRequestPermissions: () -> Unit
 ) {
+    val context = LocalContext.current
     var showTracks by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().background(Bg).padding(9.dp),
@@ -262,6 +281,30 @@ private fun SettingsHubScreen(
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("HOCO GM204 PROFILE", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text(
+                        "Camera → PIT • OK → Reset • ←/→ вкладки • ↑ Dashboard • ↓ Data",
+                        color = Muted,
+                        fontSize = 8.sp
+                    )
+                }
+                Switch(
+                    checked = state.gm204Enabled,
+                    onCheckedChange = { enabled ->
+                        RemoteControlSettingsRepository.setGm204Enabled(context, enabled)
+                        RaceRuntime.setGm204Enabled(enabled)
+                    }
+                )
+            }
+            Text(
+                "Устройство: " + state.remoteDeviceName + " • Последняя кнопка: " + state.remoteLastKey,
+                color = Color.White,
+                fontSize = 9.sp
+            )
+            HorizontalDivider(color = Color(0xFF282C2F))
+
             Text("PIT BUTTON", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
             Text(
                 "Последний источник: " + state.pitLastTrigger,
