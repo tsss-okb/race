@@ -3,6 +3,8 @@ package ru.racelab.phone.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,10 +18,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.racelab.phone.session.*
+import ru.racelab.phone.data.AppState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -170,6 +175,8 @@ private fun SessionDetailsDialog(
     var status by remember { mutableStateOf("") }
     var lastExport by remember { mutableStateOf<SessionExportResult?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showAnalysis by remember { mutableStateOf(false) }
+    val archivedLaps = remember(session.id) { SessionRepository.loadLapResults(session) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -182,7 +189,10 @@ private fun SessionDetailsDialog(
         confirmButton = { TextButton(onClick = onDismiss) { Text("ГОТОВО") } },
         text = {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 620.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 620.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -226,6 +236,16 @@ private fun SessionDetailsDialog(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text(ref.name, fontSize = 9.sp, maxLines = 1) }
+                    }
+                }
+
+                if (archivedLaps.isNotEmpty()) {
+                    Button(
+                        onClick = { showAnalysis = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = ArchiveGreen, contentColor = Color.Black)
+                    ) {
+                        Text("АНАЛИЗ КРУГОВ REF / CMP", fontSize = 9.sp, fontWeight = FontWeight.Black)
                     }
                 }
 
@@ -275,6 +295,39 @@ private fun SessionDetailsDialog(
             }
         }
     )
+
+    if (showAnalysis && archivedLaps.isNotEmpty()) {
+        Dialog(
+            onDismissRequest = { showAnalysis = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.96f)
+                    .fillMaxHeight(0.92f),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF0B0F0C)
+            ) {
+                Column(Modifier.fillMaxSize().padding(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "АНАЛИЗ • " + (session.trackName ?: session.id),
+                            color = ArchiveGreen,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { showAnalysis = false }) { Text("ЗАКРЫТЬ") }
+                    }
+                    AnalysisScreen(
+                        AppState(
+                            laps = archivedLaps,
+                            bestLapMs = archivedLaps.minOfOrNull { it.timeMs }
+                        )
+                    )
+                }
+            }
+        }
+    }
 
     if (confirmDelete) {
         AlertDialog(
