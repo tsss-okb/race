@@ -19,6 +19,9 @@ import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.obd.EvChannel
 import ru.racelab.phone.core.NmeaQuality
 import ru.racelab.phone.gnss.GnssSourceMode
+import ru.racelab.phone.canbus.CanChannel
+import ru.racelab.phone.canbus.CanFrame
+import ru.racelab.phone.canbus.CanSignalValue
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -48,6 +51,11 @@ object RaceRuntime {
     private var lowSpeedSinceMs: Long? = null
     private val gnssLastSeen = mutableMapOf<String, Long>()
     private var acceptedGnssSource: String? = null
+    private var vehicleCan = VehicleCanState()
+    private val canSignals = LinkedHashMap<String, CanSignalValue>()
+    private var canFrameCount = 0L
+    private var lastCanTs: Long? = null
+    private var canHz = 0.0
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -60,7 +68,7 @@ object RaceRuntime {
         if (_state.value.sessionActive) return
         engine.resetSession(keepTrack = true)
         latestPoint = null; previousPoint = null; lastGpsTs = null; gpsHz = 0.0
-        preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear()
+        preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear(); canSignals.clear(); canFrameCount = 0L; lastCanTs = null; canHz = 0.0
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -420,6 +428,57 @@ object RaceRuntime {
                 }
             }
         }
+    }
+
+    @Synchronized
+    fun updateCanFrame(frame: CanFrame) {
+        canFrameCount++
+        lastCanTs?.let { last ->
+            val dt = frame.timestampMs - last
+            if (dt in 1..5000) {
+                val hz = 1000.0 / dt
+                canHz = if (canHz == 0.0) hz else canHz * 0.85 + hz * 0.15
+            }
+        }
+        lastCanTs = frame.timestampMs
+        writer?.writeCanFrame(frame)
+        _state.value = _state.value.copy(
+            canFrameCount = canFrameCount,
+            canHz = canHz
+        )
+    }
+
+    @Synchronized
+    fun updateCanSignal(decoded: CanSignalValue) {
+        canSignals[decoded.signal.id] = decoded
+        when (decoded.signal.channel) {
+            CanChannel.RPM -> obd = obd.copy(rpm = decoded.value)
+            CanChannel.VEHICLE_SPEED_KMH -> obd = obd.copy(speedKmh = decoded.value)
+            CanChannel.THROTTLE_PCT -> obd = obd.copy(throttlePct = decoded.value)
+            CanChannel.COOLANT_C -> obd = obd.copy(coolantC = decoded.value)
+            CanChannel.OIL_TEMP_C -> obd = obd.copy(oilTempC = decoded.value)
+            CanChannel.GEAR -> vehicleCan = vehicleCan.copy(gear = decoded.value)
+            CanChannel.STEERING_DEG -> vehicleCan = vehicleCan.copy(steeringDeg = decoded.value)
+            CanChannel.BRAKE_PRESSURE_BAR -> vehicleCan = vehicleCan.copy(brakePressureBar = decoded.value)
+            CanChannel.WHEEL_FL_KMH -> vehicleCan = vehicleCan.copy(wheelFlKmh = decoded.value)
+            CanChannel.WHEEL_FR_KMH -> vehicleCan = vehicleCan.copy(wheelFrKmh = decoded.value)
+            CanChannel.WHEEL_RL_KMH -> vehicleCan = vehicleCan.copy(wheelRlKmh = decoded.value)
+            CanChannel.WHEEL_RR_KMH -> vehicleCan = vehicleCan.copy(wheelRrKmh = decoded.value)
+            CanChannel.EV_SOC -> ev = ev.copy(socPct = decoded.value)
+            CanChannel.EV_BATTERY_KW -> ev = ev.copy(batteryPowerKw = decoded.value)
+            CanChannel.EV_MOTOR_KW -> ev = ev.copy(motorPowerKw = decoded.value)
+            CanChannel.EV_REGEN_KW -> ev = ev.copy(regenKw = decoded.value)
+            CanChannel.EV_BATTERY_TEMP_C -> ev = ev.copy(batteryTempC = decoded.value)
+            CanChannel.EV_INVERTER_TEMP_C -> ev = ev.copy(inverterTempC = decoded.value)
+            CanChannel.NONE -> Unit
+        }
+        writer?.writeCanSignal(decoded)
+        _state.value = _state.value.copy(
+            obd = obd,
+            ev = ev,
+            vehicleCan = vehicleCan,
+            canSignals = canSignals.values.toList()
+        )
     }
 
     fun updateVideoState(recording: Boolean, status: String) {
