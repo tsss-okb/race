@@ -11,11 +11,17 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 object InternetPitRelay {
-    private val executor = Executors.newSingleThreadScheduledExecutor { r ->
-        Thread(r, "RaceLab-InternetPitRelay").apply { isDaemon = true }
+    private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "RaceLab-InternetPit-Heartbeat").apply { isDaemon = true }
     }
+    private val publisher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "RaceLab-InternetPit-Publisher").apply { isDaemon = true }
+    }
+    private val publishInFlight = AtomicBoolean(false)
+    private val publishPending = AtomicBoolean(false)
 
     @Volatile private var task: ScheduledFuture<*>? = null
     @Volatile private var context: Context? = null
@@ -47,10 +53,11 @@ object InternetPitRelay {
         )
 
         if (settings.enabled && settings.configured) {
-            task = executor.scheduleWithFixedDelay(
-                { publishLatest() },
-                0,
-                100,
+            requestPublish()
+            task = scheduler.scheduleWithFixedDelay(
+                { requestPublish() },
+                1_000,
+                1_000,
                 TimeUnit.MILLISECONDS
             )
         }
@@ -59,6 +66,7 @@ object InternetPitRelay {
     fun stop() {
         task?.cancel(false)
         task = null
+        publishPending.set(false)
         RaceRuntime.setInternetPitRelayStatus(
             enabled = settings.enabled,
             configured = settings.configured,
@@ -66,6 +74,26 @@ object InternetPitRelay {
             viewerUrl = viewerUrl(settings),
             lastSuccessMs = lastSuccessMs
         )
+    }
+
+    fun publishPriority() {
+        if (settings.enabled && settings.configured) requestPublish()
+    }
+
+    private fun requestPublish() {
+        publishPending.set(true)
+        if (!publishInFlight.compareAndSet(false, true)) return
+
+        publisher.execute {
+            try {
+                while (publishPending.getAndSet(false)) {
+                    publishLatest()
+                }
+            } finally {
+                publishInFlight.set(false)
+                if (publishPending.get()) requestPublish()
+            }
+        }
     }
 
     private fun publishLatest() {
@@ -103,16 +131,20 @@ object InternetPitRelay {
         val endpoint = cfg.baseUrl + "/api/room/" + room + "/update?key=" + key
 
         try {
+            val bytes = body.toByteArray(StandardCharsets.UTF_8)
             val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 1_500
-                readTimeout = 1_500
+                connectTimeout = 650
+                readTimeout = 650
                 doOutput = true
+                useCaches = false
+                setFixedLengthStreamingMode(bytes.size)
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 setRequestProperty("Cache-Control", "no-store")
+                setRequestProperty("Connection", "keep-alive")
             }
             connection.outputStream.use { out ->
-                out.write(body.toByteArray(StandardCharsets.UTF_8))
+                out.write(bytes)
             }
             val code = connection.responseCode
             connection.disconnect()
