@@ -52,6 +52,8 @@ data class AppState(
     val nearestTrackDistanceM: Double? = null,
     val autoStopEnabled: Boolean = true,
     val autoStopRequested: Boolean = false,
+    val videoRecording: Boolean = false,
+    val videoStatus: String = "Видео готово",
     val gX: Double = 0.0,
     val gY: Double = 0.0,
     val gZ: Double = 0.0,
