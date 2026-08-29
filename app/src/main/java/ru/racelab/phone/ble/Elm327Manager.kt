@@ -13,12 +13,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.racelab.phone.core.ObdParser
 import ru.racelab.phone.core.ObdReading
+import ru.racelab.phone.obd.CustomPid
+import ru.racelab.phone.obd.CustomPidRepository
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
 class Elm327Manager(
     context: Context,
-    private val onReading: (ObdReading) -> Unit
+    private val onReading: (ObdReading) -> Unit,
+    private val onCustom: (CustomPid, Double) -> Unit = { _, _ -> },
+    private val onSupported: (Set<String>) -> Unit = {}
 ) {
     private val app = context.applicationContext
     private val manager = app.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -32,6 +36,9 @@ class Elm327Manager(
     private var writeChar: BluetoothGattCharacteristic? = null
     private var pollIndex = 0
     private var ready = false
+    private val supportedPids = linkedSetOf<String>()
+    private var customPids: List<CustomPid> = emptyList()
+    private var lastCustomRefresh = 0L
 
     private val _state = MutableStateFlow(BleUiState())
     val state: StateFlow<BleUiState> = _state.asStateFlow()
@@ -51,7 +58,10 @@ class Elm327Manager(
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                _state.value = _state.value.copy(status = "Подключено, читаю сервисы…", connectedAddress = gatt.device.address)
+                _state.value = _state.value.copy(
+                    status = "Подключено, читаю сервисы…",
+                    connectedAddress = gatt.device.address
+                )
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 ready = false
@@ -63,7 +73,9 @@ class Elm327Manager(
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             val all = gatt.services.flatMap { it.characteristics }
             notifyChar = all.firstOrNull { it.uuid == FFE1 || it.uuid == NUS_TX }
-                ?: all.firstOrNull { it.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 }
+                ?: all.firstOrNull {
+                    it.properties and (BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+                }
             writeChar = all.firstOrNull { it.uuid == FFE1 || it.uuid == NUS_RX }
                 ?: all.firstOrNull {
                     it.properties and (BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
@@ -82,7 +94,11 @@ class Elm327Manager(
             consume(characteristic.value ?: return)
         }
 
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
             consume(value)
         }
     }
@@ -90,17 +106,22 @@ class Elm327Manager(
     private val pollRunnable = object : Runnable {
         override fun run() {
             if (!ready || writeChar == null) return
-            val commands = arrayOf("010C\r", "010D\r", "0111\r", "0105\r")
-            write(commands[pollIndex % commands.size])
-            pollIndex++
-            handler.postDelayed(this, 250)
+            refreshCustomPidsIfNeeded()
+            val commands = buildPollCommands()
+            if (commands.isNotEmpty()) {
+                write(commands[pollIndex % commands.size] + "\r")
+                pollIndex++
+            }
+            handler.postDelayed(this, 140L)
         }
     }
 
     fun startScan() {
         devices.clear()
         _state.value = BleUiState(scanning = true, status = "Поиск BLE OBD-II…")
-        scanner?.startScan(scanCallback) ?: run { _state.value = _state.value.copy(scanning = false, status = "Bluetooth недоступен") }
+        scanner?.startScan(scanCallback) ?: run {
+            _state.value = _state.value.copy(scanning = false, status = "Bluetooth недоступен")
+        }
     }
 
     fun stopScan() {
@@ -109,28 +130,68 @@ class Elm327Manager(
     }
 
     fun connect(address: String) {
-        stopScan(); disconnect()
+        stopScan()
+        disconnect()
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
         _state.value = _state.value.copy(status = "Подключение ${device.address}…")
         gatt = device.connectGatt(app, false, callback, BluetoothDevice.TRANSPORT_LE)
     }
 
     fun disconnect() {
-        ready = false; stopPolling()
-        runCatching { gatt?.disconnect() }; runCatching { gatt?.close() }
-        gatt = null; notifyChar = null; writeChar = null
+        ready = false
+        stopPolling()
+        runCatching { gatt?.disconnect() }
+        runCatching { gatt?.close() }
+        gatt = null
+        notifyChar = null
+        writeChar = null
+        supportedPids.clear()
         _state.value = _state.value.copy(status = "Отключено", connectedAddress = null)
     }
 
+    fun reloadCustomPids() {
+        lastCustomRefresh = 0L
+        refreshCustomPidsIfNeeded()
+    }
+
     private fun initElm() {
-        val commands = listOf("ATZ\r", "ATE0\r", "ATL0\r", "ATS0\r", "ATH0\r", "ATSP0\r")
-        commands.forEachIndexed { i, cmd -> handler.postDelayed({ write(cmd) }, i * 350L) }
+        supportedPids.clear()
+        val commands = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0")
+        commands.forEachIndexed { i, cmd ->
+            handler.postDelayed({ write(cmd + "\r") }, i * 320L)
+        }
+        val baseDelay = commands.size * 320L + 400L
+        listOf("0100", "0120", "0140", "0160").forEachIndexed { i, cmd ->
+            handler.postDelayed({ write(cmd + "\r") }, baseDelay + i * 360L)
+        }
         handler.postDelayed({
             ready = true
-            _state.value = _state.value.copy(status = "OBD-II активен")
+            customPids = CustomPidRepository.list(app).filter { it.enabled }
+            lastCustomRefresh = System.currentTimeMillis()
+            _state.value = _state.value.copy(
+                status = if (supportedPids.isEmpty()) "OBD-II активен" else "OBD-II активен • ${supportedPids.size} PID"
+            )
             handler.removeCallbacks(pollRunnable)
             handler.post(pollRunnable)
-        }, commands.size * 350L + 400)
+        }, baseDelay + 4 * 360L + 400L)
+    }
+
+    private fun buildPollCommands(): List<String> {
+        val standard = listOf(
+            "0104", "0105", "0106", "0107", "010A", "010B", "010C",
+            "010D", "010E", "010F", "0110", "0111", "0142", "015C"
+        )
+        val filtered = if (supportedPids.isEmpty()) standard else standard.filter { it in supportedPids }
+        return (filtered + customPids.map { it.request.trim().uppercase().replace(" ", "") })
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
+    private fun refreshCustomPidsIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (now - lastCustomRefresh < 2_000L) return
+        customPids = CustomPidRepository.list(app).filter { it.enabled }
+        lastCustomRefresh = now
     }
 
     private fun stopPolling() = handler.removeCallbacks(pollRunnable)
@@ -139,10 +200,14 @@ class Elm327Manager(
         val g = gatt ?: return
         val ch = writeChar ?: return
         val bytes = text.toByteArray(Charsets.US_ASCII)
-        val type = if (ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(ch, bytes, type)
-        else {
+        val type = if (ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ch, bytes, type)
+        } else {
             @Suppress("DEPRECATION")
             ch.writeType = type
             @Suppress("DEPRECATION")
@@ -154,20 +219,41 @@ class Elm327Manager(
 
     private fun consume(bytes: ByteArray) {
         buffer.append(bytes.toString(Charsets.US_ASCII))
-        if (buffer.contains('>') || buffer.length > 256) {
-            val raw = buffer.toString()
-            buffer.clear()
-            ObdParser.parse(raw)?.let(onReading)
+        if (!buffer.contains('>') && buffer.length <= 512) return
+
+        val raw = buffer.toString()
+        buffer.clear()
+
+        ObdParser.parse(raw)?.let(onReading)
+
+        var supportChanged = false
+        listOf(0x00, 0x20, 0x40, 0x60).forEach { base ->
+            val found = ObdParser.parseSupportedPids(raw, base)
+            if (found.isNotEmpty() && supportedPids.addAll(found)) supportChanged = true
+        }
+        if (supportChanged) {
+            onSupported(supportedPids.toSet())
+            _state.value = _state.value.copy(status = "OBD-II активен • ${supportedPids.size} PID")
+        }
+
+        customPids.forEach { pid ->
+            CustomPidRepository.parse(raw, pid)?.let { onCustom(pid, it) }
         }
     }
 
     private fun enableNotifications(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic) {
         gatt.setCharacteristicNotification(ch, true)
         val descriptor = ch.getDescriptor(CCCD) ?: return
-        if (Build.VERSION.SDK_INT >= 33) gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-        else {
+        val value = if (ch.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0) {
+            BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+        } else {
+            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            gatt.writeDescriptor(descriptor, value)
+        } else {
             @Suppress("DEPRECATION")
-            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            descriptor.value = value
             @Suppress("DEPRECATION")
             gatt.writeDescriptor(descriptor)
         }
