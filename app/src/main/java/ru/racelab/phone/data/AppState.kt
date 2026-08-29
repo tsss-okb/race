@@ -5,6 +5,7 @@ import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.gnss.GnssSourceMode
 import ru.racelab.phone.canbus.CanSignalValue
+import ru.racelab.phone.remote.RemoteAction
 
 data class SensorSnapshot(
     val id: String,
@@ -92,6 +93,11 @@ data class AppState(
     val pitBestMs: Long? = null,
     val pitStopCount: Int = 0,
     val pitLastTrigger: String = "—",
+    val gm204Enabled: Boolean = true,
+    val remoteDeviceName: String = "—",
+    val remoteLastKey: String = "—",
+    val remoteAction: RemoteAction = RemoteAction.NONE,
+    val remoteActionSeq: Long = 0L,
     val gX: Double = 0.0,
     val gY: Double = 0.0,
     val gZ: Double = 0.0,
