@@ -98,6 +98,8 @@ data class AppState(
     val remoteLastKey: String = "—",
     val remoteAction: RemoteAction = RemoteAction.NONE,
     val remoteActionSeq: Long = 0L,
+    val pitLaneServerRunning: Boolean = false,
+    val pitLaneUrls: List<String> = emptyList(),
     val gX: Double = 0.0,
     val gY: Double = 0.0,
     val gZ: Double = 0.0,
