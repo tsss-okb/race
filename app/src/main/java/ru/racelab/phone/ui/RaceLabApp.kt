@@ -37,6 +37,7 @@ import ru.racelab.phone.ble.BleNmeaManager
 import ru.racelab.phone.ble.BleUiState
 import ru.racelab.phone.ble.Elm327Manager
 import ru.racelab.phone.gnss.UsbNmeaManager
+import ru.racelab.phone.canbus.UsbCanManager
 import ru.racelab.phone.camera.CameraRecorder
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.data.AppState
@@ -65,6 +66,7 @@ private enum class Tab(val label: String) { DRIVE("ЗАЕЗД"), ANALYSIS("АН�
 fun RaceLabApp(
     bleGps: BleNmeaManager,
     usbGnss: UsbNmeaManager,
+    usbCan: UsbCanManager,
     obd: Elm327Manager,
     onStartSession: () -> Unit,
     onStopSession: () -> Unit,
@@ -95,7 +97,7 @@ fun RaceLabApp(
                     Tab.ANALYSIS -> AnalysisScreen(state)
                     Tab.VIDEO -> VideoScreen(state, onRequestPermissions)
                     Tab.SENSORS -> SensorsScreen(state)
-                    Tab.BLE -> ConnectionsScreen(state, bleGps, usbGnss, obd)
+                    Tab.BLE -> ConnectionsScreen(state, bleGps, usbGnss, usbCan, obd)
                 }
             }
         }
@@ -779,9 +781,10 @@ private fun ConnectionsScreen(
     state: AppState,
     bleGps: BleNmeaManager,
     usbGnss: UsbNmeaManager,
+    usbCan: UsbCanManager,
     obd: Elm327Manager
 ) {
-    AdvancedConnectionsScreen(state, bleGps, usbGnss, obd)
+    AdvancedConnectionsScreen(state, bleGps, usbGnss, usbCan, obd)
 }
 
 @Composable
