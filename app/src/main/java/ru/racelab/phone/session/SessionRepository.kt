@@ -4,6 +4,8 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import ru.racelab.phone.core.GeoPoint
+import ru.racelab.phone.core.LapResult
 
 data class SessionLapSummary(
     val no: Int,
@@ -139,6 +141,35 @@ object SessionRepository {
                 }
             }
         }.getOrDefault(emptyList())
+    }
+
+    fun loadLapResults(session: SessionSummary): List<LapResult> {
+        val rows = readGps(session)
+        if (rows.none { it.lapNo != null }) return emptyList()
+        return session.laps.mapNotNull { lap ->
+            val traceRows = rows.filter { it.lapNo == lap.no }
+            if (traceRows.size < 2) return@mapNotNull null
+            val trace = traceRows.map { r ->
+                GeoPoint(
+                    lat = r.lat,
+                    lon = r.lon,
+                    ts = r.ts,
+                    speedMps = r.speedKmh / 3.6,
+                    headingDeg = r.heading,
+                    accuracyM = r.accuracy,
+                    altitudeM = r.altitude,
+                    source = r.source ?: "archive"
+                )
+            }
+            LapResult(
+                no = lap.no,
+                timeMs = lap.timeMs,
+                sectorsMs = lap.sectorsMs,
+                maxSpeedKmh = lap.maxSpeedKmh,
+                distanceM = lap.distanceM,
+                trace = trace
+            )
+        }
     }
 
     fun delete(session: SessionSummary): Boolean =
