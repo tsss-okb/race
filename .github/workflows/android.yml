@@ -20,6 +20,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+      - name: Unit tests
+        run: gradle --stacktrace :app:testDebugUnitTest
       - name: Build debug APK
         run: gradle --stacktrace :app:assembleDebug
       - uses: actions/upload-artifact@v4
