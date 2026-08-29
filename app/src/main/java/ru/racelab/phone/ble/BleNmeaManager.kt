@@ -11,12 +11,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.NmeaParser
+import ru.racelab.phone.core.NmeaQuality
+import ru.racelab.phone.core.NmeaQualityParser
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
 class BleNmeaManager(
     context: Context,
-    private val onPoint: (GeoPoint) -> Unit
+    private val onPoint: (GeoPoint) -> Unit,
+    private val onQuality: (NmeaQuality) -> Unit = {}
 ) {
     private val app = context.applicationContext
     private val bluetoothManager = app.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -114,7 +117,10 @@ class BleNmeaManager(
             val idx = listOf(idxN, idxR).filter { it >= 0 }.minOrNull() ?: break
             val line = buffer.substring(0, idx).trim()
             buffer.delete(0, idx + 1)
-            if (line.startsWith("$")) NmeaParser.parse(line)?.let(onPoint)
+            if (line.startsWith("$")) {
+                NmeaQualityParser.parse(line)?.let(onQuality)
+                NmeaParser.parse(line)?.let(onPoint)
+            }
         }
         if (buffer.length > 4096) buffer.delete(0, buffer.length - 1024)
     }
