@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import ru.racelab.phone.canbus.*
 import ru.racelab.phone.core.*
+import ru.racelab.phone.track.TrackRepository
 import kotlin.math.abs
 
 class CoreLogicTest {
@@ -137,4 +138,43 @@ class CoreLogicTest {
         )
         assertEquals(-1.0, CanSignalDecoder.decode(frame, signed)!!, 0.0001)
     }
+    @Test
+    fun miniSectorTrackerReportsLocalGainLoss() {
+        val tracker = MiniSectorTracker(10)
+
+        val first = tracker.update(progress = 0.01, cumulativeDeltaMs = 0L)
+        assertEquals(1, first.currentIndex)
+
+        val second = tracker.update(progress = 0.11, cumulativeDeltaMs = 120L)
+        assertEquals(2, second.currentIndex)
+        assertEquals(120L, second.deltasMs[0])
+
+        val gain = tracker.update(progress = 0.15, cumulativeDeltaMs = 70L)
+        assertEquals(-50L, gain.currentDeltaMs)
+
+        val reset = tracker.update(progress = 0.02, cumulativeDeltaMs = 0L, newLap = true)
+        assertEquals(1, reset.currentIndex)
+        assertTrue(reset.deltasMs.all { it == null })
+    }
+
+    @Test
+    fun trackJsonPreservesPitEntryAndExit() {
+        val prev = GeoPoint(52.0, 13.0, 1_000L)
+        val startPoint = GeoPoint(52.0, 13.0001, 2_000L)
+        val entryPoint = GeoPoint(52.0001, 13.0002, 3_000L)
+        val exitPoint = GeoPoint(52.0002, 13.0003, 4_000L)
+
+        val start = RaceGeometry.lineAt(startPoint, prev, 35.0)
+        val entry = RaceGeometry.lineAt(entryPoint, startPoint, 30.0)
+        val exit = RaceGeometry.lineAt(exitPoint, entryPoint, 30.0)
+
+        val profile = TrackRepository.create("Test", start, emptyList(), entry, exit)
+        val restored = TrackRepository.fromJson(TrackRepository.toJson(profile))
+
+        assertNotNull(restored.pitEntry)
+        assertNotNull(restored.pitExit)
+        assertEquals(entry.centerLat, restored.pitEntry!!.centerLat, 1e-9)
+        assertEquals(exit.centerLon, restored.pitExit!!.centerLon, 1e-9)
+    }
+
 }
