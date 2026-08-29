@@ -116,6 +116,7 @@ object SessionExporter {
             .put("data", JSONObject()
                 .put("gps", session.hasGps)
                 .put("sensors", session.hasSensors)
+                .put("obd", session.hasObd)
                 .put("obdCustom", session.hasObdCustom)
                 .put("can", session.hasCan)
                 .put("videos", session.videoRefs.size))
