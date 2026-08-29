@@ -236,6 +236,8 @@ private fun PitTeamDashboard(
         TeamHeader(
             live = live,
             receiveAgeMs = receiveAge,
+            transport = snapshot.transport,
+            rttMs = snapshot.rttMs,
             track = snapshot.track,
             onSettings = onSettings
         )
@@ -286,10 +288,11 @@ private fun PitTeamDashboard(
             )
             TeamBottomMetric("GPS", "%.1f Hz · S%d".format(snapshot.gpsHz, snapshot.satellites), Modifier.weight(.95f))
             TeamBottomMetric(
-                "SIGNAL",
-                if (receiveAge == Long.MAX_VALUE) "—" else "${receiveAge} ms",
+                "SIGNAL RTT",
+                snapshot.rttMs?.let { "${it} ms" } ?: if (live) snapshot.transport else "—",
                 Modifier.weight(.9f),
-                valueColor = if (live) TeamGreen else TeamRed
+                valueColor = if (snapshot.transport == "WEBSOCKET" && snapshot.rttMs != null) TeamGreen
+                    else if (live) TeamYellow else TeamRed
             )
         }
     }
@@ -299,6 +302,8 @@ private fun PitTeamDashboard(
 private fun TeamHeader(
     live: Boolean,
     receiveAgeMs: Long,
+    transport: String,
+    rttMs: Long?,
     track: String,
     onSettings: () -> Unit
 ) {
@@ -323,15 +328,26 @@ private fun TeamHeader(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                if (live) "● LIVE" else "● НЕТ СВЯЗИ",
-                color = if (live) TeamGreen else TeamRed,
+                when {
+                    !live -> "● НЕТ СВЯЗИ"
+                    transport == "WEBSOCKET" -> "● WS LIVE"
+                    else -> "● HTTP FALLBACK"
+                },
+                color = when {
+                    !live -> TeamRed
+                    transport == "WEBSOCKET" -> TeamGreen
+                    else -> TeamYellow
+                },
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Black
             )
-            if (receiveAgeMs != Long.MAX_VALUE) {
-                Spacer(Modifier.width(8.dp))
-                Text("${receiveAgeMs}ms", color = TeamMuted, fontSize = 8.sp)
-            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                rttMs?.let { "RTT ${it}ms" }
+                    ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
+                color = TeamMuted,
+                fontSize = 8.sp
+            )
             Spacer(Modifier.width(10.dp))
             TextButton(onClick = onSettings) {
                 Text("⚙", color = TeamMuted, fontSize = 16.sp)
