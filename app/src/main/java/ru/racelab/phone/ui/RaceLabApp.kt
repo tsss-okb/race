@@ -45,6 +45,10 @@ import ru.racelab.phone.diag.DiagnosticsProvider
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
 import ru.racelab.phone.track.TrackRepository
+import ru.racelab.phone.video.VideoCodecMode
+import ru.racelab.phone.video.VideoQualityMode
+import ru.racelab.phone.video.VideoSettings
+import ru.racelab.phone.video.VideoSettingsRepository
 import kotlin.math.abs
 
 private val Bg = Color(0xFF0B0F0C)
@@ -425,62 +429,216 @@ private fun VideoScreen(state: AppState, onRequestPermissions: () -> Unit) {
     var message by remember { mutableStateOf("Камера не запущена") }
     var recording by remember { mutableStateOf(false) }
     var previewRef by remember { mutableStateOf<PreviewView?>(null) }
-    var audio by remember { mutableStateOf(true) }
+    var settings by remember { mutableStateOf(VideoSettingsRepository.load(context)) }
+    var showSettings by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PreviewView(ctx).also { view ->
-                    view.scaleType = PreviewView.ScaleType.FILL_CENTER
-                    previewRef = view
-                    recorder.bind(view, lifecycleOwner) { ok, err -> message = if (ok) "CameraX ready" else "Camera: $err" }
-                }
+        if (state.sessionActive) {
+            Column(
+                Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    if (state.videoRecording) "● BACKGROUND REC" else "SESSION ACTIVE",
+                    color = if (state.videoRecording) Red else Amber,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(state.videoStatus, color = Muted)
+                Text(
+                    settings.quality.name + " • " + settings.fps + " FPS • " + settings.codec.name +
+                        " • " + settings.bitrateMbps + " Mbps",
+                    color = Color.White,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("Во время сессии камера принадлежит foreground recorder.", color = Muted, fontSize = 11.sp)
             }
-        )
-
-        Column(Modifier.align(Alignment.TopStart).padding(16.dp).background(Color(0x99000000), RoundedCornerShape(12.dp)).padding(12.dp)) {
-            Text("${state.speedKmh.toInt()} km/h", color = Green, fontSize = 32.sp, fontWeight = FontWeight.Black)
-            Text("LAP ${fmt(state.lapElapsedMs)}", fontWeight = FontWeight.Bold)
-            Text("${delta(state.deltaMs)}  PRED ${fmt(state.predictedLapMs)}", color = deltaColor(state.deltaMs))
-            Text("G ${"%.2f".format(state.gTotal)}   RPM ${state.obd.rpm?.toInt() ?: 0}", color = Amber)
-        }
-
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xB0000000)).padding(12.dp)) {
-            Text(message, color = Muted, fontSize = 12.sp)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = {
-                        onRequestPermissions()
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                            message = "Разреши камеру"
-                            return@Button
+        } else {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    PreviewView(ctx).also { view ->
+                        view.scaleType = PreviewView.ScaleType.FILL_CENTER
+                        previewRef = view
+                        recorder.bind(view, lifecycleOwner) { ok, err ->
+                            message = if (ok) "CameraX preview ready" else "Camera: " + err
                         }
-                        if (!recording) {
-                            recorder.start(audio) { event ->
-                                when (event) {
-                                    is VideoRecordEvent.Start -> { recording = true; message = "REC • Movies/RaceLab" }
-                                    is VideoRecordEvent.Finalize -> {
-                                        recording = false
-                                        message = if (event.hasError()) "Ошибка записи ${event.error}" else "Сохранено: ${event.outputResults.outputUri}"
-                                    }
-                                    is VideoRecordEvent.Status -> Unit
-                                    is VideoRecordEvent.Pause -> message = "PAUSE"
-                                    is VideoRecordEvent.Resume -> message = "REC"
-                                }
-                            }
-                        } else recorder.stop()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = if (recording) Red else Green, contentColor = Color.Black)
-                ) { Text(if (recording) "СТОП REC" else "REC VIDEO", fontWeight = FontWeight.Black) }
+                    }
+                }
+            )
+        }
 
-                OutlinedButton(onClick = { previewRef?.let { recorder.switchCamera(it, lifecycleOwner) } }) { Text("КАМЕРА") }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = audio, onCheckedChange = { audio = it })
-                    Text(" MIC")
+        Column(
+            Modifier.align(Alignment.TopStart)
+                .padding(12.dp)
+                .background(Color(0x99000000), RoundedCornerShape(12.dp))
+                .padding(10.dp)
+        ) {
+            Text(state.speedKmh.toInt().toString() + " km/h", color = Green, fontSize = 30.sp, fontWeight = FontWeight.Black)
+            Text("LAP " + fmt(state.lapElapsedMs), fontWeight = FontWeight.Bold)
+            Text(delta(state.deltaMs) + "  PRED " + fmt(state.predictedLapMs), color = deltaColor(state.deltaMs))
+            Text(
+                "G " + "%+.2f".format(state.longitudinalG) + "/" + "%+.2f".format(state.lateralG) +
+                    "   RPM " + (state.obd.rpm?.toInt() ?: 0),
+                color = Amber
+            )
+        }
+
+        OutlinedButton(
+            onClick = { showSettings = true },
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
+        ) { Text("VIDEO ⚙") }
+
+        if (!state.sessionActive) {
+            Column(
+                Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color(0xB0000000))
+                    .padding(10.dp)
+            ) {
+                Text(message, color = Muted, fontSize = 11.sp)
+                Text(
+                    "AUTO: " + settings.quality.name + " " + settings.fps + "fps " + settings.codec.name +
+                        " " + settings.bitrateMbps + "Mbps",
+                    color = Color.White,
+                    fontSize = 10.sp
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            onRequestPermissions()
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                                message = "Разреши камеру"
+                                return@Button
+                            }
+                            if (!recording) {
+                                recorder.start(settings.audio) { event ->
+                                    when (event) {
+                                        is VideoRecordEvent.Start -> { recording = true; message = "RAW REC • Movies/RaceLab" }
+                                        is VideoRecordEvent.Finalize -> {
+                                            recording = false
+                                            message = if (event.hasError()) "Ошибка записи " + event.error else "RAW сохранён"
+                                        }
+                                        is VideoRecordEvent.Status -> Unit
+                                        is VideoRecordEvent.Pause -> message = "PAUSE"
+                                        is VideoRecordEvent.Resume -> message = "REC"
+                                    }
+                                }
+                            } else recorder.stop()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (recording) Red else Green,
+                            contentColor = Color.Black
+                        )
+                    ) { Text(if (recording) "СТОП RAW" else "RAW REC", fontWeight = FontWeight.Black) }
+
+                    OutlinedButton(
+                        onClick = { previewRef?.let { recorder.switchCamera(it, lifecycleOwner) } }
+                    ) { Text("КАМЕРА") }
                 }
             }
         }
+
+        if (showSettings) {
+            VideoSettingsDialog(
+                initial = settings,
+                onDismiss = { showSettings = false },
+                onSave = {
+                    settings = it
+                    VideoSettingsRepository.save(context, it)
+                    showSettings = false
+                    message = "Видео-профиль сохранён"
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoSettingsDialog(
+    initial: VideoSettings,
+    onDismiss: () -> Unit,
+    onSave: (VideoSettings) -> Unit
+) {
+    var value by remember(initial) { mutableStateOf(initial) }
+    var bitrate by remember(initial) { mutableFloatStateOf(initial.bitrateMbps.toFloat()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("VIDEO PROFILE") },
+        confirmButton = {
+            Button(onClick = { onSave(value.copy(bitrateMbps = bitrate.toInt())) }) { Text("СОХРАНИТЬ") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("ОТМЕНА") } },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Разрешение", color = Muted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VideoChoice("1080p", value.quality == VideoQualityMode.FHD, Modifier.weight(1f)) {
+                        value = value.copy(quality = VideoQualityMode.FHD)
+                    }
+                    VideoChoice("4K", value.quality == VideoQualityMode.UHD, Modifier.weight(1f)) {
+                        value = value.copy(quality = VideoQualityMode.UHD)
+                    }
+                }
+
+                Text("FPS", color = Muted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VideoChoice("30", value.fps == 30, Modifier.weight(1f)) { value = value.copy(fps = 30) }
+                    VideoChoice("60", value.fps == 60, Modifier.weight(1f)) { value = value.copy(fps = 60) }
+                }
+
+                Text("Codec", color = Muted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    VideoCodecMode.entries.forEach { codec ->
+                        VideoChoice(codec.name, value.codec == codec, Modifier.weight(1f)) {
+                            value = value.copy(codec = codec)
+                        }
+                    }
+                }
+
+                Text("Bitrate: " + bitrate.toInt() + " Mbps", color = Muted, fontSize = 11.sp)
+                Slider(value = bitrate, onValueChange = { bitrate = it }, valueRange = 8f..100f)
+
+                SettingSwitch("Стабилизация", value.stabilization) { value = value.copy(stabilization = it) }
+                SettingSwitch("Микрофон", value.audio) { value = value.copy(audio = it) }
+                SettingSwitch("AUTO REC при ARM", value.autoRecord) { value = value.copy(autoRecord = it) }
+                SettingSwitch("Отдельный клип на круг", value.perLapClips) { value = value.copy(perLapClips = it) }
+                SettingSwitch("HUD в итоговом MP4", value.burnHud) { value = value.copy(burnHud = it) }
+
+                Text(
+                    "Если выбранный 4K/60/HEVC профиль не поддерживается камерой, RaceLab автоматически откатится на 1080p30 AUTO.",
+                    color = Amber,
+                    fontSize = 10.sp
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun VideoChoice(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) Green else Color(0xFF202720),
+            contentColor = if (selected) Color.Black else Color.White
+        ),
+        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 4.dp)
+    ) { Text(label, fontSize = 10.sp, maxLines = 1) }
+}
+
+@Composable
+private fun SettingSwitch(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.weight(1f), fontSize = 12.sp)
+        Switch(checked = checked, onCheckedChange = onChecked)
     }
 }
 
