@@ -1,5 +1,6 @@
 package ru.racelab.phone.ui
 
+import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -42,13 +43,24 @@ fun GT3DashboardScreen(
     onStop: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var showTracks by remember { mutableStateOf(false) }
     var battery by remember { mutableIntStateOf(-1) }
+    var pitTick by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
 
     LaunchedEffect(Unit) {
         while (true) {
             battery = DiagnosticsProvider.collect(context).batteryPct
             delay(5_000)
+        }
+    }
+
+    LaunchedEffect(state.pitTimerActive) {
+        if (state.pitTimerActive) {
+            while (true) {
+                pitTick = SystemClock.elapsedRealtime()
+                delay(50)
+            }
+        } else {
+            pitTick = SystemClock.elapsedRealtime()
         }
     }
 
@@ -70,6 +82,12 @@ fun GT3DashboardScreen(
             GT3RpmStrip(
                 rpm = state.obd.rpm,
                 modifier = Modifier.fillMaxWidth().height(72.dp)
+            )
+
+            GT3PitStrip(
+                state = state,
+                elapsedMs = if (state.pitTimerActive) RaceRuntime.pitElapsedMs(pitTick) else (state.pitLastMs ?: 0L),
+                modifier = Modifier.fillMaxWidth().height(76.dp)
             )
 
             Row(
@@ -145,9 +163,10 @@ fun GT3DashboardScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 GT3RoundAction(
-                    label = "ТРЕК",
-                    onClick = { showTracks = true },
-                    modifier = Modifier.width(66.dp).fillMaxHeight()
+                    label = if (state.pitTimerActive) "PIT ■" else "PIT ▶",
+                    onClick = { RaceRuntime.togglePitTimer("SCREEN") },
+                    modifier = Modifier.width(72.dp).fillMaxHeight(),
+                    active = state.pitTimerActive
                 )
 
                 Button(
@@ -188,10 +207,6 @@ fun GT3DashboardScreen(
                     textAlign = TextAlign.Center
                 )
             }
-        }
-
-        if (showTracks) {
-            TrackLibraryDialog(state = state, onDismiss = { showTracks = false })
         }
     }
 }
@@ -293,6 +308,78 @@ private fun GT3LapCard(
             if (underline != Color.Transparent) {
                 Spacer(Modifier.height(5.dp))
                 Box(Modifier.fillMaxWidth(.72f).height(2.dp).background(underline))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GT3PitStrip(
+    state: AppState,
+    elapsedMs: Long,
+    modifier: Modifier
+) {
+    GT3Panel(modifier, corner = 11) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.width(72.dp)) {
+                Text(
+                    "PIT STOP",
+                    color = if (state.pitTimerActive) GtYellow else GtMuted,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Text(
+                    if (state.pitTimerActive) "ACTIVE" else "READY",
+                    color = if (state.pitTimerActive) GtYellow else GtGreen,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    state.pitLastTrigger.take(18),
+                    color = GtMuted,
+                    fontSize = 6.sp,
+                    maxLines = 1
+                )
+            }
+
+            Column(
+                Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    pitFmt(elapsedMs),
+                    color = if (state.pitTimerActive) GtYellow else GtWhite,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1
+                )
+                Text(
+                    if (state.pitTimerActive) "НАЖМИ КНОПКУ РУЛЯ ДЛЯ STOP" else "КНОПКА РУЛЯ → START",
+                    color = GtMuted,
+                    fontSize = 7.sp,
+                    maxLines = 1
+                )
+            }
+
+            Column(
+                Modifier.width(84.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                Text("LAST " + (state.pitLastMs?.let(::pitFmtShort) ?: "—"), color = GtWhite, fontSize = 8.sp)
+                Text("BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"), color = GtGreen, fontSize = 8.sp)
+                Text("PIT #" + state.pitStopCount, color = GtMuted, fontSize = 7.sp)
+                if (!state.pitTimerActive && state.pitStopCount > 0) {
+                    TextButton(
+                        onClick = { RaceRuntime.resetPitTimer() },
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier.height(20.dp)
+                    ) {
+                        Text("СБРОС", color = GtMuted, fontSize = 7.sp)
+                    }
+                }
             }
         }
     }
@@ -503,14 +590,15 @@ private fun GT3TrackMap(points: List<GeoPoint>, modifier: Modifier) {
 private fun GT3RoundAction(
     label: String,
     onClick: () -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    active: Boolean = false
 ) {
     OutlinedButton(
         onClick = onClick,
         modifier = modifier,
         shape = RoundedCornerShape(28.dp),
-        border = BorderStroke(1.dp, GtBorder),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = GtWhite),
+        border = BorderStroke(1.dp, if (active) GtYellow else GtBorder),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (active) GtYellow else GtWhite),
         contentPadding = PaddingValues(2.dp)
     ) {
         Text(label, fontSize = 8.sp, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -542,6 +630,19 @@ private fun GT3Panel(
             )
         }
     )
+}
+
+private fun pitFmt(ms: Long): String {
+    val m = ms / 60000
+    val s = (ms % 60000) / 1000
+    val x = ms % 1000
+    return "%02d:%02d.%03d".format(m, s, x)
+}
+
+private fun pitFmtShort(ms: Long): String {
+    val s = ms / 1000
+    val x = ms % 1000
+    return "%d.%03d".format(s, x)
 }
 
 private fun gtFmt(ms: Long?): String {
