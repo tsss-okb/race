@@ -55,12 +55,13 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    val cameraX = "1.6.2"
+    val cameraX = "1.7.0-alpha03"
     implementation("androidx.camera:camera-core:$cameraX")
     implementation("androidx.camera:camera-camera2:$cameraX")
     implementation("androidx.camera:camera-lifecycle:$cameraX")
     implementation("androidx.camera:camera-video:$cameraX")
     implementation("androidx.camera:camera-view:$cameraX")
+    implementation("androidx.camera:camera-effects:$cameraX")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
