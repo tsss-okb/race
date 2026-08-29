@@ -112,6 +112,24 @@ private object PitTeamConfigRepository {
     }
 }
 
+private object PitTargetRepository {
+    private const val PREFS = "racelab_pit_team"
+    private const val TARGET_SECONDS = "target_seconds"
+    private const val DEFAULT_TARGET_SECONDS = 60
+
+    fun loadSeconds(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(TARGET_SECONDS, DEFAULT_TARGET_SECONDS)
+            .coerceIn(5, 600)
+
+    fun saveSeconds(context: Context, seconds: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(TARGET_SECONDS, seconds.coerceIn(5, 600))
+            .apply()
+    }
+}
+
 @Composable
 private fun PitTeamSetup(
     initial: PitTeamConfig,
@@ -193,9 +211,12 @@ private fun PitTeamDashboard(
     config: PitTeamConfig,
     onSettings: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val client = remember(config) { PitTeamClient(config) }
     val snapshot by client.state.collectAsState()
+    var targetSeconds by remember { mutableIntStateOf(PitTargetRepository.loadSeconds(context)) }
+    var showTargetDialog by remember { mutableStateOf(false) }
 
     DisposableEffect(client) {
         val job = client.start(scope)
@@ -225,6 +246,24 @@ private fun PitTeamDashboard(
         snapshot.pitBaseMs + (frameNow - snapshot.pitBaseReceivedElapsedMs).coerceAtLeast(0L)
     } else snapshot.pitBaseMs
 
+    val targetMs = targetSeconds * 1_000L
+    val remainingMs = (targetMs - pitMs).coerceAtLeast(0L)
+    val warningActive = snapshot.pitActive && pitMs < targetMs && remainingMs <= 15_000L
+    val targetReached = snapshot.pitActive && pitMs >= targetMs
+    val flashOn = warningActive && ((frameNow / 350L) % 2L == 0L)
+
+    if (showTargetDialog) {
+        PitTargetDialog(
+            currentSeconds = targetSeconds,
+            onDismiss = { showTargetDialog = false },
+            onSave = { seconds ->
+                targetSeconds = seconds
+                PitTargetRepository.saveSeconds(context, seconds)
+                showTargetDialog = false
+            }
+        )
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -239,6 +278,8 @@ private fun PitTeamDashboard(
             transport = snapshot.transport,
             rttMs = snapshot.rttMs,
             track = snapshot.track,
+            targetSeconds = targetSeconds,
+            onTarget = { showTargetDialog = true },
             onSettings = onSettings
         )
 
@@ -249,6 +290,11 @@ private fun PitTeamDashboard(
             TeamPitCard(
                 active = snapshot.pitActive,
                 pitMs = pitMs,
+                remainingMs = remainingMs,
+                targetSeconds = targetSeconds,
+                warningActive = warningActive,
+                flashOn = flashOn,
+                targetReached = targetReached,
                 trigger = snapshot.pitTrigger,
                 modifier = Modifier.weight(1.55f).fillMaxHeight()
             )
@@ -305,6 +351,8 @@ private fun TeamHeader(
     transport: String,
     rttMs: Long?,
     track: String,
+    targetSeconds: Int,
+    onTarget: () -> Unit,
     onSettings: () -> Unit
 ) {
     Surface(
@@ -348,7 +396,15 @@ private fun TeamHeader(
                 color = TeamMuted,
                 fontSize = 8.sp
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = onTarget,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(6.dp))
             TextButton(onClick = onSettings) {
                 Text("⚙", color = TeamMuted, fontSize = 16.sp)
             }
@@ -360,13 +416,27 @@ private fun TeamHeader(
 private fun TeamPitCard(
     active: Boolean,
     pitMs: Long,
+    remainingMs: Long,
+    targetSeconds: Int,
+    warningActive: Boolean,
+    flashOn: Boolean,
+    targetReached: Boolean,
     trigger: String,
     modifier: Modifier
 ) {
+    val alertVisible = targetReached || flashOn
+    val cardColor = if (alertVisible) Color(0xFF4A0606) else Color(0xFF0D0F11)
+    val borderColor = when {
+        targetReached -> TeamRed
+        warningActive && flashOn -> TeamRed
+        active -> TeamYellow
+        else -> TeamBorder
+    }
+
     Surface(
         modifier = modifier,
-        color = Color(0xFF0D0F11),
-        border = BorderStroke(1.dp, if (active) TeamYellow else TeamBorder),
+        color = cardColor,
+        border = BorderStroke(if (alertVisible) 3.dp else 1.dp, borderColor),
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(
@@ -375,13 +445,23 @@ private fun TeamPitCard(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                if (active) "PIT ACTIVE" else "PIT READY",
-                color = if (active) TeamYellow else TeamGreen,
+                when {
+                    targetReached -> "PIT TIME"
+                    warningActive -> "PIT • ОСТАЛОСЬ"
+                    active -> "PIT ACTIVE"
+                    else -> "PIT READY"
+                },
+                color = when {
+                    targetReached || (warningActive && flashOn) -> TeamWhite
+                    active -> TeamYellow
+                    else -> TeamGreen
+                },
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Black
             )
 
-            val parts = timeParts100(pitMs)
+            val mainTimeMs = if (active) remainingMs else targetSeconds * 1_000L
+            val parts = timeParts100(mainTimeMs)
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     parts.first,
@@ -392,7 +472,7 @@ private fun TeamPitCard(
                 )
                 Text(
                     parts.second,
-                    color = TeamYellow,
+                    color = if (alertVisible) TeamWhite else TeamYellow,
                     fontSize = 72.sp,
                     lineHeight = 72.sp,
                     fontWeight = FontWeight.Black
@@ -400,14 +480,74 @@ private fun TeamPitCard(
             }
 
             Text(
-                trigger,
-                color = TeamMuted,
+                if (active) "ПРОШЛО ${format100(pitMs)} · TARGET ${targetSeconds}s · ${trigger}"
+                else "TARGET ${targetSeconds}s · ${trigger}",
+                color = if (alertVisible) TeamWhite else TeamMuted,
                 fontSize = 9.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
     }
+}
+
+@Composable
+private fun PitTargetDialog(
+    currentSeconds: Int,
+    onDismiss: () -> Unit,
+    onSave: (Int) -> Unit
+) {
+    var value by remember(currentSeconds) { mutableStateOf(currentSeconds.toString()) }
+    val seconds = value.toIntOrNull()?.coerceIn(5, 600)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("ТАЙМЕР ПИТ-СТОПА", color = TeamYellow, fontWeight = FontWeight.Black)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Установи целевое время. За 15 секунд до окончания табло начнёт мигать красным.",
+                    color = TeamMuted,
+                    fontSize = 11.sp
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { input ->
+                        value = input.filter(Char::isDigit).take(3)
+                    },
+                    label = { Text("Секунды (5–600)") },
+                    suffix = { Text("с") },
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(30, 45, 60, 90, 120).forEach { preset ->
+                        AssistChip(
+                            onClick = { value = preset.toString() },
+                            label = { Text("${preset}s", fontSize = 9.sp) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { seconds?.let(onSave) },
+                enabled = seconds != null,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TeamYellow,
+                    contentColor = Color.Black
+                )
+            ) {
+                Text("УСТАНОВИТЬ", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("ОТМЕНА") }
+        },
+        containerColor = TeamPanel
+    )
 }
 
 @Composable
