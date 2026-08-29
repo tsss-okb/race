@@ -774,21 +774,7 @@ private fun SensorRow(s: SensorSnapshot) {
 
 @Composable
 private fun ConnectionsScreen(state: AppState, bleGps: BleNmeaManager, obd: Elm327Manager) {
-    val gps by bleGps.state.collectAsStateWithLifecycle()
-    val obdState by obd.state.collectAsStateWithLifecycle()
-    Row(Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        ConnectionPanel("BLE GPS / NMEA", gps, Modifier.weight(1f), onScan = { bleGps.startScan() }, onConnect = { bleGps.connect(it) }, onDisconnect = { bleGps.disconnect() })
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            ConnectionPanel("BLE OBD-II / ELM327", obdState, Modifier.weight(1f), onScan = { obd.startScan() }, onConnect = { obd.connect(it) }, onDisconnect = { obd.disconnect() })
-            PanelCard {
-                Text("OBD LIVE", color = Muted, fontWeight = FontWeight.Bold)
-                Text("RPM  ${state.obd.rpm?.let { "%.0f".format(it) } ?: "—"}", fontSize = 20.sp)
-                Text("Speed  ${state.obd.speedKmh?.let { "%.1f km/h".format(it) } ?: "—"}")
-                Text("Throttle  ${state.obd.throttlePct?.let { "%.1f %%".format(it) } ?: "—"}")
-                Text("Coolant  ${state.obd.coolantC?.let { "%.0f °C".format(it) } ?: "—"}")
-            }
-        }
-    }
+    AdvancedConnectionsScreen(state, bleGps, obd)
 }
 
 @Composable
