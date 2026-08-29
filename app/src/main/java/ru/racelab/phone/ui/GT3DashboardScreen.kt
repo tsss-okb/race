@@ -5,8 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,6 +15,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -64,149 +63,397 @@ fun GT3DashboardScreen(
         }
     }
 
-    Box(
+    GT3LandscapeDashboard(
+        state = state,
+        battery = battery,
+        pitElapsedMs = if (state.pitTimerActive) RaceRuntime.pitElapsedMs(pitTick) else (state.pitLastMs ?: 0L),
+        onStart = onStart,
+        onStop = onStop
+    )
+}
+
+@Composable
+private fun GT3LandscapeDashboard(
+    state: AppState,
+    battery: Int,
+    pitElapsedMs: Long,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    Column(
         Modifier
             .fillMaxSize()
             .background(GtBg)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 7.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+        Row(
+            Modifier.fillMaxWidth().height(52.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            GT3StatusBar(state, battery)
-            GT3LapStrip(state)
+            GT3LandscapeStatus(state, battery, Modifier.weight(1.25f))
+            GT3LandscapeLapCard(
+                "ТЕКУЩИЙ",
+                gtFmt(state.lapElapsedMs),
+                Modifier.weight(1f),
+                GtWhite,
+                GtYellow
+            )
+            GT3LandscapeLapCard(
+                "ЛУЧШИЙ",
+                gtFmt(state.bestLapMs),
+                Modifier.weight(1f),
+                GtWhite,
+                Color.Transparent
+            )
+            GT3LandscapeLapCard(
+                "ДЕЛЬТА",
+                gtDelta(state.deltaMs),
+                Modifier.weight(.82f),
+                gtDeltaColor(state.deltaMs),
+                Color.Transparent
+            )
+            GT3LandscapeLapCard(
+                "КРУГ",
+                (state.laps.size + if (state.lapElapsedMs > 0L) 1 else 0).toString(),
+                Modifier.weight(.52f),
+                if (state.sessionActive || state.armed) GtYellow else GtWhite,
+                Color.Transparent
+            )
+        }
 
-            GT3RpmStrip(
-                rpm = state.obd.rpm,
-                modifier = Modifier.fillMaxWidth().height(72.dp)
+        GT3LandscapeRpmStrip(
+            rpm = state.obd.rpm,
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        )
+
+        Row(
+            Modifier.fillMaxWidth().weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GT3LandscapeSpeed(
+                speedKmh = state.speedKmh,
+                modifier = Modifier.weight(.82f).fillMaxHeight()
             )
 
-            GT3PitStrip(
-                state = state,
-                elapsedMs = if (state.pitTimerActive) RaceRuntime.pitElapsedMs(pitTick) else (state.pitLastMs ?: 0L),
-                modifier = Modifier.fillMaxWidth().height(76.dp)
-            )
-
-            Row(
-                Modifier.fillMaxWidth().height(116.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Column(
+                Modifier.weight(1.02f).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                GT3LargeMetric(
-                    title = "СКОРОСТЬ",
-                    value = state.speedKmh.toInt().toString(),
-                    unit = "км/ч",
-                    modifier = Modifier.weight(1.35f),
-                    accent = GtYellow,
-                    valueSize = 52
-                )
-
-                Column(
-                    Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    Row(
-                        Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        GT3CompactMetric(
-                            title = "ГАЗ",
-                            value = state.obd.throttlePct,
-                            unit = "%",
-                            accent = GtGreen,
-                            modifier = Modifier.weight(1f)
-                        )
-                        GT3CompactMetric(
-                            title = "ТОРМОЗ",
-                            value = state.vehicleCan.brakePressureBar,
-                            unit = "bar",
-                            accent = GtRed,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Row(
-                        Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        GT3CompactMetric(
-                            title = "МАСЛО",
-                            value = state.obd.oilTempC,
-                            unit = "°C",
-                            accent = GtYellow,
-                            modifier = Modifier.weight(1f)
-                        )
-                        GT3CompactMetric(
-                            title = "ОЖ",
-                            value = state.obd.coolantC,
-                            unit = "°C",
-                            accent = GtYellow,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-
-            Row(
-                Modifier.fillMaxWidth().height(150.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                GT3GMeter(state, Modifier.weight(1f).fillMaxHeight())
-                GT3LapCounter(state, Modifier.weight(.76f).fillMaxHeight())
-                GT3TrackMap(state.trackPreview, Modifier.weight(1.25f).fillMaxHeight())
-            }
-
-            Row(
-                Modifier.fillMaxWidth().height(56.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                GT3RoundAction(
-                    label = if (state.pitTimerActive) "PIT ■" else "PIT ▶",
-                    onClick = { RaceRuntime.togglePitTimer("SCREEN") },
-                    modifier = Modifier.width(72.dp).fillMaxHeight(),
-                    active = state.pitTimerActive
-                )
-
-                Button(
-                    onClick = if (state.sessionActive) onStop else onStart,
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = RoundedCornerShape(28.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF101214),
-                        contentColor = if (state.sessionActive) GtRed else GtYellow
-                    ),
-                    border = BorderStroke(1.dp, if (state.sessionActive) GtRed.copy(alpha = .65f) else GtYellow.copy(alpha = .65f))
-                ) {
-                    Text(
-                        when {
-                            state.sessionActive -> "■  СТОП ЗАПИСИ"
-                            state.startConfigured -> "●  ARM / СТАРТ"
-                            else -> "●  НАЧАТЬ СЕССИЮ"
-                        },
-                        fontWeight = FontWeight.Black,
-                        fontSize = 12.sp,
-                        maxLines = 1
+                    GT3CompactMetric(
+                        title = "ГАЗ",
+                        value = state.obd.throttlePct,
+                        unit = "%",
+                        accent = GtGreen,
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                    GT3CompactMetric(
+                        title = "ТОРМОЗ",
+                        value = state.vehicleCan.brakePressureBar,
+                        unit = "bar",
+                        accent = GtRed,
+                        modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                 }
-
-                GT3RoundAction(
-                    label = "START",
-                    onClick = { RaceRuntime.setStartLineHere() },
-                    modifier = Modifier.width(66.dp).fillMaxHeight()
-                )
+                Row(
+                    Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    GT3CompactMetric(
+                        title = "МАСЛО",
+                        value = state.obd.oilTempC,
+                        unit = "°C",
+                        accent = GtYellow,
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                    GT3CompactMetric(
+                        title = "ОЖ",
+                        value = state.obd.coolantC,
+                        unit = "°C",
+                        accent = GtYellow,
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                }
             }
 
-            if (!state.startConfigured) {
+            GT3LandscapePit(
+                state = state,
+                elapsedMs = pitElapsedMs,
+                modifier = Modifier.weight(1.10f).fillMaxHeight()
+            )
+
+            GT3GMeter(
+                state = state,
+                modifier = Modifier.weight(.95f).fillMaxHeight()
+            )
+
+            GT3TrackMap(
+                points = state.trackPreview,
+                modifier = Modifier.weight(1.18f).fillMaxHeight()
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().height(44.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            GT3RoundAction(
+                label = if (state.pitTimerActive) "PIT ■" else "PIT ▶",
+                onClick = { RaceRuntime.togglePitTimer("SCREEN") },
+                modifier = Modifier.width(76.dp).fillMaxHeight(),
+                active = state.pitTimerActive
+            )
+
+            Button(
+                onClick = if (state.sessionActive) onStop else onStart,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                shape = RoundedCornerShape(22.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF101214),
+                    contentColor = if (state.sessionActive) GtRed else GtYellow
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (state.sessionActive) GtRed.copy(alpha = .65f) else GtYellow.copy(alpha = .65f)
+                ),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+            ) {
                 Text(
-                    "Для тайминга проедь несколько метров и нажми START справа.",
-                    color = GtMuted,
-                    fontSize = 9.sp,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center
+                    when {
+                        state.sessionActive -> "■  СТОП ЗАПИСИ"
+                        state.startConfigured -> "●  ARM / СТАРТ"
+                        else -> "●  НАЧАТЬ СЕССИЮ"
+                    },
+                    fontWeight = FontWeight.Black,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+
+            GT3RoundAction(
+                label = "SET START",
+                onClick = { RaceRuntime.setStartLineHere() },
+                modifier = Modifier.width(90.dp).fillMaxHeight()
+            )
+        }
+    }
+}
+
+@Composable
+private fun GT3LandscapeStatus(state: AppState, battery: Int, modifier: Modifier) {
+    GT3Panel(modifier, corner = 10) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "GPS",
+                        color = if (state.latestPoint != null) GtGreen else GtMuted,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 11.sp
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "▮▮▮",
+                        color = if (state.latestPoint != null) GtGreen else GtMuted,
+                        fontSize = 8.sp
+                    )
+                }
+                Text(
+                    "±" + (state.accuracyM?.let { "%.1fм".format(it) } ?: "—") +
+                        " • %.1fHz".format(state.gpsHz) +
+                        " • S" + state.satellites,
+                    color = GtMuted,
+                    fontSize = 7.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    (if (state.sessionActive || state.videoRecording) "● " else "") +
+                        when {
+                            state.sessionActive -> "REC"
+                            state.armed -> "ARM"
+                            else -> "READY"
+                        },
+                    color = if (state.sessionActive || state.videoRecording) GtRed else GtWhite,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Text(
+                    if (battery >= 0) "$battery%" else "—%",
+                    color = if (battery in 0..15) GtRed else GtMuted,
+                    fontSize = 8.sp,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GT3LandscapeLapCard(
+    title: String,
+    value: String,
+    modifier: Modifier,
+    valueColor: Color,
+    underline: Color
+) {
+    GT3Panel(modifier, corner = 10) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                title,
+                color = GtMuted,
+                fontSize = 7.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                value,
+                color = valueColor,
+                fontSize = 15.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Clip
+            )
+            if (underline != Color.Transparent) {
+                Box(Modifier.fillMaxWidth(.66f).height(2.dp).background(underline))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GT3LandscapeRpmStrip(rpm: Double?, modifier: Modifier) {
+    val value = (rpm ?: 0.0).coerceAtLeast(0.0)
+    val ratio = (value / 10_000.0).coerceIn(0.0, 1.0)
+
+    GT3Panel(modifier, corner = 10) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("RPM", color = GtMuted, fontSize = 8.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.width(8.dp))
+            Canvas(Modifier.weight(1f).height(17.dp)) {
+                val gap = 3f
+                val segments = 32
+                val segmentWidth = (size.width - gap * (segments - 1)) / segments
+                val active = (ratio * segments).toInt()
+                for (i in 0 until segments) {
+                    val x = i * (segmentWidth + gap)
+                    val fraction = i.toFloat() / (segments - 1).coerceAtLeast(1)
+                    val baseColor = when {
+                        fraction >= .90f -> GtRed
+                        fraction >= .75f -> GtYellow
+                        else -> Color(0xFFD8DBDD)
+                    }
+                    drawRoundRect(
+                        color = if (i < active) baseColor else Color(0xFF2A2D30),
+                        topLeft = Offset(x, 0f),
+                        size = androidx.compose.ui.geometry.Size(segmentWidth, size.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.3f, 2.3f)
+                    )
+                }
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(
+                rpm?.let { "%,.0f".format(it).replace(",", " ") } ?: "—",
+                color = when {
+                    rpm == null -> GtMuted
+                    ratio >= .90 -> GtRed
+                    ratio >= .75 -> GtYellow
+                    else -> GtWhite
+                },
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun GT3LandscapeSpeed(speedKmh: Double, modifier: Modifier) {
+    GT3Panel(modifier, corner = 10) {
+        Column(
+            Modifier.fillMaxSize().padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("СКОРОСТЬ", color = GtMuted, fontSize = 8.sp, maxLines = 1)
+            Text(
+                speedKmh.toInt().toString(),
+                color = GtYellow,
+                fontSize = 48.sp,
+                lineHeight = 48.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+            Text("км/ч", color = GtMuted, fontSize = 8.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun GT3LandscapePit(state: AppState, elapsedMs: Long, modifier: Modifier) {
+    GT3Panel(modifier, corner = 10) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 7.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                if (state.pitTimerActive) "PIT • ACTIVE" else "PIT STOP",
+                color = if (state.pitTimerActive) GtYellow else GtMuted,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+            Text(
+                pitFmt(elapsedMs),
+                color = if (state.pitTimerActive) GtYellow else GtWhite,
+                fontSize = 24.sp,
+                lineHeight = 25.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "LAST " + (state.pitLastMs?.let(::pitFmtShort) ?: "—"),
+                color = GtWhite,
+                fontSize = 7.sp,
+                maxLines = 1
+            )
+            Text(
+                "BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"),
+                color = GtGreen,
+                fontSize = 7.sp,
+                maxLines = 1
+            )
+            Text(
+                state.pitLastTrigger.take(20),
+                color = GtMuted,
+                fontSize = 6.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -468,14 +715,15 @@ private fun GT3CompactMetric(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                Text(unit, color = GtMuted, fontSize = 6.sp)
+                Text(title, color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(unit, color = GtMuted, fontSize = 6.sp, maxLines = 1)
             }
             Text(
                 value?.let { if (abs(it) >= 100) "%.0f".format(it) else "%.1f".format(it) } ?: "—",
                 color = if (value == null) GtMuted else accent,
                 fontSize = 17.sp,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Black,
+                maxLines = 1
             )
         }
     }
@@ -509,7 +757,7 @@ private fun GT3LargeMetric(
 private fun GT3GMeter(state: AppState, modifier: Modifier) {
     GT3Panel(modifier, corner = 11) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
-            Text("G-МЕТР", color = GtMuted, fontSize = 8.sp)
+            Text("G-МЕТР", color = GtMuted, fontSize = 7.sp, maxLines = 1)
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 Canvas(Modifier.weight(1f).aspectRatio(1f)) {
                     val c = Offset(size.width / 2f, size.height / 2f)
@@ -523,11 +771,11 @@ private fun GT3GMeter(state: AppState, modifier: Modifier) {
                     val y = -(state.longitudinalG / maxG).coerceIn(-1.0, 1.0).toFloat() * r
                     drawCircle(GtYellow, 6f, Offset(c.x + x, c.y + y))
                 }
-                Column(Modifier.width(64.dp), verticalArrangement = Arrangement.Center) {
-                    Text("%+.2f".format(state.lateralG), color = GtWhite, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Column(Modifier.width(54.dp), verticalArrangement = Arrangement.Center) {
+                    Text("%+.2f".format(state.lateralG), color = GtWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                     Text("LAT G", color = GtMuted, fontSize = 7.sp)
                     Spacer(Modifier.height(7.dp))
-                    Text("%+.2f".format(state.longitudinalG), color = GtWhite, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Text("%+.2f".format(state.longitudinalG), color = GtWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                     Text("LONG G", color = GtMuted, fontSize = 7.sp)
                 }
             }
@@ -560,7 +808,7 @@ private fun GT3LapCounter(state: AppState, modifier: Modifier) {
 private fun GT3TrackMap(points: List<GeoPoint>, modifier: Modifier) {
     GT3Panel(modifier, corner = 11) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
-            Text("КАРТА ТРАССЫ", color = GtMuted, fontSize = 8.sp)
+            Text("КАРТА ТРАССЫ", color = GtMuted, fontSize = 7.sp, maxLines = 1)
             Canvas(Modifier.fillMaxSize().padding(6.dp)) {
                 if (points.size < 2) return@Canvas
                 val minLat = points.minOf { it.lat }
