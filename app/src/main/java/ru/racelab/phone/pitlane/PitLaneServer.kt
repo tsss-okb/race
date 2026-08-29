@@ -49,6 +49,10 @@ object PitLaneServer {
         }
     }
 
+    fun refreshStatus() {
+        if (running.get()) RaceRuntime.setPitLaneServerStatus(true, urls())
+    }
+
     fun stop() {
         running.set(false)
         runCatching { serverSocket?.close() }
