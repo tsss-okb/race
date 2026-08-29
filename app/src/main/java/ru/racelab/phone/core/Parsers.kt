@@ -35,6 +35,36 @@ object NmeaParser {
     }
 }
 
+data class NmeaQuality(
+    val satellites: Int? = null,
+    val pdop: Double? = null,
+    val hdop: Double? = null,
+    val vdop: Double? = null
+)
+
+object NmeaQualityParser {
+    fun parse(line: String): NmeaQuality? {
+        val p = line.trim().substringBefore('*').split(',')
+        if (p.isEmpty()) return null
+        return when {
+            p[0].endsWith("GGA") && p.size >= 10 -> {
+                NmeaQuality(
+                    satellites = p[7].toIntOrNull(),
+                    hdop = p[8].toDoubleOrNull()
+                )
+            }
+            p[0].endsWith("GSA") && p.size >= 18 -> {
+                NmeaQuality(
+                    pdop = p.getOrNull(p.size - 3)?.toDoubleOrNull(),
+                    hdop = p.getOrNull(p.size - 2)?.toDoubleOrNull(),
+                    vdop = p.getOrNull(p.size - 1)?.toDoubleOrNull()
+                )
+            }
+            else -> null
+        }
+    }
+}
+
 data class ObdReading(
     val rpm: Double? = null,
     val speedKmh: Double? = null,
