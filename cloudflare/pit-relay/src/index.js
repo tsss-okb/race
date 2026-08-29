@@ -9,6 +9,34 @@ export class PitRoom {
     const key = url.searchParams.get("key") || "";
     const storedKey = await this.state.storage.get("key");
 
+    if (url.pathname === "/ws") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+        return new Response("Expected WebSocket", { status: 426 });
+      }
+
+      const role = url.searchParams.get("role") === "publisher" ? "publisher" : "viewer";
+      if (!key) return json({ error: "missing key" }, 401);
+
+      if (role === "publisher") {
+        if (storedKey && storedKey !== key) return json({ error: "forbidden" }, 403);
+        if (!storedKey) await this.state.storage.put("key", key);
+      } else {
+        if (!storedKey || storedKey !== key) return json({ error: "forbidden" }, 403);
+      }
+
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      this.state.acceptWebSocket(server);
+      server.serializeAttachment({ role, key });
+
+      if (role === "viewer") {
+        const latest = await this.state.storage.get("latest");
+        if (latest) server.send(JSON.stringify(latest));
+      }
+
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
     if (request.method === "POST" && url.pathname === "/update") {
       if (!key) return json({ error: "missing key" }, 401);
       if (storedKey && storedKey !== key) return json({ error: "forbidden" }, 403);
@@ -36,12 +64,66 @@ export class PitRoom {
 
     return new Response("Not found", { status: 404 });
   }
+
+  async webSocketMessage(ws, message) {
+    const attachment = ws.deserializeAttachment() || {};
+    if (attachment.role !== "publisher") return;
+
+    let payload;
+    try {
+      payload = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+    } catch (_) {
+      return;
+    }
+    if (!payload || typeof payload !== "object") return;
+
+    const record = {
+      ...payload,
+      relayReceivedAtMs: Date.now(),
+    };
+
+    await this.state.storage.put("latest", record);
+    const encoded = JSON.stringify(record);
+
+    for (const peer of this.state.getWebSockets()) {
+      try {
+        const peerAttachment = peer.deserializeAttachment() || {};
+        if (peerAttachment.role === "viewer") peer.send(encoded);
+      } catch (_) {}
+    }
+
+    try {
+      ws.send(JSON.stringify({ type: "ack", relayReceivedAtMs: record.relayReceivedAtMs }));
+    } catch (_) {}
+  }
+
+  webSocketClose(ws, code, reason) {
+    try { ws.close(code, reason); } catch (_) {}
+  }
+
+  webSocketError(ws) {
+    try { ws.close(1011, "websocket error"); } catch (_) {}
+  }
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname.split("/").filter(Boolean);
+
+    if (path[0] === "ws" && path[1] === "room" && path[2]) {
+      const room = sanitizeRoom(path[2]);
+      if (!room) return json({ error: "bad room" }, 400);
+
+      const stub = env.PIT_ROOMS.get(env.PIT_ROOMS.idFromName(room));
+      const key = url.searchParams.get("key") || "";
+      const role = url.searchParams.get("role") === "publisher" ? "publisher" : "viewer";
+
+      return stub.fetch(
+        "https://room/ws?key=" + encodeURIComponent(key) + "&role=" + encodeURIComponent(role),
+        { headers: request.headers }
+      );
+    }
 
     if (path[0] === "api" && path[1] === "room" && path[2]) {
       const room = sanitizeRoom(path[2]);
@@ -79,7 +161,7 @@ export default {
     }
 
     if (url.pathname === "/health") {
-      return json({ ok: true, service: "RaceLab Pit Relay" });
+      return json({ ok: true, service: "RaceLab Pit Relay", transport: "websocket", protocol: 2 });
     }
 
     return new Response(
