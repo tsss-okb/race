@@ -114,9 +114,20 @@ private fun GT3LandscapeDashboard(
                 Color.Transparent
             )
             GT3LandscapeLapCard(
+                "ПРОГНОЗ",
+                gtFmt(state.predictedLapMs),
+                Modifier.weight(.95f),
+                when {
+                    state.predictedLapMs == null -> GtMuted
+                    state.bestLapMs != null && state.predictedLapMs <= state.bestLapMs -> GtGreen
+                    else -> GtWhite
+                },
+                Color.Transparent
+            )
+            GT3LandscapeLapCard(
                 "КРУГ",
                 (state.laps.size + if (state.lapElapsedMs > 0L) 1 else 0).toString(),
-                Modifier.weight(.52f),
+                Modifier.weight(.48f),
                 if (state.sessionActive || state.armed) GtYellow else GtWhite,
                 Color.Transparent
             )
@@ -124,7 +135,12 @@ private fun GT3LandscapeDashboard(
 
         GT3LandscapeRpmStrip(
             rpm = state.obd.rpm,
-            modifier = Modifier.fillMaxWidth().height(48.dp)
+            modifier = Modifier.fillMaxWidth().height(44.dp)
+        )
+
+        GT3MiniSectorStrip(
+            state = state,
+            modifier = Modifier.fillMaxWidth().height(30.dp)
         )
 
         Row(
@@ -168,7 +184,7 @@ private fun GT3LandscapeDashboard(
             )
 
             GT3TrackMap(
-                points = state.trackPreview,
+                state = state,
                 modifier = Modifier.weight(2.0f).fillMaxHeight()
             )
         }
@@ -421,6 +437,16 @@ private fun GT3LandscapePit(state: AppState, elapsedMs: Long, modifier: Modifier
                 "BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"),
                 color = GtGreen,
                 fontSize = 7.sp,
+                maxLines = 1
+            )
+            Text(
+                if (state.pitLaneActive) {
+                    "LANE " + pitFmtShort(state.pitLaneElapsedMs)
+                } else {
+                    "LANE LAST " + (state.pitLaneLastMs?.let(::pitFmtShort) ?: "—")
+                },
+                color = if (state.pitLaneActive) GtRed else GtMuted,
+                fontSize = 6.sp,
                 maxLines = 1
             )
             Text(
@@ -730,6 +756,54 @@ private fun GT3LargeMetric(
 }
 
 @Composable
+private fun GT3MiniSectorStrip(state: AppState, modifier: Modifier) {
+    GT3Panel(modifier, corner = 9) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 7.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text("MINI", color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+            state.miniSectorDeltasMs.forEachIndexed { index, value ->
+                val active = state.currentMiniSector == index + 1
+                val color = when {
+                    active && state.miniSectorDeltaMs != null && state.miniSectorDeltaMs!! <= -20L -> GtGreen
+                    active && state.miniSectorDeltaMs != null && state.miniSectorDeltaMs!! >= 20L -> GtRed
+                    active -> GtYellow
+                    value == null -> Color(0xFF2A2D30)
+                    value <= -20L -> GtGreen
+                    value >= 20L -> GtRed
+                    else -> GtWhite
+                }
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(color.copy(alpha = if (active) .95f else .65f), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "M" + (index + 1),
+                        color = if (color == GtWhite || color == GtYellow || color == GtGreen) Color.Black else GtWhite,
+                        fontSize = 6.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+            Text(
+                gtMiniDelta(state.miniSectorDeltaMs),
+                color = gtDeltaColor(state.miniSectorDeltaMs),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.width(42.dp),
+                textAlign = TextAlign.End,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
 private fun GT3GMeter(state: AppState, modifier: Modifier) {
     GT3Panel(modifier, corner = 11) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
@@ -781,30 +855,91 @@ private fun GT3LapCounter(state: AppState, modifier: Modifier) {
 }
 
 @Composable
-private fun GT3TrackMap(points: List<GeoPoint>, modifier: Modifier) {
+private fun GT3TrackMap(state: AppState, modifier: Modifier) {
+    val trackPoints = if (state.referenceTrack.size >= 2) state.referenceTrack else state.trackPreview
+
     GT3Panel(modifier, corner = 11) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
-            Text("КАРТА ТРАССЫ", color = GtMuted, fontSize = 7.sp, maxLines = 1)
-            Canvas(Modifier.fillMaxSize().padding(6.dp)) {
-                if (points.size < 2) return@Canvas
-                val minLat = points.minOf { it.lat }
-                val maxLat = points.maxOf { it.lat }
-                val minLon = points.minOf { it.lon }
-                val maxLon = points.maxOf { it.lon }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "КАРТА ТРАССЫ",
+                    color = GtMuted,
+                    fontSize = 7.sp,
+                    maxLines = 1
+                )
+                Spacer(Modifier.weight(1f))
+                if (state.currentMiniSector > 0) {
+                    Text(
+                        "M" + state.currentMiniSector + " " + gtMiniDelta(state.miniSectorDeltaMs),
+                        color = gtDeltaColor(state.miniSectorDeltaMs),
+                        fontSize = 7.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Canvas(Modifier.fillMaxSize().padding(5.dp)) {
+                val all = buildList {
+                    addAll(trackPoints)
+                    state.latestPoint?.let(::add)
+                    state.pitEntryPoint?.let(::add)
+                    state.pitExitPoint?.let(::add)
+                }
+                if (all.size < 2) return@Canvas
+
+                val minLat = all.minOf { it.lat }
+                val maxLat = all.maxOf { it.lat }
+                val minLon = all.minOf { it.lon }
+                val maxLon = all.maxOf { it.lon }
                 val dx = (maxLon - minLon).takeIf { abs(it) > 1e-9 } ?: 1e-9
                 val dy = (maxLat - minLat).takeIf { abs(it) > 1e-9 } ?: 1e-9
-                val pad = 8f
-                val path = Path()
-                points.forEachIndexed { i, p ->
+                val pad = 12f
+
+                fun screenPoint(p: GeoPoint): Offset {
                     val x = pad + ((p.lon - minLon) / dx).toFloat() * (size.width - 2 * pad)
                     val y = size.height - pad - ((p.lat - minLat) / dy).toFloat() * (size.height - 2 * pad)
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    return Offset(x, y)
                 }
-                drawPath(path, Color(0xFFC5C7C9), style = Stroke(width = 3f, cap = StrokeCap.Round))
-                val last = points.last()
-                val x = pad + ((last.lon - minLon) / dx).toFloat() * (size.width - 2 * pad)
-                val y = size.height - pad - ((last.lat - minLat) / dy).toFloat() * (size.height - 2 * pad)
-                drawCircle(GtYellow, 6f, Offset(x, y))
+
+                if (trackPoints.size >= 2) {
+                    val path = Path()
+                    trackPoints.forEachIndexed { i, p ->
+                        val s = screenPoint(p)
+                        if (i == 0) path.moveTo(s.x, s.y) else path.lineTo(s.x, s.y)
+                    }
+                    drawPath(
+                        path,
+                        Color(0xFFC5C7C9),
+                        style = Stroke(width = if (state.referenceTrack.size >= 2) 4f else 3f, cap = StrokeCap.Round)
+                    )
+                    drawCircle(GtGreen, 5f, screenPoint(trackPoints.first()))
+                }
+
+                state.pitEntryPoint?.let {
+                    drawCircle(GtRed, 7f, screenPoint(it))
+                    drawCircle(GtWhite, 3f, screenPoint(it))
+                }
+                state.pitExitPoint?.let {
+                    drawCircle(GtGreen, 7f, screenPoint(it))
+                    drawCircle(GtWhite, 3f, screenPoint(it))
+                }
+
+                state.latestPoint?.let { car ->
+                    val center = screenPoint(car)
+                    drawCircle(Color.Black, 10f, center)
+                    drawCircle(GtYellow, 7f, center)
+
+                    car.headingDeg?.let { heading ->
+                        val rad = Math.toRadians(heading)
+                        val tip = Offset(
+                            center.x + kotlin.math.sin(rad).toFloat() * 18f,
+                            center.y - kotlin.math.cos(rad).toFloat() * 18f
+                        )
+                        drawLine(GtYellow, center, tip, strokeWidth = 4f, cap = StrokeCap.Round)
+                        drawCircle(GtYellow, 3f, tip)
+                    }
+                }
             }
         }
     }
@@ -887,4 +1022,11 @@ private fun gtDeltaColor(ms: Long?): Color = when {
     ms == null -> GtWhite
     ms <= 0 -> GtGreen
     else -> GtRed
+}
+
+
+private fun gtMiniDelta(ms: Long?): String = when {
+    ms == null -> "—"
+    ms < 0 -> "−%.2f".format(abs(ms) / 1000.0)
+    else -> "+%.2f".format(ms / 1000.0)
 }
