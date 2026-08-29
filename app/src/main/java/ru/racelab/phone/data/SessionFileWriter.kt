@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.LapResult
+import ru.racelab.phone.obd.CustomPid
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -18,6 +19,7 @@ class SessionFileWriter(context: Context) {
     val directory: File
     private val gpsWriter: BufferedWriter
     private val sensorWriter: BufferedWriter
+    private val customObdWriter: BufferedWriter
     private var closed = false
 
     init {
@@ -27,19 +29,31 @@ class SessionFileWriter(context: Context) {
         directory = File(root, sessionId).apply { mkdirs() }
         gpsWriter = BufferedWriter(FileWriter(File(directory, "gps.csv"), false), 64 * 1024)
         sensorWriter = BufferedWriter(FileWriter(File(directory, "sensors.csv"), false), 128 * 1024)
-        gpsWriter.write("ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,gx,gy,gz,g_total,rpm,obd_speed,throttle,coolant\n")
+        customObdWriter = BufferedWriter(FileWriter(File(directory, "obd_custom.csv"), false), 64 * 1024)
+        gpsWriter.write(
+            "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,gx,gy,gz,g_total," +
+                "rpm,obd_speed,throttle,coolant,engine_load,intake_c,map_kpa,timing_deg,maf_gps,voltage_v," +
+                "oil_temp_c,fuel_pressure_kpa,short_trim,long_trim,ev_soc,ev_battery_kw,ev_motor_kw,ev_regen_kw," +
+                "ev_battery_temp_c,ev_inverter_temp_c\n"
+        )
         sensorWriter.write("ts,type,name,vendor,accuracy,hz,v0,v1,v2,v3,v4,v5\n")
-        gpsWriter.flush(); sensorWriter.flush()
+        customObdWriter.write("ts,id,name,value,unit\n")
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
     }
 
     @Synchronized
-    fun writeGps(point: GeoPoint, gx: Double, gy: Double, gz: Double, gt: Double, obd: ObdState) {
+    fun writeGps(point: GeoPoint, gx: Double, gy: Double, gz: Double, gt: Double, obd: ObdState, ev: EvState) {
         if (closed) return
         gpsWriter.write(listOf(
             point.ts, point.lat, point.lon, (point.speedMps ?: 0.0) * 3.6,
             point.headingDeg ?: "", point.accuracyM ?: "", point.altitudeM ?: "", point.source,
             gx, gy, gz, gt,
-            obd.rpm ?: "", obd.speedKmh ?: "", obd.throttlePct ?: "", obd.coolantC ?: ""
+            obd.rpm ?: "", obd.speedKmh ?: "", obd.throttlePct ?: "", obd.coolantC ?: "",
+            obd.engineLoadPct ?: "", obd.intakeC ?: "", obd.mapKpa ?: "", obd.timingDeg ?: "",
+            obd.mafGps ?: "", obd.voltageV ?: "", obd.oilTempC ?: "", obd.fuelPressureKpa ?: "",
+            obd.shortTrimPct ?: "", obd.longTrimPct ?: "",
+            ev.socPct ?: "", ev.batteryPowerKw ?: "", ev.motorPowerKw ?: "", ev.regenKw ?: "",
+            ev.batteryTempC ?: "", ev.inverterTempC ?: ""
         ).joinToString(","))
         gpsWriter.newLine()
     }
@@ -52,11 +66,20 @@ class SessionFileWriter(context: Context) {
         sensorWriter.write(row.joinToString(","))
         sensorWriter.newLine()
     }
+    @Synchronized
+    fun writeCustomObd(ts: Long, pid: CustomPid, value: Double) {
+        if (closed) return
+        customObdWriter.write(
+            listOf(ts, quote(pid.id), quote(pid.name), value, quote(pid.unit)).joinToString(",")
+        )
+        customObdWriter.newLine()
+    }
+
 
     @Synchronized
     fun flush() {
         if (!closed) {
-            gpsWriter.flush(); sensorWriter.flush()
+            gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
         }
     }
 
@@ -64,8 +87,8 @@ class SessionFileWriter(context: Context) {
     fun close(laps: List<LapResult>, extra: JSONObject = JSONObject()) {
         if (closed) return
         closed = true
-        gpsWriter.flush(); sensorWriter.flush()
-        gpsWriter.close(); sensorWriter.close()
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
+        gpsWriter.close(); sensorWriter.close(); customObdWriter.close()
 
         val meta = JSONObject()
             .put("format", "racelab-native-session-v1")
