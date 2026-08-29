@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -21,14 +22,22 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import ru.racelab.phone.MainActivity
 import ru.racelab.phone.data.RaceRuntime
+import ru.racelab.phone.video.BackgroundCameraRecorder
+import ru.racelab.phone.video.VideoSettings
+import ru.racelab.phone.video.VideoSettingsRepository
 
 class RecordingService : LifecycleService(), SensorEventListener, LocationListener {
     private lateinit var sensorManager: SensorManager
     private lateinit var locationManager: LocationManager
     private var started = false
+    private var cameraRecorder: BackgroundCameraRecorder? = null
+    private var videoSettings: VideoSettings = VideoSettings()
+    private var lastLapCount = 0
+    private var wasArmed = false
 
     private val gnssCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
@@ -57,10 +66,20 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
     private fun startRecording() {
         if (started) return
         started = true
-        startForeground(NOTIFICATION_ID, buildNotification())
+        videoSettings = VideoSettingsRepository.load(applicationContext)
+        startForegroundForSession(videoSettings)
         RaceRuntime.startSession(applicationContext)
+        lastLapCount = 0
+        wasArmed = RaceRuntime.state.value.armed
         registerSensors()
         requestGnss()
+        if (videoSettings.autoRecord &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        ) {
+            cameraRecorder = BackgroundCameraRecorder(this, this).also {
+                it.start(videoSettings, RaceRuntime.state.value.sessionId)
+            }
+        }
     }
 
     private fun stopRecording() {
@@ -69,6 +88,8 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
             return
         }
         started = false
+        cameraRecorder?.stop()
+        cameraRecorder = null
         sensorManager.unregisterListener(this)
         runCatching { locationManager.removeUpdates(this) }
         if (Build.VERSION.SDK_INT >= 24) runCatching { locationManager.unregisterGnssStatusCallback(gnssCallback) }
@@ -108,8 +129,21 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
     }
 
     override fun onLocationChanged(location: Location) {
+        val before = RaceRuntime.state.value
         RaceRuntime.ingestLocation(location)
-        if (RaceRuntime.state.value.autoStopRequested) {
+        val after = RaceRuntime.state.value
+
+        if (wasArmed && !after.armed && after.sessionActive) {
+            cameraRecorder?.onLapStarted(after.laps.size + 1, after.sessionId)
+        }
+        if (after.laps.size > lastLapCount) {
+            val lap = after.laps.last()
+            lastLapCount = after.laps.size
+            cameraRecorder?.onLapCompleted(lap.no, after.sessionId)
+        }
+        wasArmed = after.armed
+
+        if (after.autoStopRequested) {
             RaceRuntime.markMessage("Автостоп: машина стоит после заезда")
             stopRecording()
         }
@@ -127,6 +161,28 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
     }
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
+
+    private fun startForegroundForSession(settings: VideoSettings) {
+        var type = if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+        if (Build.VERSION.SDK_INT >= 30 &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+            settings.autoRecord
+        ) {
+            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        }
+        if (Build.VERSION.SDK_INT >= 30 &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED &&
+            settings.autoRecord && settings.audio
+        ) {
+            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        if (Build.VERSION.SDK_INT >= 29 &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        ) {
+            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
+    }
 
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
