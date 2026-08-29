@@ -21,6 +21,8 @@ import ru.racelab.phone.gnss.UsbNmeaManager
 import ru.racelab.phone.canbus.UsbCanManager
 import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
+import ru.racelab.phone.remote.RemoteAction
+import ru.racelab.phone.remote.RemoteControlSettingsRepository
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
@@ -41,6 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        RaceRuntime.setGm204Enabled(RemoteControlSettingsRepository.isGm204Enabled(this))
 
         bleGps = BleNmeaManager(
             context = this,
@@ -129,6 +132,57 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val device = InputDevice.getDevice(event.deviceId)
+            val external = device?.isExternal == true
+            val keyName = KeyEvent.keyCodeToString(event.keyCode)
+            if (external) RaceRuntime.reportRemoteKey(device?.name, keyName)
+
+            if (external && RemoteControlSettingsRepository.isGm204Enabled(this)) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_CAMERA,
+                    KeyEvent.KEYCODE_F1,
+                    KeyEvent.KEYCODE_BUTTON_1,
+                    KeyEvent.KEYCODE_VOLUME_UP,
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        RaceRuntime.togglePitTimer("GM204:" + keyName)
+                        return true
+                    }
+
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                    KeyEvent.KEYCODE_HEADSETHOOK,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_DPAD_CENTER -> {
+                        if (RaceRuntime.state.value.pitTimerActive) {
+                            RaceRuntime.markMessage("PIT ACTIVE: сначала STOP кнопкой CAMERA")
+                        } else {
+                            RaceRuntime.resetPitTimer()
+                            RaceRuntime.markMessage("GM204 OK: PIT сброшен")
+                        }
+                        return true
+                    }
+
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        RaceRuntime.postRemoteAction(RemoteAction.PREVIOUS_TAB)
+                        return true
+                    }
+
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        RaceRuntime.postRemoteAction(RemoteAction.NEXT_TAB)
+                        return true
+                    }
+
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        RaceRuntime.postRemoteAction(RemoteAction.DASHBOARD)
+                        return true
+                    }
+
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        RaceRuntime.postRemoteAction(RemoteAction.DATA)
+                        return true
+                    }
+                }
+            }
+
             val directPitKeys = setOf(
                 KeyEvent.KEYCODE_F1,
                 KeyEvent.KEYCODE_BUTTON_1,
@@ -137,15 +191,13 @@ class MainActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_HEADSETHOOK,
                 KeyEvent.KEYCODE_CAMERA
             )
-            val device = InputDevice.getDevice(event.deviceId)
             val externalVolumeButton =
-                device?.isExternal == true &&
-                    event.keyCode in setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
+                external && event.keyCode in setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
 
             if (event.keyCode in directPitKeys || externalVolumeButton) {
                 val source = when {
                     externalVolumeButton -> "HID:EXT_VOLUME"
-                    else -> "HID:" + KeyEvent.keyCodeToString(event.keyCode)
+                    else -> "HID:" + keyName
                 }
                 RaceRuntime.togglePitTimer(source)
                 return true
