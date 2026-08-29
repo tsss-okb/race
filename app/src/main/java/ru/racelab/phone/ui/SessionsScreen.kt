@@ -140,7 +140,7 @@ private fun SessionCard(
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 DataBadge("GPS", session.hasGps)
                 DataBadge("IMU", session.hasSensors)
-                DataBadge("OBD", session.hasObdCustom)
+                DataBadge("OBD", session.hasObd || session.hasObdCustom)
                 DataBadge("CAN", session.hasCan)
                 DataBadge("VIDEO " + session.videoRefs.size, session.videoRefs.isNotEmpty())
             }
