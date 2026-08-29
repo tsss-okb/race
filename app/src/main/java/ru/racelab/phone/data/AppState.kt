@@ -4,6 +4,7 @@ import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.gnss.GnssSourceMode
+import ru.racelab.phone.canbus.CanSignalValue
 
 data class SensorSnapshot(
     val id: String,
@@ -47,6 +48,16 @@ data class CustomObdValue(
     val name: String,
     val value: Double,
     val unit: String
+)
+
+data class VehicleCanState(
+    val gear: Double? = null,
+    val steeringDeg: Double? = null,
+    val brakePressureBar: Double? = null,
+    val wheelFlKmh: Double? = null,
+    val wheelFrKmh: Double? = null,
+    val wheelRlKmh: Double? = null,
+    val wheelRrKmh: Double? = null
 )
 
 data class AppState(
@@ -94,6 +105,10 @@ data class AppState(
     val ev: EvState = EvState(),
     val customObd: List<CustomObdValue> = emptyList(),
     val supportedObdPids: Set<String> = emptySet(),
+    val vehicleCan: VehicleCanState = VehicleCanState(),
+    val canSignals: List<CanSignalValue> = emptyList(),
+    val canFrameCount: Long = 0L,
+    val canHz: Double = 0.0,
     val gpsSource: String = "phone",
     val gnssSourceMode: GnssSourceMode = GnssSourceMode.AUTO,
     val hdop: Double? = null,
