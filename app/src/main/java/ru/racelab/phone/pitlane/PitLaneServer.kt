@@ -213,35 +213,55 @@ body{padding:max(10px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-rig
   </div>
 </div>
 <script>
-const fmt=ms=>{if(ms==null)return '—';ms=Math.max(0,Math.round(ms));const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000),x=ms%1000;return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(x).padStart(3,'0')};
-const delta=ms=>ms==null?'—':(ms<0?'−':'+')+(Math.abs(ms)/1000).toFixed(3);
-async function tick(){
+const fmt100=ms=>{if(ms==null)return '—';ms=Math.max(0,Math.round(ms));const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000),c=Math.floor((ms%1000)/10);return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(c).padStart(2,'0')};
+const delta=ms=>ms==null?'—':(ms<0?'−':'+')+(Math.abs(ms)/1000).toFixed(2);
+let pitActive=false,pitBaseMs=0,pitBasePerf=performance.now(),lastOk=0,pollRunning=false;
+
+function shownPitMs(){return pitActive?pitBaseMs+(performance.now()-pitBasePerf):pitBaseMs;}
+function renderClock(){
+  document.getElementById('pitTime').textContent=fmt100(shownPitMs());
+  const live=Date.now()-lastOk<2000;
+  document.getElementById('dot').className=live?'dot ok':'dot';
+  document.getElementById('conn').textContent=live?'LIVE':'НЕТ СВЯЗИ';
+  requestAnimationFrame(renderClock);
+}
+
+async function poll(){
+  if(pollRunning)return;
+  pollRunning=true;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),1000);
   try{
-    const r=await fetch('/api/pit?t='+Date.now(),{cache:'no-store'});
+    const r=await fetch('/api/pit?t='+Date.now(),{cache:'no-store',signal:controller.signal});
     if(!r.ok)throw new Error();
     const d=await r.json();
-    document.getElementById('dot').className='dot ok';
-    document.getElementById('conn').textContent='LIVE';
+    lastOk=Date.now();
+    pitActive=!!d.pitActive;
+    pitBaseMs=Number(d.pitCurrentMs||0);
+    pitBasePerf=performance.now();
     const card=document.getElementById('pitCard');
-    card.classList.toggle('active',!!d.pitActive);
-    document.getElementById('pitState').textContent=d.pitActive?'PIT ACTIVE':'PIT READY';
-    document.getElementById('pitTime').textContent=fmt(d.pitCurrentMs);
+    card.classList.toggle('active',pitActive);
+    document.getElementById('pitState').textContent=pitActive?'PIT ACTIVE':'PIT READY';
     document.getElementById('trigger').textContent=d.pitTrigger||'—';
-    document.getElementById('last').textContent=fmt(d.pitLastMs);
-    document.getElementById('best').textContent=fmt(d.pitBestMs);
+    document.getElementById('last').textContent=fmt100(d.pitLastMs);
+    document.getElementById('best').textContent=fmt100(d.pitBestMs);
     document.getElementById('count').textContent=d.pitCount;
     document.getElementById('speed').textContent=Math.round(d.speedKmh||0);
-    document.getElementById('lap').textContent=fmt(d.lapCurrentMs);
-    document.getElementById('lapBest').textContent=fmt(d.lapBestMs);
-    const de=document.getElementById('delta');de.textContent=delta(d.deltaMs);de.style.color=d.deltaMs==null?'#f2f2f2':(d.deltaMs<=0?'#58e13e':'#ff3b30');
+    document.getElementById('lap').textContent=fmt100(d.lapCurrentMs);
+    document.getElementById('lapBest').textContent=fmt100(d.lapBestMs);
+    const de=document.getElementById('delta');
+    de.textContent=delta(d.deltaMs);
+    de.style.color=d.deltaMs==null?'#f2f2f2':(d.deltaMs<=0?'#58e13e':'#ff3b30');
     document.getElementById('track').textContent=d.track||'RaceLab';
     document.getElementById('gps').textContent=(d.gpsHz||0).toFixed(1)+' Hz · S'+(d.satellites||0);
-  }catch(e){
-    document.getElementById('dot').className='dot';
-    document.getElementById('conn').textContent='НЕТ СВЯЗИ';
+  }catch(e){}finally{
+    clearTimeout(timeout);
+    pollRunning=false;
+    setTimeout(poll,100);
   }
 }
-setInterval(tick,250);tick();
+requestAnimationFrame(renderClock);
+poll();
 </script>
 </body>
 </html>
