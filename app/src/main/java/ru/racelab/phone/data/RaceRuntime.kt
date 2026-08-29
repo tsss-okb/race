@@ -3,6 +3,7 @@ package ru.racelab.phone.data
 import android.content.Context
 import android.hardware.Sensor
 import android.location.Location
+import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +12,7 @@ import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.ObdReading
 import ru.racelab.phone.core.RaceEngine
 import ru.racelab.phone.core.RaceGeometry
+import ru.racelab.phone.core.PitTimerEngine
 import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
@@ -56,6 +58,8 @@ object RaceRuntime {
     private var canFrameCount = 0L
     private var lastCanTs: Long? = null
     private var canHz = 0.0
+    private val pitTimer = PitTimerEngine()
+    private val pitCanPressed = HashMap<String, Boolean>()
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -69,6 +73,7 @@ object RaceRuntime {
         engine.resetSession(keepTrack = true)
         latestPoint = null; previousPoint = null; lastGpsTs = null; gpsHz = 0.0
         preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear(); canSignals.clear(); canFrameCount = 0L; lastCanTs = null; canHz = 0.0
+        pitTimer.reset(); pitCanPressed.clear()
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -77,6 +82,12 @@ object RaceRuntime {
             sessionDir = writer?.directory?.absolutePath,
             laps = emptyList(), bestLapMs = null, deltaMs = null, predictedLapMs = null,
             lapElapsedMs = 0, trackPreview = emptyList(), autoStopRequested = false,
+            pitTimerActive = false,
+            pitStartedElapsedMs = null,
+            pitLastMs = null,
+            pitBestMs = null,
+            pitStopCount = 0,
+            pitLastTrigger = "—",
             lastMessage = if (engine.startLine != null) "ARM: ожидаю пересечение START" else "Сессия запущена"
         )
     }
@@ -486,6 +497,14 @@ object RaceRuntime {
             CanChannel.EV_REGEN_KW -> ev = ev.copy(regenKw = decoded.value)
             CanChannel.EV_BATTERY_TEMP_C -> ev = ev.copy(batteryTempC = decoded.value)
             CanChannel.EV_INVERTER_TEMP_C -> ev = ev.copy(inverterTempC = decoded.value)
+            CanChannel.PIT_BUTTON -> {
+                val pressed = decoded.value > 0.5
+                val wasPressed = pitCanPressed[decoded.signal.id] ?: false
+                if (pressed && !wasPressed) {
+                    togglePitTimer("CAN:" + decoded.signal.name)
+                }
+                pitCanPressed[decoded.signal.id] = pressed
+            }
             CanChannel.NONE -> Unit
         }
         writer?.writeCanSignal(decoded)
@@ -497,12 +516,58 @@ object RaceRuntime {
         )
     }
 
+    @Synchronized
+    fun togglePitTimer(trigger: String = "SCREEN") {
+        val event = pitTimer.toggle(SystemClock.elapsedRealtime(), trigger) ?: return
+        val snap = event.snapshot
+        writer?.writePitEvent(System.currentTimeMillis(), event.type, event.elapsedMs, trigger)
+        _state.value = _state.value.copy(
+            pitTimerActive = snap.active,
+            pitStartedElapsedMs = snap.startedElapsedMs,
+            pitLastMs = snap.lastMs,
+            pitBestMs = snap.bestMs,
+            pitStopCount = snap.count,
+            pitLastTrigger = snap.lastTrigger,
+            lastMessage = if (snap.active) {
+                "PIT TIMER START • " + trigger
+            } else {
+                "PIT TIMER STOP • " + formatPit(event.elapsedMs ?: 0L)
+            }
+        )
+    }
+
+    @Synchronized
+    fun resetPitTimer() {
+        pitTimer.reset()
+        pitCanPressed.clear()
+        writer?.writePitEvent(System.currentTimeMillis(), "RESET", null, "SCREEN")
+        _state.value = _state.value.copy(
+            pitTimerActive = false,
+            pitStartedElapsedMs = null,
+            pitLastMs = null,
+            pitBestMs = null,
+            pitStopCount = 0,
+            pitLastTrigger = "—",
+            lastMessage = "PIT TIMER сброшен"
+        )
+    }
+
+    fun pitElapsedMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long =
+        pitTimer.elapsed(nowElapsedMs)
+
     fun updateVideoState(recording: Boolean, status: String) {
         _state.value = _state.value.copy(videoRecording = recording, videoStatus = status)
     }
 
     fun markMessage(message: String) {
         _state.value = _state.value.copy(lastMessage = message)
+    }
+
+    private fun formatPit(ms: Long): String {
+        val m = ms / 60000
+        val s = (ms % 60000) / 1000
+        val x = ms % 1000
+        return "%02d:%02d.%03d".format(m, s, x)
     }
 
     private fun formatLap(ms: Long): String {
