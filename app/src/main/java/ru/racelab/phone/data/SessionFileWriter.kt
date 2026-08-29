@@ -7,6 +7,8 @@ import org.json.JSONObject
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.obd.CustomPid
+import ru.racelab.phone.canbus.CanFrame
+import ru.racelab.phone.canbus.CanSignalValue
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -20,6 +22,8 @@ class SessionFileWriter(context: Context) {
     private val gpsWriter: BufferedWriter
     private val sensorWriter: BufferedWriter
     private val customObdWriter: BufferedWriter
+    private val canWriter: BufferedWriter
+    private val canSignalWriter: BufferedWriter
     private var closed = false
 
     init {
@@ -30,6 +34,8 @@ class SessionFileWriter(context: Context) {
         gpsWriter = BufferedWriter(FileWriter(File(directory, "gps.csv"), false), 64 * 1024)
         sensorWriter = BufferedWriter(FileWriter(File(directory, "sensors.csv"), false), 128 * 1024)
         customObdWriter = BufferedWriter(FileWriter(File(directory, "obd_custom.csv"), false), 64 * 1024)
+        canWriter = BufferedWriter(FileWriter(File(directory, "can.csv"), false), 128 * 1024)
+        canSignalWriter = BufferedWriter(FileWriter(File(directory, "can_signals.csv"), false), 64 * 1024)
         gpsWriter.write(
             "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,gx,gy,gz,g_total," +
                 "rpm,obd_speed,throttle,coolant,engine_load,intake_c,map_kpa,timing_deg,maf_gps,voltage_v," +
@@ -38,7 +44,9 @@ class SessionFileWriter(context: Context) {
         )
         sensorWriter.write("ts,type,name,vendor,accuracy,hz,v0,v1,v2,v3,v4,v5\n")
         customObdWriter.write("ts,id,name,value,unit\n")
-        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
+        canWriter.write("ts,can_id,extended,rtr,dlc,data_hex\n")
+        canSignalWriter.write("ts,signal_id,name,value,unit,channel\n")
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
     }
 
     @Synchronized
@@ -74,12 +82,45 @@ class SessionFileWriter(context: Context) {
         )
         customObdWriter.newLine()
     }
+    @Synchronized
+    fun writeCanFrame(frame: CanFrame) {
+        if (closed) return
+        val hex = frame.data.joinToString("") { "%02X".format(it.toInt() and 0xFF) }
+        canWriter.write(
+            listOf(
+                frame.timestampMs,
+                "0x" + frame.id.toString(16).uppercase(),
+                frame.extended,
+                frame.rtr,
+                frame.data.size,
+                hex
+            ).joinToString(",")
+        )
+        canWriter.newLine()
+    }
+
+    @Synchronized
+    fun writeCanSignal(value: CanSignalValue) {
+        if (closed) return
+        canSignalWriter.write(
+            listOf(
+                value.timestampMs,
+                quote(value.signal.id),
+                quote(value.signal.name),
+                value.value,
+                quote(value.signal.unit),
+                value.signal.channel.name
+            ).joinToString(",")
+        )
+        canSignalWriter.newLine()
+    }
+
 
 
     @Synchronized
     fun flush() {
         if (!closed) {
-            gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
+            gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
         }
     }
 
@@ -87,8 +128,8 @@ class SessionFileWriter(context: Context) {
     fun close(laps: List<LapResult>, extra: JSONObject = JSONObject()) {
         if (closed) return
         closed = true
-        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush()
-        gpsWriter.close(); sensorWriter.close(); customObdWriter.close()
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
+        gpsWriter.close(); sensorWriter.close(); customObdWriter.close(); canWriter.close(); canSignalWriter.close()
 
         val meta = JSONObject()
             .put("format", "racelab-native-session-v1")
