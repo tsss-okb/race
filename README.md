@@ -188,3 +188,24 @@ CI выполняет:
 - Custom OBD PID и CAN signals требуют формул/ID конкретного автомобиля.
 - USB-CAN сейчас SLCAN, CAN FD не поддерживается.
 - Старые сессии до 2.0 отображаются и экспортируются, но повторный REF/CMP анализ требует `lap_no`, который записывается начиная с 2.0.
+
+
+### PIT STOP
+- Отдельный pit-stop timer на GT3 dashboard.
+- Текущий PIT TIME, LAST, BEST и счётчик пит-стопов.
+- Резервная экранная PIT-кнопка.
+- Физическая кнопка руля через BLE/USB HID:
+  - F1;
+  - BUTTON_1 / BUTTON_A;
+  - PLAY/PAUSE;
+  - HEADSETHOOK;
+  - CAMERA;
+  - внешние Volume +/- кнопки BLE HID.
+- Кнопка штатного руля через USB-CAN:
+  - создать CAN signal;
+  - Channel = `PIT_BUTTON`;
+  - срабатывание по фронту значения > 0.5.
+- Debounce 250 ms.
+- CAN остаётся listen-only: RaceLab не передаёт управляющие CAN frames.
+- Каждое START / STOP / RESET сохраняется в `pit_events.csv`.
+- При остановке сессии активный PIT автоматически завершается и сохраняется.
