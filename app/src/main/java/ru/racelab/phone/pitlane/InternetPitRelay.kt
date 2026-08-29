@@ -258,7 +258,12 @@ object InternetPitRelay {
                 val bytes = buildPayload().toByteArray(StandardCharsets.UTF_8)
                 val key = URLEncoder.encode(cfg.key, StandardCharsets.UTF_8.name())
                 val room = URLEncoder.encode(cfg.room, StandardCharsets.UTF_8.name())
-                val endpoint = cfg.baseUrl + "/api/room/" + room + "/update?key=" + key
+                val fallbackBase = if (cfg.baseUrl == InternetPitRelaySettingsRepository.DEFAULT_BASE_URL) {
+                    InternetPitRelaySettingsRepository.LEGACY_HTTP_FALLBACK_URL
+                } else {
+                    cfg.baseUrl
+                }
+                val endpoint = fallbackBase + "/api/room/" + room + "/update?key=" + key
 
                 val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
