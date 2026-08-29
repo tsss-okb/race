@@ -112,6 +112,7 @@ fun RaceLabApp(
     ) {
         Scaffold(
             containerColor = Bg,
+            contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 CompactTabBar(selected = tab, onSelect = { tab = it })
             }
@@ -146,9 +147,10 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .navigationBarsPadding()
-                .height(58.dp)
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .height(48.dp)
+                .padding(horizontal = 4.dp, vertical = 3.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Tab.entries.forEach { item ->
@@ -174,7 +176,7 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                         Text(
                             glyph,
                             color = if (active) Amber else Muted,
-                            fontSize = 17.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
@@ -187,7 +189,7 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                                 Tab.SETTINGS -> "Настройки"
                             },
                             color = if (active) Amber else Color(0xFFC5C8CA),
-                            fontSize = 8.sp,
+                            fontSize = 7.sp,
                             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                             maxLines = 1
                         )
