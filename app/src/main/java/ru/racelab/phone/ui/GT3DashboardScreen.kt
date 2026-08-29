@@ -1,6 +1,5 @@
 package ru.racelab.phone.ui
 
-import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -15,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -25,10 +23,7 @@ import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.data.AppState
 import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.diag.DiagnosticsProvider
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.sin
 
 private val GtBg = Color(0xFF050607)
 private val GtPanelTop = Color(0xFF171A1D)
@@ -72,68 +67,13 @@ fun GT3DashboardScreen(
             GT3StatusBar(state, battery)
             GT3LapStrip(state)
 
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val sideWidth = if (maxWidth < 390.dp) 68.dp else 78.dp
-                val gaugeHeight = if (maxWidth < 390.dp) 270.dp else 300.dp
-                Row(
-                    Modifier.fillMaxWidth().height(gaugeHeight),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(
-                        Modifier.width(sideWidth).fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        GT3SideMetric(
-                            title = "ТЕМП.\nМАСЛА",
-                            value = state.obd.oilTempC,
-                            unit = "°C",
-                            modifier = Modifier.weight(1f),
-                            accent = GtYellow,
-                            rangeMax = 150.0
-                        )
-                        GT3SideMetric(
-                            title = "ТЕМП.\nОЖ",
-                            value = state.obd.coolantC,
-                            unit = "°C",
-                            modifier = Modifier.weight(1f),
-                            accent = GtYellow,
-                            rangeMax = 130.0
-                        )
-                    }
-
-                    GT3Tachometer(
-                        rpm = state.obd.rpm ?: 0.0,
-                        gear = state.vehicleCan.gear,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    )
-
-                    Column(
-                        Modifier.width(sideWidth).fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        GT3SideMetric(
-                            title = "ГАЗ",
-                            value = state.obd.throttlePct,
-                            unit = "%",
-                            modifier = Modifier.weight(1f),
-                            accent = GtGreen,
-                            rangeMax = 100.0
-                        )
-                        GT3SideMetric(
-                            title = "ТОРМОЗ",
-                            value = state.vehicleCan.brakePressureBar,
-                            unit = "bar",
-                            modifier = Modifier.weight(1f),
-                            accent = GtRed,
-                            rangeMax = 120.0
-                        )
-                    }
-                }
-            }
+            GT3RpmStrip(
+                rpm = state.obd.rpm,
+                modifier = Modifier.fillMaxWidth().height(72.dp)
+            )
 
             Row(
-                Modifier.fillMaxWidth().height(92.dp),
+                Modifier.fillMaxWidth().height(116.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 GT3LargeMetric(
@@ -142,18 +82,52 @@ fun GT3DashboardScreen(
                     unit = "км/ч",
                     modifier = Modifier.weight(1.35f),
                     accent = GtYellow,
-                    valueSize = 45
+                    valueSize = 52
                 )
-                GT3LargeMetric(
-                    title = "ПЕРЕДАЧА",
-                    value = state.vehicleCan.gear?.let {
-                        if (it % 1.0 == 0.0) it.toInt().toString() else "%.1f".format(it)
-                    } ?: "—",
-                    unit = "",
-                    modifier = Modifier.weight(.65f),
-                    accent = GtWhite,
-                    valueSize = 45
-                )
+
+                Column(
+                    Modifier.weight(1f).fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        GT3CompactMetric(
+                            title = "ГАЗ",
+                            value = state.obd.throttlePct,
+                            unit = "%",
+                            accent = GtGreen,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GT3CompactMetric(
+                            title = "ТОРМОЗ",
+                            value = state.vehicleCan.brakePressureBar,
+                            unit = "bar",
+                            accent = GtRed,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        GT3CompactMetric(
+                            title = "МАСЛО",
+                            value = state.obd.oilTempC,
+                            unit = "°C",
+                            accent = GtYellow,
+                            modifier = Modifier.weight(1f)
+                        )
+                        GT3CompactMetric(
+                            title = "ОЖ",
+                            value = state.obd.coolantC,
+                            unit = "°C",
+                            accent = GtYellow,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
 
             Row(
@@ -325,136 +299,96 @@ private fun GT3LapCard(
 }
 
 @Composable
-private fun GT3Tachometer(
-    rpm: Double,
-    gear: Double?,
+private fun GT3RpmStrip(
+    rpm: Double?,
     modifier: Modifier
 ) {
-    val ratio = (rpm / 10_000.0).coerceIn(0.0, 1.0)
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize().padding(2.dp)) {
-            val c = Offset(size.width / 2f, size.height / 2f)
-            val r = minOf(size.width, size.height) * .45f
-            val start = 135f
-            val sweep = 270f
+    val value = (rpm ?: 0.0).coerceAtLeast(0.0)
+    val ratio = (value / 10_000.0).coerceIn(0.0, 1.0)
 
-            drawCircle(Color(0xFF060708), r * 1.04f, c)
-            drawCircle(GtBorder, r * 1.02f, c, style = Stroke(width = 2.5f))
-            drawCircle(Color(0xFF15181A), r * .82f, c, style = Stroke(width = 2f))
-            drawCircle(Color.Black, r * .68f, c)
-
-            drawArc(
-                color = GtYellow,
-                startAngle = start + sweep * .74f,
-                sweepAngle = sweep * .16f,
-                useCenter = false,
-                topLeft = Offset(c.x - r * .93f, c.y - r * .93f),
-                size = androidx.compose.ui.geometry.Size(r * 1.86f, r * 1.86f),
-                style = Stroke(width = 7f)
-            )
-            drawArc(
-                color = GtRed,
-                startAngle = start + sweep * .90f,
-                sweepAngle = sweep * .10f,
-                useCenter = false,
-                topLeft = Offset(c.x - r * .93f, c.y - r * .93f),
-                size = androidx.compose.ui.geometry.Size(r * 1.86f, r * 1.86f),
-                style = Stroke(width = 7f)
-            )
-
-            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.rgb(235, 235, 235)
-                textSize = (r * .12f).coerceAtLeast(20f)
-                textAlign = Paint.Align.CENTER
-                typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-            }
-            for (i in 0..10) {
-                val a = (start + sweep * (i / 10f)) * PI / 180.0
-                val outer = Offset(c.x + cos(a).toFloat() * r * .96f, c.y + sin(a).toFloat() * r * .96f)
-                val inner = Offset(c.x + cos(a).toFloat() * r * .84f, c.y + sin(a).toFloat() * r * .84f)
-                drawLine(
-                    if (i >= 8) GtYellow else GtWhite,
-                    inner,
-                    outer,
-                    strokeWidth = if (i % 1 == 0) 3.2f else 2f
+    GT3Panel(modifier, corner = 11) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.weight(1f)) {
+                    Text("ОБОРОТЫ", color = GtMuted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    Text("RPM", color = GtMuted, fontSize = 7.sp)
+                }
+                Text(
+                    rpm?.let { "%,.0f".format(it).replace(",", " ") } ?: "—",
+                    color = when {
+                        rpm == null -> GtMuted
+                        ratio >= .90 -> GtRed
+                        ratio >= .75 -> GtYellow
+                        else -> GtWhite
+                    },
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black
                 )
-
-                val tx = c.x + cos(a).toFloat() * r * .70f
-                val ty = c.y + sin(a).toFloat() * r * .70f - (textPaint.ascent() + textPaint.descent()) / 2f
-                if (i >= 8) textPaint.color = android.graphics.Color.rgb(242, 195, 0)
-                else textPaint.color = android.graphics.Color.rgb(235, 235, 235)
-                drawContext.canvas.nativeCanvas.drawText(i.toString(), tx, ty, textPaint)
             }
 
-            for (i in 0..50) {
-                if (i % 5 == 0) continue
-                val a = (start + sweep * (i / 50f)) * PI / 180.0
-                val outer = Offset(c.x + cos(a).toFloat() * r * .96f, c.y + sin(a).toFloat() * r * .96f)
-                val inner = Offset(c.x + cos(a).toFloat() * r * .90f, c.y + sin(a).toFloat() * r * .90f)
-                drawLine(Color(0xFF8B8E90), inner, outer, strokeWidth = 1.2f)
+            Spacer(Modifier.height(7.dp))
+
+            Canvas(Modifier.fillMaxWidth().height(16.dp)) {
+                val gap = 3f
+                val segments = 28
+                val segmentWidth = (size.width - gap * (segments - 1)) / segments
+                val active = (ratio * segments).toInt()
+
+                for (i in 0 until segments) {
+                    val x = i * (segmentWidth + gap)
+                    val fraction = i.toFloat() / (segments - 1).coerceAtLeast(1)
+                    val baseColor = when {
+                        fraction >= .90f -> GtRed
+                        fraction >= .75f -> GtYellow
+                        else -> Color(0xFFD8DBDD)
+                    }
+                    val color = if (i < active) baseColor else Color(0xFF2A2D30)
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(x, 0f),
+                        size = androidx.compose.ui.geometry.Size(segmentWidth, size.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.5f, 2.5f)
+                    )
+                }
             }
 
-            val needleAngle = (start + sweep * ratio.toFloat()) * PI / 180.0
-            val tip = Offset(
-                c.x + cos(needleAngle).toFloat() * r * .76f,
-                c.y + sin(needleAngle).toFloat() * r * .76f
-            )
-            val tail = Offset(
-                c.x - cos(needleAngle).toFloat() * r * .10f,
-                c.y - sin(needleAngle).toFloat() * r * .10f
-            )
-            drawLine(Color(0xFF7C5F00), tail, tip, strokeWidth = 8f)
-            drawLine(GtYellow, tail, tip, strokeWidth = 4f)
-            drawCircle(Color(0xFF26292C), r * .10f, c)
-            drawCircle(GtBorder, r * .10f, c, style = Stroke(width = 2f))
-        }
-
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(22.dp))
-            Text("ОБОРОТЫ", color = GtMuted, fontSize = 9.sp)
-            Text("x1000 rpm", color = GtMuted, fontSize = 8.sp)
-            Spacer(Modifier.height(26.dp))
-            Text(
-                gear?.let { if (it % 1.0 == 0.0) it.toInt().toString() else "%.1f".format(it) } ?: "—",
-                color = GtYellow,
-                fontSize = 38.sp,
-                fontWeight = FontWeight.Black
-            )
-            Text("ПЕРЕДАЧА", color = GtMuted, fontSize = 8.sp)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                listOf("0", "2", "4", "6", "8", "10").forEach { label ->
+                    Text(label, color = GtMuted, fontSize = 7.sp)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun GT3SideMetric(
+private fun GT3CompactMetric(
     title: String,
     value: Double?,
     unit: String,
-    modifier: Modifier,
     accent: Color,
-    rangeMax: Double
+    modifier: Modifier
 ) {
     GT3Panel(modifier, corner = 10) {
-        Column(
-            Modifier.fillMaxSize().padding(7.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, color = GtMuted, fontSize = 8.sp, textAlign = TextAlign.Center, lineHeight = 9.sp)
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    value?.let { if (abs(it) >= 100) "%.0f".format(it) else "%.1f".format(it) } ?: "—",
-                    color = GtWhite,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(unit, color = GtMuted, fontSize = 8.sp)
+            Column(Modifier.weight(1f)) {
+                Text(title, color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                Text(unit, color = GtMuted, fontSize = 6.sp)
             }
-            LinearProgressIndicator(
-                progress = { ((value ?: 0.0) / rangeMax).coerceIn(0.0, 1.0).toFloat() },
-                modifier = Modifier.fillMaxWidth().height(5.dp),
-                color = accent,
-                trackColor = Color(0xFF232629)
+            Text(
+                value?.let { if (abs(it) >= 100) "%.0f".format(it) else "%.1f".format(it) } ?: "—",
+                color = if (value == null) GtMuted else accent,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Black
             )
         }
     }
