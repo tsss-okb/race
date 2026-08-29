@@ -255,6 +255,49 @@ private fun SettingsHubScreen(
                 onCheckedChange = { RaceRuntime.setAutoStopEnabled(it) }
             )
         }
+
+        Column(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFF111315), RoundedCornerShape(12.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text("PIT BUTTON", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text(
+                "Последний источник: " + state.pitLastTrigger,
+                color = Color.White,
+                fontSize = 10.sp
+            )
+            Text(
+                "BLE/USB HID: F1 • BUTTON 1/A • PLAY/PAUSE • CAMERA • внешние VOL+/VOL−",
+                color = Muted,
+                fontSize = 9.sp
+            )
+            Text(
+                "CAN: Данные → CAN → SIGNAL → Channel = PIT_BUTTON. Срабатывание по фронту значения > 0.5.",
+                color = Muted,
+                fontSize = 9.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = { RaceRuntime.togglePitTimer("SCREEN_SETTINGS") },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.pitTimerActive) Red else Amber,
+                        contentColor = Color.Black
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (state.pitTimerActive) "PIT STOP" else "PIT START", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = { RaceRuntime.resetPitTimer() },
+                    enabled = !state.pitTimerActive,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("СБРОС PIT", fontSize = 9.sp)
+                }
+            }
+        }
         Text(
             "Диагностика",
             color = Muted,
