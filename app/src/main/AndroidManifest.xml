@@ -44,6 +44,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".PitLaneActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="racelab" android:host="pit" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".service.RecordingService"
             android:exported="false"
