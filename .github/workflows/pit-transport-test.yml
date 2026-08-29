@@ -48,7 +48,9 @@ jobs:
           let viewer;
           let pubOpen = false;
           let viewerOpen = false;
-          const sentAt = Date.now();
+          let pitSentAt = 0;
+          let pingSentAt = 0;
+          const connectStartedAt = Date.now();
 
           function maybeSend() {
             if (!pubOpen || !viewerOpen) return;
@@ -60,7 +62,11 @@ jobs:
               pitCount: 7,
               pitTrigger: 'CI'
             };
+            pitSentAt = Date.now();
             publisher.send(JSON.stringify(payload));
+
+            pingSentAt = Date.now();
+            viewer.send(JSON.stringify({ type: 'ping', nonce: pingSentAt }));
           }
 
           publisher = new WebSocket(pubUrl);
@@ -70,19 +76,25 @@ jobs:
             viewer = new WebSocket(viewUrl);
             viewer.addEventListener('open', () => {
               viewerOpen = true;
-              console.log('viewer open');
+              console.log('viewer open handshake_ms=' + (Date.now() - connectStartedAt));
               maybeSend();
             });
             viewer.addEventListener('message', (event) => {
               let data;
               try { data = JSON.parse(event.data); } catch { return; }
+              if (data.type === 'pong') {
+                const pingRtt = Date.now() - pingSentAt;
+                console.log('PING_PONG_OK rtt_ms=' + pingRtt);
+              }
               if (data.test === true && data.pitTrigger === 'CI') {
-                const rtt = Date.now() - sentAt;
-                console.log('ROUNDTRIP_OK rtt_ms=' + rtt + ' relayReceivedAtMs=' + data.relayReceivedAtMs);
-                clearTimeout(timeout);
-                try { publisher.close(1000, 'done'); } catch {}
-                try { viewer.close(1000, 'done'); } catch {}
-                process.exit(0);
+                const transit = Date.now() - pitSentAt;
+                console.log('PIT_PUSH_OK transit_ms=' + transit + ' relayReceivedAtMs=' + data.relayReceivedAtMs);
+                setTimeout(() => {
+                  clearTimeout(timeout);
+                  try { publisher.close(1000, 'done'); } catch {}
+                  try { viewer.close(1000, 'done'); } catch {}
+                  process.exit(0);
+                }, 150);
               }
             });
             viewer.addEventListener('error', (e) => console.error('viewer error', e.message || e));
