@@ -19,6 +19,10 @@ import ru.racelab.phone.ble.BleNmeaManager
 import ru.racelab.phone.ble.BleUiState
 import ru.racelab.phone.ble.Elm327Manager
 import ru.racelab.phone.data.AppState
+import ru.racelab.phone.data.RaceRuntime
+import ru.racelab.phone.gnss.GnssSourceMode
+import ru.racelab.phone.gnss.UsbGnssState
+import ru.racelab.phone.gnss.UsbNmeaManager
 import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.obd.CustomPidRepository
 import ru.racelab.phone.obd.EvChannel
@@ -33,9 +37,11 @@ private val ObdMuted = Color(0xFF93A096)
 fun AdvancedConnectionsScreen(
     state: AppState,
     bleGps: BleNmeaManager,
+    usbGnss: UsbNmeaManager,
     obd: Elm327Manager
 ) {
     val gps by bleGps.state.collectAsStateWithLifecycle()
+    val usb by usbGnss.state.collectAsStateWithLifecycle()
     val obdUi by obd.state.collectAsStateWithLifecycle()
     var section by remember { mutableIntStateOf(0) }
 
@@ -51,7 +57,7 @@ fun AdvancedConnectionsScreen(
         }
         Spacer(Modifier.height(6.dp))
         when (section) {
-            0 -> LinkSection(gps, obdUi, bleGps, obd)
+            0 -> LinkSection(state, gps, usb, obdUi, bleGps, usbGnss, obd)
             1 -> EngineSection(state)
             2 -> EvSection(state)
             else -> CustomPidSection(state, obd)
@@ -76,15 +82,48 @@ private fun ObdTab(label: String, selected: Boolean, modifier: Modifier, onClick
 
 @Composable
 private fun LinkSection(
+    state: AppState,
     gps: BleUiState,
+    usb: UsbGnssState,
     obdUi: BleUiState,
     bleGps: BleNmeaManager,
+    usbGnss: UsbNmeaManager,
     obd: Elm327Manager
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Column(
+            Modifier.fillMaxWidth().background(ObdPanel, RoundedCornerShape(12.dp)).padding(9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("GNSS SOURCE", color = ObdGreen, fontWeight = FontWeight.Black)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                GnssSourceMode.entries.forEach { mode ->
+                    Button(
+                        onClick = { RaceRuntime.setGnssSourceMode(mode) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (state.gnssSourceMode == mode) ObdGreen else Color(0xFF202720),
+                            contentColor = if (state.gnssSourceMode == mode) Color.Black else Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 3.dp, vertical = 3.dp)
+                    ) { Text(mode.label, fontSize = 8.sp, maxLines = 1) }
+                }
+            }
+            Text(
+                "ACTIVE " + state.gpsSource + " • " + "%.1f Hz".format(state.gpsHz) +
+                    " • SAT " + state.satellites +
+                    " • HDOP " + (state.hdop?.let { "%.2f".format(it) } ?: "—") +
+                    " • VDOP " + (state.vdop?.let { "%.2f".format(it) } ?: "—"),
+                color = ObdMuted,
+                fontSize = 10.sp
+            )
+        }
+
+        UsbGnssPanel(usb, usbGnss)
+
         CompactDevicePanel(
             title = "BLE GPS / NMEA",
             ui = gps,
@@ -99,6 +138,67 @@ private fun LinkSection(
             connect = { obd.connect(it) },
             disconnect = { obd.disconnect() }
         )
+    }
+}
+
+@Composable
+private fun UsbGnssPanel(ui: UsbGnssState, manager: UsbNmeaManager) {
+    var baud by remember(ui.baudRate) { mutableIntStateOf(ui.baudRate) }
+    var baudMenu by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier.fillMaxWidth().background(ObdPanel, RoundedCornerShape(12.dp)).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Text("USB-C OTG GPS / NMEA", color = ObdGreen, fontWeight = FontWeight.Black)
+        Text(
+            ui.status + " • RX " + ui.bytesReceived + " B",
+            color = ObdMuted,
+            fontSize = 10.sp
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = { manager.refresh() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) { Text("REFRESH", fontSize = 9.sp) }
+            Box {
+                OutlinedButton(
+                    onClick = { baudMenu = true },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text(baud.toString() + " baud", fontSize = 9.sp) }
+                DropdownMenu(expanded = baudMenu, onDismissRequest = { baudMenu = false }) {
+                    UsbNmeaManager.COMMON_BAUD_RATES.forEach { b ->
+                        DropdownMenuItem(
+                            text = { Text(b.toString()) },
+                            onClick = { baud = b; baudMenu = false }
+                        )
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = { manager.disconnect() },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) { Text("OFF", fontSize = 9.sp) }
+        }
+        ui.devices.forEach { d ->
+            Row(
+                Modifier.fillMaxWidth().background(Color(0xFF0D120E), RoundedCornerShape(8.dp)).padding(7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(d.name, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text(
+                        "VID " + "%04X".format(d.vendorId) + " PID " + "%04X".format(d.productId) +
+                            " • ports " + d.ports,
+                        color = ObdMuted,
+                        fontSize = 9.sp
+                    )
+                }
+                TextButton(onClick = { manager.connect(d.deviceId, baud) }) {
+                    Text(if (ui.connectedDeviceId == d.deviceId) "ON" else "CONNECT", fontSize = 9.sp)
+                }
+            }
+        }
     }
 }
 
