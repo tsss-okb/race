@@ -31,6 +31,7 @@ import androidx.core.util.Consumer
 import androidx.arch.core.util.Function
 import androidx.lifecycle.LifecycleOwner
 import ru.racelab.phone.data.RaceRuntime
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -145,6 +146,9 @@ class BackgroundCameraRecorder(
                 is VideoRecordEvent.Start -> RaceRuntime.updateVideoState(true, name)
                 is VideoRecordEvent.Finalize -> {
                     recording = null
+                    if (!event.hasError()) {
+                        recordVideoRef(sessionId, name, event.outputResults.outputUri.toString())
+                    }
                     RaceRuntime.updateVideoState(false, if (event.hasError()) "Video error " + event.error else name)
                     val next = pendingLapNo
                     pendingLapNo = null
@@ -154,6 +158,14 @@ class BackgroundCameraRecorder(
                     }
                 }
             }
+        }
+    }
+
+    private fun recordVideoRef(sessionId: String?, name: String, uri: String) {
+        if (sessionId.isNullOrBlank() || uri.isBlank()) return
+        runCatching {
+            val root = File(app.getExternalFilesDir(null), "RaceLab/sessions/" + sessionId).apply { mkdirs() }
+            File(root, "videos.txt").appendText(name + "\t" + uri + "\n")
         }
     }
 
