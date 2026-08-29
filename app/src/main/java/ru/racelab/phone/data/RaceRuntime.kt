@@ -584,6 +584,19 @@ object RaceRuntime {
         )
     }
 
+    @Synchronized
+    fun setPitLaneServerStatus(running: Boolean, urls: List<String>) {
+        _state.value = _state.value.copy(
+            pitLaneServerRunning = running,
+            pitLaneUrls = urls.distinct(),
+            lastMessage = when {
+                running && urls.isNotEmpty() -> "PIT LANE: " + urls.first()
+                running -> "PIT LANE сервер запущен"
+                else -> _state.value.lastMessage
+            }
+        )
+    }
+
     fun updateVideoState(recording: Boolean, status: String) {
         _state.value = _state.value.copy(videoRecording = recording, videoStatus = status)
     }
