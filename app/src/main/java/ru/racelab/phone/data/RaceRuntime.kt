@@ -85,7 +85,22 @@ object RaceRuntime {
     fun stopSession() {
         val w = writer
         writer = null
-        w?.close(engine.laps, JSONObject().put("startConfigured", engine.startLine != null).put("sectorCount", engine.sectors.size))
+        w?.close(
+            engine.laps,
+            JSONObject()
+                .put("startConfigured", engine.startLine != null)
+                .put("sectorCount", engine.sectors.size)
+                .put("trackId", _state.value.currentTrackId)
+                .put("trackName", _state.value.currentTrackName)
+                .put("gpsSource", _state.value.gpsSource)
+                .put("gnssMode", _state.value.gnssSourceMode.name)
+                .put("hdop", _state.value.hdop)
+                .put("vdop", _state.value.vdop)
+                .put("satellites", _state.value.satellites)
+                .put("sensorCount", _state.value.activeSensorCount)
+                .put("canFrameCount", _state.value.canFrameCount)
+                .put("videoStatus", _state.value.videoStatus)
+        )
         lowSpeedSinceMs = null
         _state.value = _state.value.copy(sessionActive = false, armed = false, autoStopRequested = false, lastMessage = "Сессия сохранена")
     }
@@ -245,7 +260,8 @@ object RaceRuntime {
 
         val prediction = engine.prediction(point.ts, point)
         val lapElapsed = engine.currentLapStartMs?.let { (point.ts - it).coerceAtLeast(0) } ?: 0L
-        writer?.writeGps(point, gX, gY, gZ, gTotal, obd, ev)
+        val activeLapNo = engine.currentLapStartMs?.let { engine.laps.size + 1 }
+        writer?.writeGps(point, activeLapNo, gX, gY, gZ, gTotal, obd, ev)
         if (update.lapCompleted != null) writer?.flush()
 
         val speedKmhNow = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0)
