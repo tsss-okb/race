@@ -1,6 +1,8 @@
 package ru.racelab.phone.ui
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import androidx.camera.video.VideoRecordEvent
 import androidx.compose.foundation.Canvas
@@ -442,6 +444,12 @@ private fun SettingsHubScreen(
             }
 
             if (state.internetPitViewerUrl.isNotBlank()) {
+                Text(
+                    "TEAM LINK",
+                    color = Amber,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         state.internetPitViewerUrl,
@@ -457,10 +465,35 @@ private fun SettingsHubScreen(
                         Text("КОПИЯ", color = Amber, fontSize = 8.sp)
                     }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = {
+                            val share = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, state.internetPitViewerUrl)
+                            }
+                            context.startActivity(Intent.createChooser(share, "RaceLab PIT LANE TEAM"))
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
+                    ) {
+                        Text("ПОДЕЛИТЬСЯ КОМАНДЕ", fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.internetPitViewerUrl)))
+                            }
+                        },
+                        modifier = Modifier.weight(.7f)
+                    ) {
+                        Text("ТЕСТ TEAM", fontSize = 8.sp)
+                    }
+                }
             }
 
             Text(
-                "Телефон гонщика отправляет только телеметрию PIT по HTTPS. Команда открывает Viewer URL через любой интернет — Wi‑Fi между устройствами не нужен.",
+                "Основной режим: на втором устройстве установлен тот же RaceLab. TEAM LINK сразу открывает отдельное read-only табло через интернет. Браузер больше не нужен.",
                 color = Muted,
                 fontSize = 8.sp
             )
