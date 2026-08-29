@@ -37,7 +37,12 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         bleGps = BleNmeaManager(this) { RaceRuntime.ingestPoint(it) }
-        obd = Elm327Manager(this) { RaceRuntime.updateObd(it) }
+        obd = Elm327Manager(
+            context = this,
+            onReading = { RaceRuntime.updateObd(it) },
+            onCustom = { pid, value -> RaceRuntime.updateCustomObd(pid, value) },
+            onSupported = { RaceRuntime.setSupportedObdPids(it) }
+        )
         phoneSensors = PhoneSensorMonitor(this)
         phoneGnss = PhoneGnssMonitor(this)
         requestCorePermissions()
