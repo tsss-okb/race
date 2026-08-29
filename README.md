@@ -257,3 +257,32 @@ RaceLab 2.5.0 дублирует PIT-данные на второй экран �
 - Pit Lane Screen работает только на чтение. Управление PIT остаётся на GM204/CAN/экране телефона гонщика.
 - API: `GET /api/pit`.
 - Health-check: `GET /health`.
+
+
+### Pit Lane через интернет
+RaceLab 2.6.0 поддерживает удалённый экран команды через интернет.
+
+Схема:
+`RaceLab на машине → HTTPS → Cloudflare Pit Relay → браузер команды`.
+
+Возможности:
+- расстояние не ограничено Wi‑Fi;
+- работает через мобильный интернет телефона гонщика;
+- команда открывает Viewer URL в браузере;
+- обновление примерно 4 Гц;
+- отображаются PIT ACTIVE, PIT TIME, LAST, BEST, PIT #, скорость, текущий/лучший круг, delta, трасса, GPS и latency;
+- viewer работает только на чтение;
+- локальный Pit Lane Screen на порту 8787 остаётся резервным каналом.
+
+Настройка APK:
+1. Открыть `Настройки → PIT LANE • INTERNET`.
+2. Ввести HTTPS URL развернутого Worker.
+3. ROOM и KEY генерируются приложением автоматически.
+4. Включить переключатель и нажать `СОХРАНИТЬ / ПОДКЛЮЧИТЬ`.
+5. Скопировать Viewer URL и отправить команде.
+
+Cloudflare Worker:
+- исходники: `cloudflare/pit-relay`;
+- Durable Object хранит только последнее состояние комнаты;
+- deploy workflow: `.github/workflows/pit-relay.yml`;
+- GitHub Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
