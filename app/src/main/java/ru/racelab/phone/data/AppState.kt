@@ -3,6 +3,7 @@ package ru.racelab.phone.data
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.sensor.MountDirection
+import ru.racelab.phone.gnss.GnssSourceMode
 
 data class SensorSnapshot(
     val id: String,
@@ -94,6 +95,10 @@ data class AppState(
     val customObd: List<CustomObdValue> = emptyList(),
     val supportedObdPids: Set<String> = emptySet(),
     val gpsSource: String = "phone",
+    val gnssSourceMode: GnssSourceMode = GnssSourceMode.AUTO,
+    val hdop: Double? = null,
+    val vdop: Double? = null,
+    val pdop: Double? = null,
     val trackPreview: List<GeoPoint> = emptyList(),
     val lastMessage: String = "Готов"
 )
