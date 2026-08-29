@@ -25,7 +25,27 @@ data class ObdState(
     val mapKpa: Double? = null,
     val timingDeg: Double? = null,
     val mafGps: Double? = null,
-    val voltageV: Double? = null
+    val voltageV: Double? = null,
+    val oilTempC: Double? = null,
+    val fuelPressureKpa: Double? = null,
+    val shortTrimPct: Double? = null,
+    val longTrimPct: Double? = null
+)
+
+data class EvState(
+    val socPct: Double? = null,
+    val batteryPowerKw: Double? = null,
+    val motorPowerKw: Double? = null,
+    val regenKw: Double? = null,
+    val batteryTempC: Double? = null,
+    val inverterTempC: Double? = null
+)
+
+data class CustomObdValue(
+    val id: String,
+    val name: String,
+    val value: Double,
+    val unit: String
 )
 
 data class AppState(
@@ -70,6 +90,9 @@ data class AppState(
     val availableSensorCount: Int = 0,
     val activeSensorCount: Int = 0,
     val obd: ObdState = ObdState(),
+    val ev: EvState = EvState(),
+    val customObd: List<CustomObdValue> = emptyList(),
+    val supportedObdPids: Set<String> = emptySet(),
     val gpsSource: String = "phone",
     val trackPreview: List<GeoPoint> = emptyList(),
     val lastMessage: String = "Готов"
