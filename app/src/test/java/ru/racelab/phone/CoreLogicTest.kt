@@ -65,6 +65,31 @@ class CoreLogicTest {
     }
 
     @Test
+    fun pitTimerDebouncesAndTracksBest() {
+        val pit = PitTimerEngine(debounceMs = 250L)
+
+        val start1 = pit.toggle(1_000L, "HID:F1")
+        requireNotNull(start1)
+        assertTrue(start1.snapshot.active)
+
+        assertNull(pit.toggle(1_100L, "HID:F1"))
+
+        val stop1 = pit.toggle(6_000L, "HID:F1")
+        requireNotNull(stop1)
+        assertFalse(stop1.snapshot.active)
+        assertEquals(5_000L, stop1.elapsedMs)
+        assertEquals(1, stop1.snapshot.count)
+        assertEquals(5_000L, stop1.snapshot.bestMs)
+
+        pit.toggle(7_000L, "CAN:PIT")
+        val stop2 = pit.toggle(10_500L, "CAN:PIT")
+        requireNotNull(stop2)
+        assertEquals(3_500L, stop2.elapsedMs)
+        assertEquals(2, stop2.snapshot.count)
+        assertEquals(3_500L, stop2.snapshot.bestMs)
+    }
+
+    @Test
     fun slcanParsesStandardAndExtendedFrames() {
         val standard = SlcanParser.parse("t12381122334455667788", 100L)
         requireNotNull(standard)
