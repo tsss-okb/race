@@ -53,14 +53,20 @@ import ru.racelab.phone.video.VideoSettings
 import ru.racelab.phone.video.VideoSettingsRepository
 import kotlin.math.abs
 
-private val Bg = Color(0xFF0B0F0C)
-private val Panel = Color(0xFF131A15)
-private val Green = Color(0xFF69FF72)
-private val Amber = Color(0xFFFFCA58)
-private val Red = Color(0xFFFF6B6B)
-private val Muted = Color(0xFF93A096)
+private val Bg = Color(0xFF050607)
+private val Panel = Color(0xFF111315)
+private val Green = Color(0xFF58E13E)
+private val Amber = Color(0xFFF2C300)
+private val Red = Color(0xFFFF3B30)
+private val Muted = Color(0xFF989DA2)
 
-private enum class Tab(val label: String) { DRIVE("ЗАЕЗД"), ANALYSIS("АНАЛИЗ"), VIDEO("ВИДЕО"), SENSORS("ДАТЧИКИ"), BLE("DATA"), SESSIONS("АРХИВ") }
+private enum class Tab(val label: String) {
+    DASHBOARD("ДАШБОРД"),
+    LAPS("КРУГИ"),
+    ANALYSIS("АНАЛИЗ"),
+    DATA("ДАННЫЕ"),
+    SETTINGS("НАСТРОЙКИ")
+}
 
 @Composable
 fun RaceLabApp(
@@ -73,12 +79,12 @@ fun RaceLabApp(
     onRequestPermissions: () -> Unit
 ) {
     val state by RaceRuntime.state.collectAsStateWithLifecycle()
-    var tab by remember { mutableStateOf(Tab.DRIVE) }
+    var tab by remember { mutableStateOf(Tab.DASHBOARD) }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Green,
-            secondary = Amber,
+            primary = Amber,
+            secondary = Green,
             background = Bg,
             surface = Panel,
             onBackground = Color.White,
@@ -93,12 +99,18 @@ fun RaceLabApp(
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
                 when (tab) {
-                    Tab.DRIVE -> DriveScreen(state, onStartSession, onStopSession)
+                    Tab.DASHBOARD -> GT3DashboardScreen(state, onStartSession, onStopSession)
+                    Tab.LAPS -> SessionsScreen()
                     Tab.ANALYSIS -> AnalysisScreen(state)
-                    Tab.VIDEO -> VideoScreen(state, onRequestPermissions)
-                    Tab.SENSORS -> SensorsScreen(state)
-                    Tab.BLE -> ConnectionsScreen(state, bleGps, usbGnss, usbCan, obd)
-                    Tab.SESSIONS -> SessionsScreen()
+                    Tab.DATA -> DataHubScreen(
+                        state = state,
+                        bleGps = bleGps,
+                        usbGnss = usbGnss,
+                        usbCan = usbCan,
+                        obd = obd,
+                        onRequestPermissions = onRequestPermissions
+                    )
+                    Tab.SETTINGS -> SettingsHubScreen(state, onRequestPermissions)
                 }
             }
         }
@@ -107,62 +119,154 @@ fun RaceLabApp(
 
 @Composable
 private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
-    Surface(color = Color(0xFF0E1410), tonalElevation = 0.dp) {
+    Surface(
+        color = Color(0xFF0A0C0E),
+        tonalElevation = 0.dp,
+        border = BorderStroke(1.dp, Color(0xFF24282B))
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .height(48.dp)
-                .padding(horizontal = 4.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                .height(58.dp)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Tab.entries.forEach { item ->
                 val active = selected == item
                 val glyph = when (item) {
-                    Tab.DRIVE -> "▶"
-                    Tab.ANALYSIS -> "∿"
-                    Tab.VIDEO -> "●"
-                    Tab.SENSORS -> "◉"
-                    Tab.BLE -> "IO"
-                    Tab.SESSIONS -> "≡"
+                    Tab.DASHBOARD -> "◴"
+                    Tab.LAPS -> "⚑"
+                    Tab.ANALYSIS -> "▥"
+                    Tab.DATA -> "⌁"
+                    Tab.SETTINGS -> "⚙"
                 }
                 Surface(
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     shape = RoundedCornerShape(10.dp),
-                    color = if (active) Color(0xFF19351D) else Color.Transparent
+                    color = if (active) Color(0xFF171A1D) else Color.Transparent
                 ) {
-                    Row(
-                        Modifier.fillMaxSize().padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                    Column(
+                        Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Text(
                             glyph,
-                            color = if (active) Green else Muted,
-                            fontSize = if (item == Tab.BLE) 11.sp else 15.sp,
-                            fontWeight = FontWeight.Black,
+                            color = if (active) Amber else Muted,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
-                        Spacer(Modifier.width(4.dp))
                         Text(
                             when (item) {
-                                Tab.DRIVE -> "ЗАЕЗД"
-                                Tab.ANALYSIS -> "АНАЛ."
-                                Tab.VIDEO -> "ВИДЕО"
-                                Tab.SENSORS -> "IMU"
-                                Tab.BLE -> "DATA"
-                                Tab.SESSIONS -> "АРХ."
+                                Tab.DASHBOARD -> "Дашборд"
+                                Tab.LAPS -> "Круги"
+                                Tab.ANALYSIS -> "Анализ"
+                                Tab.DATA -> "Данные"
+                                Tab.SETTINGS -> "Настройки"
                             },
-                            color = if (active) Color.White else Muted,
-                            fontSize = 9.sp,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            color = if (active) Amber else Color(0xFFC5C8CA),
+                            fontSize = 8.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                             maxLines = 1
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DataHubScreen(
+    state: AppState,
+    bleGps: BleNmeaManager,
+    usbGnss: UsbNmeaManager,
+    usbCan: UsbCanManager,
+    obd: Elm327Manager,
+    onRequestPermissions: () -> Unit
+) {
+    var section by remember { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxSize().background(Bg)) {
+        Row(
+            Modifier.fillMaxWidth().padding(7.dp)
+                .background(Color(0xFF111315), RoundedCornerShape(12.dp))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            listOf("ВИДЕО", "IMU", "I/O").forEachIndexed { index, label ->
+                Button(
+                    onClick = { section = index },
+                    modifier = Modifier.weight(1f).height(38.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (section == index) Amber else Color.Transparent,
+                        contentColor = if (section == index) Color.Black else Color.White
+                    ),
+                    contentPadding = PaddingValues(3.dp)
+                ) {
+                    Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Box(Modifier.fillMaxSize()) {
+            when (section) {
+                0 -> VideoScreen(state, onRequestPermissions)
+                1 -> SensorsScreen(state)
+                else -> ConnectionsScreen(state, bleGps, usbGnss, usbCan, obd)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsHubScreen(
+    state: AppState,
+    onRequestPermissions: () -> Unit
+) {
+    var showTracks by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().background(Bg).padding(9.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("НАСТРОЙКИ RACELAB", color = Amber, fontWeight = FontWeight.Black, fontSize = 15.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(
+                onClick = { showTracks = true },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1E20), contentColor = Color.White)
+            ) { Text("ТРАССЫ", fontSize = 9.sp) }
+            Button(
+                onClick = { RaceRuntime.calibrateImu() },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
+            ) { Text("IMU CAL", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+            OutlinedButton(
+                onClick = onRequestPermissions,
+                modifier = Modifier.weight(1f)
+            ) { Text("ДОСТУП", fontSize = 9.sp) }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Автостоп после заезда", color = Color.White, modifier = Modifier.weight(1f), fontSize = 11.sp)
+            Switch(
+                checked = state.autoStopEnabled,
+                onCheckedChange = { RaceRuntime.setAutoStopEnabled(it) }
+            )
+        }
+        Text(
+            "Диагностика",
+            color = Muted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Box(Modifier.fillMaxSize()) {
+            DiagnosticsPanel(state)
+        }
+    }
+
+    if (showTracks) {
+        TrackLibraryDialog(state, onDismiss = { showTracks = false })
     }
 }
 
@@ -294,7 +398,7 @@ private fun DriveControlPane(
 }
 
 @Composable
-private fun TrackLibraryDialog(state: AppState, onDismiss: () -> Unit) {
+fun TrackLibraryDialog(state: AppState, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var tracks by remember { mutableStateOf(TrackRepository.list(context)) }
