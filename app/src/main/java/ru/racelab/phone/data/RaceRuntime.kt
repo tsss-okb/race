@@ -320,6 +320,10 @@ object RaceRuntime {
         _state.value = _state.value.copy(obd = obd)
     }
 
+    fun updateVideoState(recording: Boolean, status: String) {
+        _state.value = _state.value.copy(videoRecording = recording, videoStatus = status)
+    }
+
     fun markMessage(message: String) {
         _state.value = _state.value.copy(lastMessage = message)
     }
