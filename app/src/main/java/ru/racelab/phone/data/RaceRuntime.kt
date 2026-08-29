@@ -94,6 +94,7 @@ object RaceRuntime {
 
     @Synchronized
     fun stopSession() {
+        if (_state.value.pitTimerActive) togglePitTimer("SESSION_STOP")
         val w = writer
         writer = null
         w?.close(
@@ -111,6 +112,9 @@ object RaceRuntime {
                 .put("sensorCount", _state.value.activeSensorCount)
                 .put("canFrameCount", _state.value.canFrameCount)
                 .put("videoStatus", _state.value.videoStatus)
+                .put("pitStopCount", _state.value.pitStopCount)
+                .put("pitBestMs", _state.value.pitBestMs)
+                .put("pitLastMs", _state.value.pitLastMs)
         )
         lowSpeedSinceMs = null
         _state.value = _state.value.copy(sessionActive = false, armed = false, autoStopRequested = false, lastMessage = "Сессия сохранена")
