@@ -24,6 +24,7 @@ import ru.racelab.phone.ui.RaceLabApp
 import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
 import ru.racelab.phone.pitlane.PitLaneServer
+import ru.racelab.phone.pitlane.InternetPitRelay
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         RaceRuntime.setGm204Enabled(RemoteControlSettingsRepository.isGm204Enabled(this))
         PitLaneServer.start()
+        InternetPitRelay.start(this)
 
         bleGps = BleNmeaManager(
             context = this,
@@ -127,6 +129,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         PitLaneServer.start()
         PitLaneServer.refreshStatus()
+        InternetPitRelay.start(this)
         phoneSensors.start()
         phoneGnss.start()
     }
@@ -219,6 +222,7 @@ class MainActivity : ComponentActivity() {
         usbCan.close()
         obd.disconnect()
         PitLaneServer.stop()
+        InternetPitRelay.stop()
         super.onDestroy()
     }
 }
