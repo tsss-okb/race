@@ -295,3 +295,15 @@ Cloudflare Worker:
 - Existing manually configured valid HTTPS relay URLs are preserved.
 - If an older install has an empty relay URL, it is migrated automatically to the default relay.
 - Pit Relay deployment workflow is manual-only to avoid creating new temporary Cloudflare accounts on unrelated pushes.
+
+
+### RaceLab 2.8.0 Pit Lane timing
+- Internet PIT publisher interval reduced from 250 ms to 100 ms.
+- Pit Lane Viewer moved to GitHub Pages so UI fixes no longer require Cloudflare Worker redeploy.
+- Viewer network polling is strictly sequential: a new request is not started until the previous one finishes.
+- Each request has a timeout to prevent stalled mobile connections from accumulating pending fetches.
+- PIT timer is interpolated locally in the browser with `requestAnimationFrame`, so the display keeps moving smoothly between network packets.
+- PIT time, LAST, BEST, lap time and delta are shown to hundredths of a second.
+- Viewer connection status detects stale data and reconnects automatically.
+- Viewer secret parameters use the URL fragment rather than the normal query string.
+- Local Wi‑Fi Pit Lane screen uses the same non-overlapping polling and centisecond display.
