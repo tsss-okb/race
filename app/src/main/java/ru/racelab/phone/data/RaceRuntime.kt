@@ -1,4 +1,5 @@
 package ru.racelab.phone.data
+import ru.racelab.phone.pitlane.InternetPitRelay
 
 import android.content.Context
 import android.hardware.Sensor
@@ -539,6 +540,7 @@ object RaceRuntime {
                 "PIT TIMER STOP • " + formatPit(event.elapsedMs ?: 0L)
             }
         )
+        InternetPitRelay.publishPriority()
     }
 
     @Synchronized
@@ -555,6 +557,7 @@ object RaceRuntime {
             pitLastTrigger = "—",
             lastMessage = "PIT TIMER сброшен"
         )
+        InternetPitRelay.publishPriority()
     }
 
     fun pitElapsedMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long =
