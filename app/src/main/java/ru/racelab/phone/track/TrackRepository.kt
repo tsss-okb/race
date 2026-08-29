@@ -13,6 +13,8 @@ data class TrackProfile(
     val name: String,
     val start: RaceLine,
     val sectors: List<RaceLine>,
+    val pitEntry: RaceLine? = null,
+    val pitExit: RaceLine? = null,
     val createdAtMs: Long = System.currentTimeMillis()
 ) {
     val center: GeoPoint
@@ -44,8 +46,21 @@ object TrackRepository {
         return profile
     }
 
-    fun create(name: String, start: RaceLine, sectors: List<RaceLine>): TrackProfile =
-        TrackProfile(UUID.randomUUID().toString(), name.trim().ifBlank { "Моя трасса" }, start, sectors.toList())
+    fun create(
+        name: String,
+        start: RaceLine,
+        sectors: List<RaceLine>,
+        pitEntry: RaceLine? = null,
+        pitExit: RaceLine? = null
+    ): TrackProfile =
+        TrackProfile(
+            UUID.randomUUID().toString(),
+            name.trim().ifBlank { "Моя трасса" },
+            start,
+            sectors.toList(),
+            pitEntry,
+            pitExit
+        )
 
     fun delete(context: Context, id: String) {
         persist(context, list(context).filterNot { it.id == id })
@@ -92,12 +107,14 @@ object TrackRepository {
     }
 
     private fun toJsonObject(profile: TrackProfile): JSONObject = JSONObject()
-        .put("format", "racelab-track-v1")
+        .put("format", "racelab-track-v2")
         .put("id", profile.id)
         .put("name", profile.name)
         .put("createdAtMs", profile.createdAtMs)
         .put("start", lineToJson(profile.start))
         .put("sectors", JSONArray().apply { profile.sectors.forEach { put(lineToJson(it)) } })
+        .put("pitEntry", profile.pitEntry?.let(::lineToJson) ?: JSONObject.NULL)
+        .put("pitExit", profile.pitExit?.let(::lineToJson) ?: JSONObject.NULL)
 
     private fun fromJsonObject(o: JSONObject): TrackProfile {
         val sectors = buildList {
@@ -109,6 +126,8 @@ object TrackRepository {
             name = o.optString("name", "Импортированная трасса"),
             start = lineFromJson(o.getJSONObject("start")),
             sectors = sectors,
+            pitEntry = o.optJSONObject("pitEntry")?.let(::lineFromJson),
+            pitExit = o.optJSONObject("pitExit")?.let(::lineFromJson),
             createdAtMs = o.optLong("createdAtMs", System.currentTimeMillis())
         )
     }
