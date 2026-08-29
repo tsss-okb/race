@@ -23,7 +23,7 @@ jobs:
       - name: Check PIT relay health
         run: |
           curl --fail --silent --show-error --retry 3 --retry-delay 1 --connect-timeout 5 --max-time 10 \
-            https://racelab-pit-relay.irradiated-tree.workers.dev/health | grep -q '"ok":true'
+            https://racelab-pit-relay.glacier-boursin.workers.dev/health | grep -q '"ok":true'
       - name: Unit tests
         run: gradle --stacktrace :app:testDebugUnitTest
       - name: Build debug APK
