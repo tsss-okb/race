@@ -209,3 +209,14 @@ CI выполняет:
 - CAN остаётся listen-only: RaceLab не передаёт управляющие CAN frames.
 - Каждое START / STOP / RESET сохраняется в `pit_events.csv`.
 - При остановке сессии активный PIT автоматически завершается и сохраняется.
+
+
+### HOCO GM204
+Специальный профиль Bluetooth HID-пульта HOCO GM204:
+- Camera / F1 / Button1 / внешние Volume +/- → PIT START/STOP.
+- OK / Play-Pause / Enter / D-pad center → RESET PIT только когда PIT остановлен.
+- D-pad Left / Right → предыдущая / следующая вкладка.
+- D-pad Up → Дашборд.
+- D-pad Down → Данные.
+- Профиль включается/выключается в Настройки → PIT BUTTON.
+- В настройках отображаются имя внешнего HID-устройства и последний Android keycode, чтобы проверить конкретную ревизию пульта.
