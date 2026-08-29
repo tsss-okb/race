@@ -133,9 +133,9 @@ object MotionProcessor {
     }
 
     private fun mul(r: FloatArray, v: FloatArray): DoubleArray = doubleArrayOf(
-        r[0] * v[0] + r[1] * v[1] + r[2] * v[2],
-        r[3] * v[0] + r[4] * v[1] + r[5] * v[2],
-        r[6] * v[0] + r[7] * v[1] + r[8] * v[2]
+        (r[0] * v[0] + r[1] * v[1] + r[2] * v[2]).toDouble(),
+        (r[3] * v[0] + r[4] * v[1] + r[5] * v[2]).toDouble(),
+        (r[6] * v[0] + r[7] * v[1] + r[8] * v[2]).toDouble()
     )
 
     private fun mulTranspose(r: FloatArray, v: DoubleArray): DoubleArray = doubleArrayOf(
