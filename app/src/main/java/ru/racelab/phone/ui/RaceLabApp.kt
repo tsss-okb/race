@@ -54,7 +54,7 @@ private val Amber = Color(0xFFFFCA58)
 private val Red = Color(0xFFFF6B6B)
 private val Muted = Color(0xFF93A096)
 
-private enum class Tab(val label: String) { DRIVE("ЗАЕЗД"), VIDEO("ВИДЕО"), SENSORS("ДАТЧИКИ"), BLE("BLE/OBD") }
+private enum class Tab(val label: String) { DRIVE("ЗАЕЗД"), ANALYSIS("АНАЛИЗ"), VIDEO("ВИДЕО"), SENSORS("ДАТЧИКИ"), BLE("BLE/OBD") }
 
 @Composable
 fun RaceLabApp(
@@ -86,6 +86,7 @@ fun RaceLabApp(
             Box(Modifier.fillMaxSize().padding(padding)) {
                 when (tab) {
                     Tab.DRIVE -> DriveScreen(state, onStartSession, onStopSession)
+                    Tab.ANALYSIS -> AnalysisScreen(state)
                     Tab.VIDEO -> VideoScreen(state, onRequestPermissions)
                     Tab.SENSORS -> SensorsScreen(state)
                     Tab.BLE -> ConnectionsScreen(state, bleGps, obd)
@@ -110,6 +111,7 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                 val active = selected == item
                 val glyph = when (item) {
                     Tab.DRIVE -> "▶"
+                    Tab.ANALYSIS -> "∿"
                     Tab.VIDEO -> "●"
                     Tab.SENSORS -> "◉"
                     Tab.BLE -> "BT"
@@ -136,6 +138,7 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                         Text(
                             when (item) {
                                 Tab.DRIVE -> "ЗАЕЗД"
+                                Tab.ANALYSIS -> "АНАЛ."
                                 Tab.VIDEO -> "ВИДЕО"
                                 Tab.SENSORS -> "IMU"
                                 Tab.BLE -> "OBD"
