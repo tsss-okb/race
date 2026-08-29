@@ -2,6 +2,7 @@ package ru.racelab.phone.data
 
 import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.LapResult
+import ru.racelab.phone.sensor.MountDirection
 
 data class SensorSnapshot(
     val id: String,
@@ -18,11 +19,18 @@ data class ObdState(
     val rpm: Double? = null,
     val speedKmh: Double? = null,
     val throttlePct: Double? = null,
-    val coolantC: Double? = null
+    val coolantC: Double? = null,
+    val engineLoadPct: Double? = null,
+    val intakeC: Double? = null,
+    val mapKpa: Double? = null,
+    val timingDeg: Double? = null,
+    val mafGps: Double? = null,
+    val voltageV: Double? = null
 )
 
 data class AppState(
     val sessionActive: Boolean = false,
+    val armed: Boolean = false,
     val sessionId: String? = null,
     val sessionDir: String? = null,
     val latestPoint: GeoPoint? = null,
@@ -42,6 +50,14 @@ data class AppState(
     val gY: Double = 0.0,
     val gZ: Double = 0.0,
     val gTotal: Double = 0.0,
+    val longitudinalG: Double = 0.0,
+    val lateralG: Double = 0.0,
+    val verticalG: Double = 0.0,
+    val yawDeg: Double = 0.0,
+    val pitchDeg: Double = 0.0,
+    val rollDeg: Double = 0.0,
+    val imuCalibrated: Boolean = false,
+    val mountDirection: MountDirection = MountDirection.TOP,
     val sensors: List<SensorSnapshot> = emptyList(),
     val availableSensorCount: Int = 0,
     val activeSensorCount: Int = 0,
