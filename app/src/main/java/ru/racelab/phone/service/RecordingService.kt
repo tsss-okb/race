@@ -99,21 +99,19 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
     }
 
     private fun registerSensors() {
+        val allowedTypes = setOf(
+            Sensor.TYPE_ACCELEROMETER,
+            Sensor.TYPE_LINEAR_ACCELERATION,
+            Sensor.TYPE_GYROSCOPE,
+            Sensor.TYPE_GAME_ROTATION_VECTOR,
+            Sensor.TYPE_ROTATION_VECTOR
+        )
         val sensors = sensorManager.getSensorList(Sensor.TYPE_ALL)
+            .filter { it.type in allowedTypes && it.reportingMode != Sensor.REPORTING_MODE_ONE_SHOT }
         RaceRuntime.setAvailableSensors(sensors.size)
+
         sensors.forEach { sensor ->
-            if (sensor.reportingMode == Sensor.REPORTING_MODE_ONE_SHOT) return@forEach
-            val periodUs = when (sensor.type) {
-                Sensor.TYPE_ACCELEROMETER,
-                Sensor.TYPE_LINEAR_ACCELERATION,
-                Sensor.TYPE_GYROSCOPE,
-                Sensor.TYPE_GAME_ROTATION_VECTOR,
-                Sensor.TYPE_ROTATION_VECTOR -> 10_000
-                Sensor.TYPE_MAGNETIC_FIELD,
-                Sensor.TYPE_GRAVITY -> 20_000
-                else -> 50_000
-            }
-            runCatching { sensorManager.registerListener(this, sensor, periodUs, 0) }
+            runCatching { sensorManager.registerListener(this, sensor, 10_000, 0) }
         }
     }
 
