@@ -133,67 +133,43 @@ private fun GT3LandscapeDashboard(
         ) {
             GT3LandscapeSpeed(
                 speedKmh = state.speedKmh,
-                modifier = Modifier.weight(.82f).fillMaxHeight()
+                modifier = Modifier.weight(.78f).fillMaxHeight()
             )
 
             Column(
-                Modifier.weight(1.02f).fillMaxHeight(),
+                Modifier.weight(.72f).fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Row(
-                    Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    GT3CompactMetric(
-                        title = "ГАЗ",
-                        value = state.obd.throttlePct,
-                        unit = "%",
-                        accent = GtGreen,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    )
-                    GT3CompactMetric(
-                        title = "ТОРМОЗ",
-                        value = state.vehicleCan.brakePressureBar,
-                        unit = "bar",
-                        accent = GtRed,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    )
-                }
-                Row(
-                    Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    GT3CompactMetric(
-                        title = "МАСЛО",
-                        value = state.obd.oilTempC,
-                        unit = "°C",
-                        accent = GtYellow,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    )
-                    GT3CompactMetric(
-                        title = "ОЖ",
-                        value = state.obd.coolantC,
-                        unit = "°C",
-                        accent = GtYellow,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    )
-                }
+                GT3CompactMetric(
+                    title = "МАСЛО",
+                    value = state.obd.oilTempC,
+                    unit = "°C",
+                    accent = GtYellow,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+                GT3CompactMetric(
+                    title = "ОЖ",
+                    value = state.obd.coolantC,
+                    unit = "°C",
+                    accent = GtYellow,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
             }
 
             GT3LandscapePit(
                 state = state,
                 elapsedMs = pitElapsedMs,
-                modifier = Modifier.weight(1.10f).fillMaxHeight()
+                modifier = Modifier.weight(1.0f).fillMaxHeight()
             )
 
             GT3GMeter(
                 state = state,
-                modifier = Modifier.weight(.95f).fillMaxHeight()
+                modifier = Modifier.weight(.90f).fillMaxHeight()
             )
 
             GT3TrackMap(
                 points = state.trackPreview,
-                modifier = Modifier.weight(1.18f).fillMaxHeight()
+                modifier = Modifier.weight(2.0f).fillMaxHeight()
             )
         }
 
