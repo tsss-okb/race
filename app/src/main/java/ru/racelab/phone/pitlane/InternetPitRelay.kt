@@ -148,9 +148,8 @@ object InternetPitRelay {
 
     fun viewerUrl(cfg: InternetPitRelaySettings = settings): String {
         if (!cfg.configured) return ""
-        val relay = URLEncoder.encode(cfg.baseUrl.trimEnd('/'), StandardCharsets.UTF_8.name())
         val key = URLEncoder.encode(cfg.key, StandardCharsets.UTF_8.name())
         val room = URLEncoder.encode(cfg.room, StandardCharsets.UTF_8.name())
-        return "https://tsss-okb.github.io/race/pit/#relay=" + relay + "&room=" + room + "&key=" + key
+        return cfg.baseUrl.trimEnd('/') + "/pit/" + room + "?key=" + key
     }
 }
