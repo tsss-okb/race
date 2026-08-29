@@ -15,6 +15,7 @@ import ru.racelab.phone.ble.Elm327Manager
 import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.service.RecordingService
 import ru.racelab.phone.gnss.PhoneGnssMonitor
+import ru.racelab.phone.gnss.UsbNmeaManager
 import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
 
@@ -23,6 +24,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var obd: Elm327Manager
     private lateinit var phoneSensors: PhoneSensorMonitor
     private lateinit var phoneGnss: PhoneGnssMonitor
+    private lateinit var usbGnss: UsbNmeaManager
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val denied = grants.filterValues { !it }.keys
@@ -36,7 +38,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        bleGps = BleNmeaManager(this) { RaceRuntime.ingestPoint(it) }
+        bleGps = BleNmeaManager(
+            context = this,
+            onPoint = { RaceRuntime.ingestPoint(it) },
+            onQuality = { RaceRuntime.updateGnssQuality(it, "ble_nmea") }
+        )
+        usbGnss = UsbNmeaManager(
+            context = this,
+            onPoint = { RaceRuntime.ingestPoint(it) },
+            onQuality = { RaceRuntime.updateGnssQuality(it, "usb_nmea") }
+        )
         obd = Elm327Manager(
             context = this,
             onReading = { RaceRuntime.updateObd(it) },
@@ -50,6 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             RaceLabApp(
                 bleGps = bleGps,
+                usbGnss = usbGnss,
                 obd = obd,
                 onStartSession = { startNativeSession() },
                 onStopSession = { stopNativeSession() },
@@ -107,6 +119,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         bleGps.disconnect()
+        usbGnss.close()
         obd.disconnect()
         super.onDestroy()
     }
