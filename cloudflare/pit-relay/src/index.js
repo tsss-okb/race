@@ -151,24 +151,74 @@ body{padding:max(10px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-rig
 </div></div>
 <script>
 const ROOM=${roomJs}, KEY=${keyJs};
-const fmt=ms=>{if(ms==null)return '—';ms=Math.max(0,Math.round(ms));const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000),x=ms%1000;return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(x).padStart(3,'0')};
-const delta=ms=>ms==null?'—':(ms<0?'−':'+')+(Math.abs(ms)/1000).toFixed(3);
-async function tick(){
- try{
-  const r=await fetch('/api/room/'+encodeURIComponent(ROOM)+'?key='+encodeURIComponent(KEY)+'&t='+Date.now(),{cache:'no-store'});
-  if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();
-  const age=Math.max(0,Date.now()-(d.relayReceivedAtMs||Date.now()));
-  document.getElementById('dot').className=age<3000?'dot ok':'dot';
-  document.getElementById('conn').textContent=age<3000?'LIVE':'STALE';
-  const card=document.getElementById('pitCard');card.classList.toggle('active',!!d.pitActive);
-  document.getElementById('pitState').textContent=d.pitActive?'PIT ACTIVE':'PIT READY';document.getElementById('pitTime').textContent=fmt(d.pitCurrentMs);
-  document.getElementById('trigger').textContent=d.pitTrigger||'—';document.getElementById('last').textContent=fmt(d.pitLastMs);document.getElementById('best').textContent=fmt(d.pitBestMs);
-  document.getElementById('count').textContent=d.pitCount||0;document.getElementById('speed').textContent=Math.round(d.speedKmh||0);document.getElementById('lap').textContent=fmt(d.lapCurrentMs);
-  document.getElementById('lapBest').textContent=fmt(d.lapBestMs);const de=document.getElementById('delta');de.textContent=delta(d.deltaMs);de.style.color=d.deltaMs==null?'#f2f2f2':(d.deltaMs<=0?'#58e13e':'#ff3b30');
-  document.getElementById('track').textContent=d.track||'RaceLab';document.getElementById('gps').textContent=(d.gpsHz||0).toFixed(1)+' Hz · S'+(d.satellites||0);document.getElementById('latency').textContent=age+' ms';
- }catch(e){document.getElementById('dot').className='dot';document.getElementById('conn').textContent='НЕТ СВЯЗИ';}
+const fmt100=ms=>{if(ms==null)return '—';ms=Math.max(0,Math.round(ms));const m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000),c=Math.floor((ms%1000)/10);return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(c).padStart(2,'0')};
+const delta=ms=>ms==null?'—':(ms<0?'−':'+')+(Math.abs(ms)/1000).toFixed(2);
+
+let pitActive=false;
+let pitBaseMs=0;
+let pitBasePerf=performance.now();
+let lastRelayReceivedAt=0;
+let pollRunning=false;
+let consecutiveErrors=0;
+
+function shownPitMs(){
+  return pitActive ? pitBaseMs + (performance.now()-pitBasePerf) : pitBaseMs;
 }
-setInterval(tick,250);tick();
+
+function renderClock(){
+  document.getElementById('pitTime').textContent=fmt100(shownPitMs());
+  const age=lastRelayReceivedAt ? Math.max(0,Date.now()-lastRelayReceivedAt) : 999999;
+  const live=age<2500;
+  document.getElementById('dot').className=live?'dot ok':'dot';
+  document.getElementById('conn').textContent=live?'LIVE':(consecutiveErrors>0?'НЕТ СВЯЗИ':'STALE');
+  document.getElementById('latency').textContent=lastRelayReceivedAt ? age+' ms' : '—';
+  requestAnimationFrame(renderClock);
+}
+
+async function poll(){
+  if(pollRunning)return;
+  pollRunning=true;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),1200);
+  try{
+    const r=await fetch('/api/room/'+encodeURIComponent(ROOM)+'?key='+encodeURIComponent(KEY)+'&t='+Date.now(),{
+      cache:'no-store',
+      signal:controller.signal
+    });
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    consecutiveErrors=0;
+    lastRelayReceivedAt=d.relayReceivedAtMs||Date.now();
+
+    pitActive=!!d.pitActive;
+    pitBaseMs=Number(d.pitCurrentMs||0);
+    pitBasePerf=performance.now();
+
+    const card=document.getElementById('pitCard');
+    card.classList.toggle('active',pitActive);
+    document.getElementById('pitState').textContent=pitActive?'PIT ACTIVE':'PIT READY';
+    document.getElementById('trigger').textContent=d.pitTrigger||'—';
+    document.getElementById('last').textContent=fmt100(d.pitLastMs);
+    document.getElementById('best').textContent=fmt100(d.pitBestMs);
+    document.getElementById('count').textContent=d.pitCount||0;
+    document.getElementById('speed').textContent=Math.round(d.speedKmh||0);
+    document.getElementById('lap').textContent=fmt100(d.lapCurrentMs);
+    document.getElementById('lapBest').textContent=fmt100(d.lapBestMs);
+    const de=document.getElementById('delta');
+    de.textContent=delta(d.deltaMs);
+    de.style.color=d.deltaMs==null?'#f2f2f2':(d.deltaMs<=0?'#58e13e':'#ff3b30');
+    document.getElementById('track').textContent=d.track||'RaceLab';
+    document.getElementById('gps').textContent=(d.gpsHz||0).toFixed(1)+' Hz · S'+(d.satellites||0);
+  }catch(e){
+    consecutiveErrors++;
+  }finally{
+    clearTimeout(timeout);
+    pollRunning=false;
+    setTimeout(poll,120);
+  }
+}
+requestAnimationFrame(renderClock);
+poll();
 </script>
 </body></html>`;
 }
