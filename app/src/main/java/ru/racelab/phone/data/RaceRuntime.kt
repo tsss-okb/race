@@ -15,6 +15,8 @@ import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
 import ru.racelab.phone.track.TrackRepository
+import ru.racelab.phone.obd.CustomPid
+import ru.racelab.phone.obd.EvChannel
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -37,6 +39,9 @@ object RaceRuntime {
     private var gTotal = 0.0
     private var satellites = 0
     private var obd = ObdState()
+    private var ev = EvState()
+    private val customObd = LinkedHashMap<String, CustomObdValue>()
+    private val supportedObdPids = linkedSetOf<String>()
     private val preview = ArrayDeque<GeoPoint>()
     private var lowSpeedSinceMs: Long? = null
 
@@ -51,7 +56,7 @@ object RaceRuntime {
         if (_state.value.sessionActive) return
         engine.resetSession(keepTrack = true)
         latestPoint = null; previousPoint = null; lastGpsTs = null; gpsHz = 0.0
-        preview.clear(); obd = ObdState()
+        preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear()
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -315,9 +320,43 @@ object RaceRuntime {
             rpm = reading.rpm ?: obd.rpm,
             speedKmh = reading.speedKmh ?: obd.speedKmh,
             throttlePct = reading.throttlePct ?: obd.throttlePct,
-            coolantC = reading.coolantC ?: obd.coolantC
+            coolantC = reading.coolantC ?: obd.coolantC,
+            engineLoadPct = reading.engineLoadPct ?: obd.engineLoadPct,
+            intakeC = reading.intakeC ?: obd.intakeC,
+            mapKpa = reading.mapKpa ?: obd.mapKpa,
+            timingDeg = reading.timingDeg ?: obd.timingDeg,
+            mafGps = reading.mafGps ?: obd.mafGps,
+            voltageV = reading.voltageV ?: obd.voltageV,
+            oilTempC = reading.oilTempC ?: obd.oilTempC,
+            fuelPressureKpa = reading.fuelPressureKpa ?: obd.fuelPressureKpa,
+            shortTrimPct = reading.shortTrimPct ?: obd.shortTrimPct,
+            longTrimPct = reading.longTrimPct ?: obd.longTrimPct
         )
         _state.value = _state.value.copy(obd = obd)
+    }
+
+    @Synchronized
+    fun updateCustomObd(pid: CustomPid, value: Double) {
+        customObd[pid.id] = CustomObdValue(pid.id, pid.name, value, pid.unit)
+        ev = when (pid.evChannel) {
+            EvChannel.SOC -> ev.copy(socPct = value)
+            EvChannel.BATTERY_POWER_KW -> ev.copy(batteryPowerKw = value)
+            EvChannel.MOTOR_POWER_KW -> ev.copy(motorPowerKw = value)
+            EvChannel.REGEN_KW -> ev.copy(regenKw = value)
+            EvChannel.BATTERY_TEMP_C -> ev.copy(batteryTempC = value)
+            EvChannel.INVERTER_TEMP_C -> ev.copy(inverterTempC = value)
+            EvChannel.NONE -> ev
+        }
+        _state.value = _state.value.copy(
+            customObd = customObd.values.toList(),
+            ev = ev
+        )
+    }
+
+    @Synchronized
+    fun setSupportedObdPids(pids: Set<String>) {
+        supportedObdPids += pids
+        _state.value = _state.value.copy(supportedObdPids = supportedObdPids.toSet())
     }
 
     fun updateVideoState(recording: Boolean, status: String) {
