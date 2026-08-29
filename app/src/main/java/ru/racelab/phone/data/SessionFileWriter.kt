@@ -24,6 +24,7 @@ class SessionFileWriter(context: Context) {
     private val customObdWriter: BufferedWriter
     private val canWriter: BufferedWriter
     private val canSignalWriter: BufferedWriter
+    private val pitWriter: BufferedWriter
     private var closed = false
     private val startedAtMs = System.currentTimeMillis()
 
@@ -37,6 +38,7 @@ class SessionFileWriter(context: Context) {
         customObdWriter = BufferedWriter(FileWriter(File(directory, "obd_custom.csv"), false), 64 * 1024)
         canWriter = BufferedWriter(FileWriter(File(directory, "can.csv"), false), 128 * 1024)
         canSignalWriter = BufferedWriter(FileWriter(File(directory, "can_signals.csv"), false), 64 * 1024)
+        pitWriter = BufferedWriter(FileWriter(File(directory, "pit_events.csv"), false), 32 * 1024)
         gpsWriter.write(
             "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,lap_no,gx,gy,gz,g_total," +
                 "rpm,obd_speed,throttle,coolant,engine_load,intake_c,map_kpa,timing_deg,maf_gps,voltage_v," +
@@ -47,7 +49,8 @@ class SessionFileWriter(context: Context) {
         customObdWriter.write("ts,id,name,value,unit\n")
         canWriter.write("ts,can_id,extended,rtr,dlc,data_hex\n")
         canSignalWriter.write("ts,signal_id,name,value,unit,channel\n")
-        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
+        pitWriter.write("ts,event,elapsed_ms,trigger\n")
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush(); pitWriter.flush()
     }
 
     @Synchronized
@@ -116,12 +119,22 @@ class SessionFileWriter(context: Context) {
         canSignalWriter.newLine()
     }
 
+    @Synchronized
+    fun writePitEvent(ts: Long, event: String, elapsedMs: Long?, trigger: String) {
+        if (closed) return
+        pitWriter.write(
+            listOf(ts, quote(event), elapsedMs ?: "", quote(trigger)).joinToString(",")
+        )
+        pitWriter.newLine()
+        pitWriter.flush()
+    }
+
 
 
     @Synchronized
     fun flush() {
         if (!closed) {
-            gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
+            gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush(); pitWriter.flush()
         }
     }
 
@@ -129,8 +142,8 @@ class SessionFileWriter(context: Context) {
     fun close(laps: List<LapResult>, extra: JSONObject = JSONObject()) {
         if (closed) return
         closed = true
-        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush()
-        gpsWriter.close(); sensorWriter.close(); customObdWriter.close(); canWriter.close(); canSignalWriter.close()
+        gpsWriter.flush(); sensorWriter.flush(); customObdWriter.flush(); canWriter.flush(); canSignalWriter.flush(); pitWriter.flush()
+        gpsWriter.close(); sensorWriter.close(); customObdWriter.close(); canWriter.close(); canSignalWriter.close(); pitWriter.close()
 
         val meta = JSONObject()
             .put("format", "racelab-native-session-v1")
