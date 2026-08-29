@@ -50,7 +50,7 @@ object InternetPitRelay {
             task = executor.scheduleWithFixedDelay(
                 { publishLatest() },
                 0,
-                250,
+                100,
                 TimeUnit.MILLISECONDS
             )
         }
