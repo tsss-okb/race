@@ -25,6 +25,7 @@ class SessionFileWriter(context: Context) {
     private val canWriter: BufferedWriter
     private val canSignalWriter: BufferedWriter
     private var closed = false
+    private val startedAtMs = System.currentTimeMillis()
 
     init {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -37,7 +38,7 @@ class SessionFileWriter(context: Context) {
         canWriter = BufferedWriter(FileWriter(File(directory, "can.csv"), false), 128 * 1024)
         canSignalWriter = BufferedWriter(FileWriter(File(directory, "can_signals.csv"), false), 64 * 1024)
         gpsWriter.write(
-            "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,gx,gy,gz,g_total," +
+            "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,lap_no,gx,gy,gz,g_total," +
                 "rpm,obd_speed,throttle,coolant,engine_load,intake_c,map_kpa,timing_deg,maf_gps,voltage_v," +
                 "oil_temp_c,fuel_pressure_kpa,short_trim,long_trim,ev_soc,ev_battery_kw,ev_motor_kw,ev_regen_kw," +
                 "ev_battery_temp_c,ev_inverter_temp_c\n"
@@ -50,11 +51,11 @@ class SessionFileWriter(context: Context) {
     }
 
     @Synchronized
-    fun writeGps(point: GeoPoint, gx: Double, gy: Double, gz: Double, gt: Double, obd: ObdState, ev: EvState) {
+    fun writeGps(point: GeoPoint, lapNo: Int?, gx: Double, gy: Double, gz: Double, gt: Double, obd: ObdState, ev: EvState) {
         if (closed) return
         gpsWriter.write(listOf(
             point.ts, point.lat, point.lon, (point.speedMps ?: 0.0) * 3.6,
-            point.headingDeg ?: "", point.accuracyM ?: "", point.altitudeM ?: "", point.source,
+            point.headingDeg ?: "", point.accuracyM ?: "", point.altitudeM ?: "", point.source, lapNo ?: "",
             gx, gy, gz, gt,
             obd.rpm ?: "", obd.speedKmh ?: "", obd.throttlePct ?: "", obd.coolantC ?: "",
             obd.engineLoadPct ?: "", obd.intakeC ?: "", obd.mapKpa ?: "", obd.timingDeg ?: "",
@@ -134,6 +135,7 @@ class SessionFileWriter(context: Context) {
         val meta = JSONObject()
             .put("format", "racelab-native-session-v1")
             .put("sessionId", sessionId)
+            .put("startedAt", startedAtMs)
             .put("endedAt", System.currentTimeMillis())
             .put("laps", JSONArray().apply {
                 laps.forEach { lap ->
