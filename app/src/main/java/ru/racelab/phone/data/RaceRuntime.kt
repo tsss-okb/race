@@ -201,7 +201,7 @@ object RaceRuntime {
 
         val prediction = engine.prediction(point.ts, point)
         val lapElapsed = engine.currentLapStartMs?.let { (point.ts - it).coerceAtLeast(0) } ?: 0L
-        writer?.writeGps(point, gX, gY, gZ, gTotal, obd)
+        writer?.writeGps(point, gX, gY, gZ, gTotal, obd, ev)
         if (update.lapCompleted != null) writer?.flush()
 
         val speedKmhNow = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0)
@@ -347,6 +347,7 @@ object RaceRuntime {
             EvChannel.INVERTER_TEMP_C -> ev.copy(inverterTempC = value)
             EvChannel.NONE -> ev
         }
+        writer?.writeCustomObd(System.currentTimeMillis(), pid, value)
         _state.value = _state.value.copy(
             customObd = customObd.values.toList(),
             ev = ev
