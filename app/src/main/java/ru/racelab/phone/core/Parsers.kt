@@ -39,11 +39,21 @@ data class ObdReading(
     val rpm: Double? = null,
     val speedKmh: Double? = null,
     val throttlePct: Double? = null,
-    val coolantC: Double? = null
+    val coolantC: Double? = null,
+    val engineLoadPct: Double? = null,
+    val intakeC: Double? = null,
+    val mapKpa: Double? = null,
+    val timingDeg: Double? = null,
+    val mafGps: Double? = null,
+    val voltageV: Double? = null,
+    val oilTempC: Double? = null,
+    val fuelPressureKpa: Double? = null,
+    val shortTrimPct: Double? = null,
+    val longTrimPct: Double? = null
 )
 
 object ObdParser {
-    fun parse(raw: String): ObdReading? {
+    fun cleanBytes(raw: String): List<Int> {
         val clean = raw.uppercase()
             .replace("\r", " ")
             .replace("\n", " ")
@@ -51,20 +61,55 @@ object ObdParser {
             .replace(Regex("[^0-9A-F ]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
-        if (clean.isBlank()) return null
-        val bytes = clean.split(' ').mapNotNull { it.toIntOrNull(16) }
+        if (clean.isBlank()) return emptyList()
+        return clean.split(' ').mapNotNull { it.toIntOrNull(16) }
+    }
+
+    fun parse(raw: String): ObdReading? {
+        val bytes = cleanBytes(raw)
         for (i in 0 until bytes.size - 2) {
             if (bytes[i] != 0x41) continue
-            when (bytes[i + 1]) {
-                0x0C -> if (i + 3 < bytes.size) {
-                    val rpm = ((bytes[i + 2] * 256 + bytes[i + 3]) / 4.0)
-                    return ObdReading(rpm = rpm)
-                }
-                0x0D -> return ObdReading(speedKmh = bytes[i + 2].toDouble())
-                0x11 -> return ObdReading(throttlePct = bytes[i + 2] * 100.0 / 255.0)
-                0x05 -> return ObdReading(coolantC = (bytes[i + 2] - 40).toDouble())
+            val pid = bytes[i + 1]
+            val a = bytes.getOrNull(i + 2) ?: continue
+            val b = bytes.getOrNull(i + 3)
+            return when (pid) {
+                0x04 -> ObdReading(engineLoadPct = a * 100.0 / 255.0)
+                0x05 -> ObdReading(coolantC = (a - 40).toDouble())
+                0x06 -> ObdReading(shortTrimPct = a * 100.0 / 128.0 - 100.0)
+                0x07 -> ObdReading(longTrimPct = a * 100.0 / 128.0 - 100.0)
+                0x0A -> ObdReading(fuelPressureKpa = a * 3.0)
+                0x0B -> ObdReading(mapKpa = a.toDouble())
+                0x0C -> if (b != null) ObdReading(rpm = (a * 256 + b) / 4.0) else null
+                0x0D -> ObdReading(speedKmh = a.toDouble())
+                0x0E -> ObdReading(timingDeg = a / 2.0 - 64.0)
+                0x0F -> ObdReading(intakeC = (a - 40).toDouble())
+                0x10 -> if (b != null) ObdReading(mafGps = (a * 256 + b) / 100.0) else null
+                0x11 -> ObdReading(throttlePct = a * 100.0 / 255.0)
+                0x42 -> if (b != null) ObdReading(voltageV = (a * 256 + b) / 1000.0) else null
+                0x5C -> ObdReading(oilTempC = (a - 40).toDouble())
+                else -> null
             }
         }
         return null
+    }
+
+    fun parseSupportedPids(raw: String, requestBase: Int): Set<String> {
+        val bytes = cleanBytes(raw)
+        val responsePid = requestBase and 0xFF
+        for (i in 0 until bytes.size - 5) {
+            if (bytes[i] == 0x41 && bytes[i + 1] == responsePid) {
+                val bits = ((bytes[i + 2].toLong() shl 24) or
+                    (bytes[i + 3].toLong() shl 16) or
+                    (bytes[i + 4].toLong() shl 8) or bytes[i + 5].toLong())
+                val out = mutableSetOf<String>()
+                for (bit in 0 until 32) {
+                    if ((bits and (1L shl (31 - bit))) != 0L) {
+                        out += "01" + "%02X".format(requestBase + bit + 1)
+                    }
+                }
+                return out
+            }
+        }
+        return emptySet()
     }
 }
