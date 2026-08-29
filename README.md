@@ -289,7 +289,7 @@ Cloudflare Worker:
 
 
 ### RaceLab 2.7.0 Auto Internet PIT
-- Default relay is built into the APK: `https://racelab-pit-relay.glacier-boursin.workers.dev`.
+- Default relay is built into the APK: `https://racelab-pit-relay.irradiated-tree.workers.dev`.
 - Internet PIT relay is enabled by default on a clean install.
 - ROOM and KEY are generated locally on first launch.
 - Existing manually configured valid HTTPS relay URLs are preserved.
