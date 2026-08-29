@@ -252,11 +252,24 @@ object RaceRuntime {
         engine.setStart(profile.start)
         engine.clearSectors()
         profile.sectors.take(3).forEach { engine.addSector(it) }
+        pitEntryLine = profile.pitEntry
+        pitExitLine = profile.pitExit
+        pitLaneStartedMs = null
+        miniSectorTracker.reset()
         _state.value = _state.value.copy(
             startConfigured = true,
             sectorCount = engine.sectors.size,
             currentTrackId = profile.id,
             currentTrackName = profile.name,
+            pitEntryConfigured = pitEntryLine != null,
+            pitExitConfigured = pitExitLine != null,
+            pitEntryPoint = pitEntryLine?.let { GeoPoint(it.centerLat, it.centerLon, System.currentTimeMillis()) },
+            pitExitPoint = pitExitLine?.let { GeoPoint(it.centerLat, it.centerLon, System.currentTimeMillis()) },
+            pitLaneActive = false,
+            pitLaneElapsedMs = 0L,
+            currentMiniSector = 0,
+            miniSectorDeltaMs = null,
+            miniSectorDeltasMs = List(10) { null },
             lastMessage = if (auto) "Автовыбор трассы: " + profile.name else "Трасса загружена: " + profile.name
         )
     }
@@ -264,7 +277,7 @@ object RaceRuntime {
     @Synchronized
     fun currentTrackProfile(name: String): TrackProfile? {
         val start = engine.startLine ?: return null
-        return TrackRepository.create(name, start, engine.sectors)
+        return TrackRepository.create(name, start, engine.sectors, pitEntryLine, pitExitLine)
     }
 
     @Synchronized
@@ -275,12 +288,25 @@ object RaceRuntime {
     @Synchronized
     fun clearLoadedTrack() {
         engine.resetSession(keepTrack = false)
+        pitEntryLine = null
+        pitExitLine = null
+        pitLaneStartedMs = null
+        miniSectorTracker.reset()
         _state.value = _state.value.copy(
             startConfigured = false,
             sectorCount = 0,
             currentTrackId = null,
             currentTrackName = null,
             armed = false,
+            pitEntryConfigured = false,
+            pitExitConfigured = false,
+            pitEntryPoint = null,
+            pitExitPoint = null,
+            pitLaneActive = false,
+            pitLaneElapsedMs = 0L,
+            currentMiniSector = 0,
+            miniSectorDeltaMs = null,
+            miniSectorDeltasMs = List(10) { null },
             lastMessage = "Трасса выгружена"
         )
     }
