@@ -34,7 +34,8 @@ enum class CanChannel {
     EV_MOTOR_KW,
     EV_REGEN_KW,
     EV_BATTERY_TEMP_C,
-    EV_INVERTER_TEMP_C
+    EV_INVERTER_TEMP_C,
+    PIT_BUTTON
 }
 
 data class CanSignal(
