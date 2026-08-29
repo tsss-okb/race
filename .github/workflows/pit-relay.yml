@@ -2,6 +2,11 @@ name: Deploy RaceLab Pit Relay
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/pit-relay.yml"
+      - "cloudflare/pit-relay/**"
 
 jobs:
   deploy:
