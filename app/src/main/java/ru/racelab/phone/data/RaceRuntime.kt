@@ -14,6 +14,8 @@ import ru.racelab.phone.core.ObdReading
 import ru.racelab.phone.core.RaceEngine
 import ru.racelab.phone.core.RaceGeometry
 import ru.racelab.phone.core.PitTimerEngine
+import ru.racelab.phone.core.MiniSectorTracker
+import ru.racelab.phone.core.RaceLine
 import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
@@ -62,6 +64,10 @@ object RaceRuntime {
     private var canHz = 0.0
     private val pitTimer = PitTimerEngine()
     private val pitCanPressed = HashMap<String, Boolean>()
+    private val miniSectorTracker = MiniSectorTracker(10)
+    private var pitEntryLine: RaceLine? = null
+    private var pitExitLine: RaceLine? = null
+    private var pitLaneStartedMs: Long? = null
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -75,7 +81,7 @@ object RaceRuntime {
         engine.resetSession(keepTrack = true)
         latestPoint = null; previousPoint = null; lastGpsTs = null; gpsHz = 0.0
         preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear(); canSignals.clear(); canFrameCount = 0L; lastCanTs = null; canHz = 0.0
-        pitTimer.reset(); pitCanPressed.clear()
+        pitTimer.reset(); pitCanPressed.clear(); miniSectorTracker.reset(); pitLaneStartedMs = null
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -83,7 +89,16 @@ object RaceRuntime {
             sessionId = writer?.sessionId,
             sessionDir = writer?.directory?.absolutePath,
             laps = emptyList(), bestLapMs = null, deltaMs = null, predictedLapMs = null,
-            lapElapsedMs = 0, trackPreview = emptyList(), autoStopRequested = false,
+            currentMiniSector = 0,
+            miniSectorDeltaMs = null,
+            miniSectorDeltasMs = List(10) { null },
+            lapElapsedMs = 0,
+            trackPreview = emptyList(),
+            referenceTrack = emptyList(),
+            autoStopRequested = false,
+            pitLaneActive = false,
+            pitLaneElapsedMs = 0L,
+            pitLaneLastMs = null,
             pitTimerActive = false,
             pitStartedElapsedMs = null,
             pitLastMs = null,
@@ -185,6 +200,51 @@ object RaceRuntime {
     fun clearSectors() {
         engine.clearSectors()
         _state.value = _state.value.copy(sectorCount = 0, lastMessage = "Секторы очищены")
+    }
+
+    @Synchronized
+    fun setPitEntryHere(): Boolean {
+        val cur = latestPoint ?: return false
+        val prev = previousPoint ?: return false
+        if (RaceGeometry.distance(prev, cur) < 2.0) return false
+        pitEntryLine = RaceGeometry.lineAt(cur, prev, 30.0)
+        _state.value = _state.value.copy(
+            pitEntryConfigured = true,
+            pitEntryPoint = GeoPoint(cur.lat, cur.lon, cur.ts),
+            lastMessage = "PIT IN установлен • сохрани трассу"
+        )
+        return true
+    }
+
+    @Synchronized
+    fun setPitExitHere(): Boolean {
+        val cur = latestPoint ?: return false
+        val prev = previousPoint ?: return false
+        if (RaceGeometry.distance(prev, cur) < 2.0) return false
+        pitExitLine = RaceGeometry.lineAt(cur, prev, 30.0)
+        _state.value = _state.value.copy(
+            pitExitConfigured = true,
+            pitExitPoint = GeoPoint(cur.lat, cur.lon, cur.ts),
+            lastMessage = "PIT OUT установлен • сохрани трассу"
+        )
+        return true
+    }
+
+    @Synchronized
+    fun clearPitLaneLines() {
+        pitEntryLine = null
+        pitExitLine = null
+        pitLaneStartedMs = null
+        _state.value = _state.value.copy(
+            pitEntryConfigured = false,
+            pitExitConfigured = false,
+            pitEntryPoint = null,
+            pitExitPoint = null,
+            pitLaneActive = false,
+            pitLaneElapsedMs = 0L,
+            pitLaneLastMs = null,
+            lastMessage = "PIT IN / PIT OUT очищены"
+        )
     }
 
     @Synchronized
