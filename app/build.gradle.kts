@@ -64,4 +64,5 @@ dependencies {
     implementation("androidx.camera:camera-effects:$cameraX")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
 }
