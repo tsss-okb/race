@@ -28,7 +28,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.core.util.Consumer
-import androidx.core.util.Function
+import androidx.arch.core.util.Function
 import androidx.lifecycle.LifecycleOwner
 import ru.racelab.phone.data.RaceRuntime
 import java.text.SimpleDateFormat
