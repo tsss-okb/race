@@ -107,7 +107,13 @@ class RecordingService : LifecycleService(), SensorEventListener, LocationListen
         }.onFailure { RaceRuntime.markMessage("GNSS: ${it.message}") }
     }
 
-    override fun onLocationChanged(location: Location) = RaceRuntime.ingestLocation(location)
+    override fun onLocationChanged(location: Location) {
+        RaceRuntime.ingestLocation(location)
+        if (RaceRuntime.state.value.autoStopRequested) {
+            RaceRuntime.markMessage("Автостоп: машина стоит после заезда")
+            stopRecording()
+        }
+    }
 
     override fun onSensorChanged(event: SensorEvent) {
         RaceRuntime.updateSensor(System.currentTimeMillis(), event.sensor, event.accuracy, event.values.copyOf())
