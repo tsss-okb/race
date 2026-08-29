@@ -14,7 +14,7 @@ data class InternetPitRelaySettings(
 }
 
 object InternetPitRelaySettingsRepository {
-    const val DEFAULT_BASE_URL = "https://racelab-pit-relay.glacier-boursin.workers.dev"
+    const val DEFAULT_BASE_URL = "https://racelab-pit-relay.irradiated-tree.workers.dev"
     private const val PREFS = "racelab_pit_internet"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASE_URL = "base_url"
