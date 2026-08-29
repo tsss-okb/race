@@ -87,6 +87,8 @@ object RaceRuntime {
         engine.setStart(RaceGeometry.lineAt(cur, prev, 35.0))
         _state.value = _state.value.copy(
             startConfigured = true,
+            currentTrackId = null,
+            currentTrackName = null,
             armed = _state.value.sessionActive,
             sectorCount = engine.sectors.size,
             lastMessage = "START/FINISH установлен"
