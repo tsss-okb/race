@@ -47,6 +47,7 @@ data class PitTeamSnapshot(
     val lastReceiveElapsedMs: Long = 0L,
     val relayReceivedAtMs: Long? = null,
     val transport: String = "CONNECTING",
+    val rttMs: Long? = null,
     val lastError: String? = null
 )
 
@@ -76,6 +77,7 @@ class PitTeamClient(private val config: PitTeamConfig) {
                 }
 
                 val wsFresh = socketOpen && now - lastWsMessageElapsed < 1_500L
+                if (socketOpen) sendPing(now)
                 if (!wsFresh) fetchFallbackOnce()
 
                 delay(if (wsFresh) 500L else 220L)
@@ -106,6 +108,20 @@ class PitTeamClient(private val config: PitTeamConfig) {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                val json = runCatching { JSONObject(text) }.getOrNull()
+                if (json?.optString("type") == "pong") {
+                    val sent = json.optLong("nonce", -1L)
+                    if (sent >= 0L) {
+                        val rtt = (SystemClock.elapsedRealtime() - sent).coerceAtLeast(0L)
+                        _state.value = _state.value.copy(
+                            transport = "WEBSOCKET",
+                            rttMs = rtt,
+                            lastError = null
+                        )
+                    }
+                    lastWsMessageElapsed = SystemClock.elapsedRealtime()
+                    return
+                }
                 applyPayload(text, "WEBSOCKET")
                 lastWsMessageElapsed = SystemClock.elapsedRealtime()
             }
@@ -125,6 +141,18 @@ class PitTeamClient(private val config: PitTeamConfig) {
                 )
             }
         })
+    }
+
+    private fun sendPing(nowElapsed: Long) {
+        val ws = socket ?: return
+        if (!socketOpen) return
+        if (ws.queueSize() > 8_192L) return
+        ws.send(
+            JSONObject()
+                .put("type", "ping")
+                .put("nonce", nowElapsed)
+                .toString()
+        )
     }
 
     private fun fetchFallbackOnce() {
@@ -192,6 +220,7 @@ class PitTeamClient(private val config: PitTeamConfig) {
             lastReceiveElapsedMs = nowElapsed,
             relayReceivedAtMs = incomingRelayMs,
             transport = transport,
+            rttMs = _state.value.rttMs,
             lastError = null
         )
     }
