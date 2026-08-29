@@ -54,6 +54,7 @@ import ru.racelab.phone.video.VideoSettings
 import ru.racelab.phone.video.VideoSettingsRepository
 import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
+import ru.racelab.phone.pitlane.PitLaneServer
 import kotlin.math.abs
 
 private val Bg = Color(0xFF050607)
@@ -247,9 +248,18 @@ private fun SettingsHubScreen(
     onRequestPermissions: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     var showTracks by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        PitLaneServer.refreshStatus()
+    }
+
     Column(
-        Modifier.fillMaxSize().background(Bg).padding(9.dp),
+        Modifier.fillMaxSize()
+            .background(Bg)
+            .verticalScroll(rememberScrollState())
+            .padding(9.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text("НАСТРОЙКИ RACELAB", color = Amber, fontWeight = FontWeight.Black, fontSize = 15.sp)
@@ -343,13 +353,71 @@ private fun SettingsHubScreen(
                 }
             }
         }
+        Column(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFF111315), RoundedCornerShape(12.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("PIT LANE SCREEN", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text(
+                        if (state.pitLaneServerRunning) "● LIVE • READ ONLY" else "● OFFLINE",
+                        color = if (state.pitLaneServerRunning) Green else Red,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                OutlinedButton(
+                    onClick = { PitLaneServer.refreshStatus() },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                ) {
+                    Text("ОБНОВИТЬ", fontSize = 8.sp)
+                }
+            }
+
+            if (state.pitLaneUrls.isEmpty()) {
+                Text(
+                    "Включи Wi‑Fi или точку доступа и нажми ОБНОВИТЬ.",
+                    color = Muted,
+                    fontSize = 9.sp
+                )
+            } else {
+                state.pitLaneUrls.take(3).forEach { url ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            url,
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        TextButton(
+                            onClick = { clipboard.setText(AnnotatedString(url)) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
+                            Text("КОПИЯ", color = Amber, fontSize = 8.sp)
+                        }
+                    }
+                }
+            }
+
+            Text(
+                "Команда подключается к той же Wi‑Fi сети/Hotspot и открывает адрес в браузере. Обновление PIT ≈ 4 Гц.",
+                color = Muted,
+                fontSize = 8.sp
+            )
+        }
+
         Text(
             "Диагностика",
             color = Muted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold
         )
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth().height(220.dp)) {
             DiagnosticsPanel(state)
         }
     }
