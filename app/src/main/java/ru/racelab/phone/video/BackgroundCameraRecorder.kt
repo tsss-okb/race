@@ -155,6 +155,12 @@ class BackgroundCameraRecorder(
         }
     }
 
+    fun onLapStarted(lapNo: Int, sessionId: String?) {
+        if (!settings.perLapClips || recording == null || currentLapNo == lapNo) return
+        pendingLapNo = lapNo
+        recording?.stop()
+    }
+
     fun onLapCompleted(lapNo: Int, sessionId: String?) {
         if (!settings.perLapClips || recording == null) return
         pendingLapNo = lapNo + 1
