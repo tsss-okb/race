@@ -23,6 +23,7 @@ import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.gnss.GnssSourceMode
 import ru.racelab.phone.gnss.UsbGnssState
 import ru.racelab.phone.gnss.UsbNmeaManager
+import ru.racelab.phone.canbus.UsbCanManager
 import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.obd.CustomPidRepository
 import ru.racelab.phone.obd.EvChannel
@@ -38,6 +39,7 @@ fun AdvancedConnectionsScreen(
     state: AppState,
     bleGps: BleNmeaManager,
     usbGnss: UsbNmeaManager,
+    usbCan: UsbCanManager,
     obd: Elm327Manager
 ) {
     val gps by bleGps.state.collectAsStateWithLifecycle()
@@ -54,13 +56,15 @@ fun AdvancedConnectionsScreen(
             ObdTab("ENGINE", section == 1, Modifier.weight(1f)) { section = 1 }
             ObdTab("EV", section == 2, Modifier.weight(1f)) { section = 2 }
             ObdTab("CUSTOM", section == 3, Modifier.weight(1f)) { section = 3 }
+            ObdTab("CAN", section == 4, Modifier.weight(1f)) { section = 4 }
         }
         Spacer(Modifier.height(6.dp))
         when (section) {
             0 -> LinkSection(state, gps, usb, obdUi, bleGps, usbGnss, obd)
             1 -> EngineSection(state)
             2 -> EvSection(state)
-            else -> CustomPidSection(state, obd)
+            3 -> CustomPidSection(state, obd)
+            else -> CanSectionScreen(state, usbCan)
         }
     }
 }
