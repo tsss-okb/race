@@ -132,7 +132,12 @@ class PitTeamClient(private val config: PitTeamConfig) {
         try {
             val room = URLEncoder.encode(config.room, StandardCharsets.UTF_8.name())
             val key = URLEncoder.encode(config.key, StandardCharsets.UTF_8.name())
-            val endpoint = config.relayUrl.trimEnd('/') +
+            val fallbackBase = if (config.relayUrl.trimEnd('/') == InternetPitRelaySettingsRepository.DEFAULT_BASE_URL) {
+                InternetPitRelaySettingsRepository.LEGACY_HTTP_FALLBACK_URL
+            } else {
+                config.relayUrl.trimEnd('/')
+            }
+            val endpoint = fallbackBase +
                 "/api/room/" + room + "?key=" + key + "&t=" + System.currentTimeMillis()
 
             val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
