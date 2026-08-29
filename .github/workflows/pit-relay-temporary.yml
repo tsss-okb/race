@@ -1,0 +1,25 @@
+name: Temporary Claim RaceLab Pit Relay
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/pit-relay-temporary.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare/pit-relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm install
+
+      - name: Temporary deploy for claim
+        run: npx wrangler deploy --temporary
