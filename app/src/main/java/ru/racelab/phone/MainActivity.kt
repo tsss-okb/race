@@ -23,6 +23,7 @@ import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
 import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
+import ru.racelab.phone.pitlane.PitLaneServer
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         RaceRuntime.setGm204Enabled(RemoteControlSettingsRepository.isGm204Enabled(this))
+        PitLaneServer.start()
 
         bleGps = BleNmeaManager(
             context = this,
@@ -113,7 +115,10 @@ class MainActivity : ComponentActivity() {
             list += Manifest.permission.BLUETOOTH_SCAN
             list += Manifest.permission.BLUETOOTH_CONNECT
         }
-        if (Build.VERSION.SDK_INT >= 33) list += Manifest.permission.POST_NOTIFICATIONS
+        if (Build.VERSION.SDK_INT >= 33) {
+            list += Manifest.permission.POST_NOTIFICATIONS
+            list += Manifest.permission.NEARBY_WIFI_DEVICES
+        }
         val missing = list.distinct().filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
     }
@@ -211,6 +216,7 @@ class MainActivity : ComponentActivity() {
         usbGnss.close()
         usbCan.close()
         obd.disconnect()
+        PitLaneServer.stop()
         super.onDestroy()
     }
 }
