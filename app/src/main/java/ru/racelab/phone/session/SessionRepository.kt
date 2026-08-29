@@ -29,6 +29,7 @@ data class SessionSummary(
     val maxSpeedKmh: Double,
     val hasGps: Boolean,
     val hasSensors: Boolean,
+    val hasObd: Boolean,
     val hasObdCustom: Boolean,
     val hasCan: Boolean,
     val videoRefs: List<VideoRef>,
@@ -101,6 +102,7 @@ object SessionRepository {
             maxSpeedKmh = laps.maxOfOrNull { it.maxSpeedKmh } ?: 0.0,
             hasGps = File(directory, "gps.csv").exists(),
             hasSensors = File(directory, "sensors.csv").let { it.exists() && it.length() > 80 },
+            hasObd = detectStandardObd(File(directory, "gps.csv")),
             hasObdCustom = File(directory, "obd_custom.csv").let { it.exists() && it.length() > 25 },
             hasCan = File(directory, "can.csv").let { it.exists() && it.length() > 45 },
             videoRefs = videos,
@@ -174,6 +176,22 @@ object SessionRepository {
 
     fun delete(session: SessionSummary): Boolean =
         runCatching { session.directory.deleteRecursively() }.getOrDefault(false)
+
+    private fun detectStandardObd(file: File): Boolean {
+        if (!file.exists()) return false
+        return runCatching {
+            file.bufferedReader().use { reader ->
+                val header = reader.readLine()?.split(',') ?: return@use false
+                val names = listOf("rpm", "obd_speed", "throttle", "coolant", "engine_load", "map_kpa", "voltage_v")
+                val indexes = names.mapNotNull { name -> header.indexOf(name).takeIf { it >= 0 } }
+                if (indexes.isEmpty()) return@use false
+                reader.lineSequence().take(200).any { line ->
+                    val p = line.split(',')
+                    indexes.any { idx -> p.getOrNull(idx)?.isNotBlank() == true }
+                }
+            }
+        }.getOrDefault(false)
+    }
 
     private fun readVideos(directory: File): List<VideoRef> {
         val file = File(directory, "videos.txt")
