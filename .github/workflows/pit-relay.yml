@@ -2,6 +2,11 @@ name: Deploy RaceLab Pit Relay
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/pit-relay.yml"
+      - "cloudflare/pit-relay/**"
 
 jobs:
   deploy:
@@ -19,7 +24,13 @@ jobs:
       - run: npm install
 
       - name: Deploy Cloudflare Worker
-        run: npx wrangler deploy
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            npx wrangler deploy
+          else
+            echo "Cloudflare secrets are not available; using temporary preview account."
+            npx wrangler deploy --temporary
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
