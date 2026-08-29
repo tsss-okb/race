@@ -17,6 +17,8 @@ import ru.racelab.phone.track.TrackProfile
 import ru.racelab.phone.track.TrackRepository
 import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.obd.EvChannel
+import ru.racelab.phone.core.NmeaQuality
+import ru.racelab.phone.gnss.GnssSourceMode
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -44,6 +46,8 @@ object RaceRuntime {
     private val supportedObdPids = linkedSetOf<String>()
     private val preview = ArrayDeque<GeoPoint>()
     private var lowSpeedSinceMs: Long? = null
+    private val gnssLastSeen = mutableMapOf<String, Long>()
+    private var acceptedGnssSource: String? = null
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -80,8 +84,34 @@ object RaceRuntime {
 
     @Synchronized
     fun setSatellites(count: Int) {
+        if (!sourceAllowed("phone_gnss", updateSeen = false)) return
         satellites = count
         _state.value = _state.value.copy(satellites = count)
+    }
+
+    @Synchronized
+    fun setGnssSourceMode(mode: GnssSourceMode) {
+        _state.value = _state.value.copy(
+            gnssSourceMode = mode,
+            lastMessage = "GNSS source: " + mode.label
+        )
+        acceptedGnssSource = null
+        lastGpsTs = null
+        gpsHz = 0.0
+    }
+
+    @Synchronized
+    fun updateGnssQuality(quality: NmeaQuality, source: String) {
+        val key = sourceKey(source)
+        gnssLastSeen[key] = System.currentTimeMillis()
+        if (!sourceAllowed(source, updateSeen = false)) return
+        quality.satellites?.let { satellites = it }
+        _state.value = _state.value.copy(
+            satellites = quality.satellites ?: _state.value.satellites,
+            pdop = quality.pdop ?: _state.value.pdop,
+            hdop = quality.hdop ?: _state.value.hdop,
+            vdop = quality.vdop ?: _state.value.vdop
+        )
     }
 
     @Synchronized
@@ -177,7 +207,13 @@ object RaceRuntime {
 
     @Synchronized
     fun ingestPoint(input: GeoPoint) {
+        if (!sourceAllowed(input.source, updateSeen = true)) return
         var point = input
+        if (acceptedGnssSource != sourceKey(input.source)) {
+            acceptedGnssSource = sourceKey(input.source)
+            lastGpsTs = null
+            gpsHz = 0.0
+        }
         val prev = latestPoint
         if (prev != null && point.speedMps == null && point.ts > prev.ts) {
             val dt = (point.ts - prev.ts) / 1000.0
@@ -358,6 +394,32 @@ object RaceRuntime {
     fun setSupportedObdPids(pids: Set<String>) {
         supportedObdPids += pids
         _state.value = _state.value.copy(supportedObdPids = supportedObdPids.toSet())
+    }
+
+    private fun sourceKey(source: String): String = when {
+        source.startsWith("usb", ignoreCase = true) -> "usb"
+        source.startsWith("ble", ignoreCase = true) -> "ble"
+        else -> "phone"
+    }
+
+    private fun sourceAllowed(source: String, updateSeen: Boolean): Boolean {
+        val key = sourceKey(source)
+        val now = System.currentTimeMillis()
+        if (updateSeen) gnssLastSeen[key] = now
+        return when (_state.value.gnssSourceMode) {
+            GnssSourceMode.PHONE -> key == "phone"
+            GnssSourceMode.BLE -> key == "ble"
+            GnssSourceMode.USB -> key == "usb"
+            GnssSourceMode.AUTO -> {
+                val usbFresh = now - (gnssLastSeen["usb"] ?: 0L) < 2_500L
+                val bleFresh = now - (gnssLastSeen["ble"] ?: 0L) < 2_500L
+                when (key) {
+                    "usb" -> true
+                    "ble" -> !usbFresh
+                    else -> !usbFresh && !bleFresh
+                }
+            }
+        }
     }
 
     fun updateVideoState(recording: Boolean, status: String) {
