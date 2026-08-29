@@ -14,8 +14,8 @@ android {
         applicationId = "ru.racelab.phone"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "2.9.0"
+        versionCode = 22
+        versionName = "3.0.0"
     }
 
     buildFeatures {
@@ -64,6 +64,7 @@ dependencies {
     implementation("androidx.camera:camera-effects:$cameraX")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
     testImplementation("junit:junit:4.13.2")
 }
