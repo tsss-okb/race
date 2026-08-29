@@ -55,6 +55,9 @@ import ru.racelab.phone.video.VideoSettingsRepository
 import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
 import ru.racelab.phone.pitlane.PitLaneServer
+import ru.racelab.phone.pitlane.InternetPitRelay
+import ru.racelab.phone.pitlane.InternetPitRelaySettings
+import ru.racelab.phone.pitlane.InternetPitRelaySettingsRepository
 import kotlin.math.abs
 
 private val Bg = Color(0xFF050607)
@@ -250,9 +253,15 @@ private fun SettingsHubScreen(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var showTracks by remember { mutableStateOf(false) }
+    val initialRelay = remember { InternetPitRelaySettingsRepository.load(context) }
+    var relayEnabled by remember { mutableStateOf(initialRelay.enabled) }
+    var relayBaseUrl by remember { mutableStateOf(initialRelay.baseUrl) }
+    var relayRoom by remember { mutableStateOf(initialRelay.room) }
+    var relayKey by remember { mutableStateOf(initialRelay.key) }
 
     LaunchedEffect(Unit) {
         PitLaneServer.refreshStatus()
+        InternetPitRelay.start(context)
     }
 
     Column(
@@ -353,6 +362,110 @@ private fun SettingsHubScreen(
                 }
             }
         }
+        Column(
+            Modifier.fillMaxWidth()
+                .background(Color(0xFF111315), RoundedCornerShape(12.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("PIT LANE • INTERNET", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text(
+                        "● " + state.internetPitRelayStatus,
+                        color = if (state.internetPitRelayStatus == "LIVE") Green else if (relayEnabled) Amber else Muted,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Switch(
+                    checked = relayEnabled,
+                    onCheckedChange = { relayEnabled = it }
+                )
+            }
+
+            OutlinedTextField(
+                value = relayBaseUrl,
+                onValueChange = { relayBaseUrl = it },
+                label = { Text("Relay URL (https://…)", fontSize = 8.sp) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = relayRoom,
+                    onValueChange = { relayRoom = it.filter { ch -> ch.isLetterOrDigit() || ch == '-' || ch == '_' } },
+                    label = { Text("ROOM", fontSize = 8.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(.45f)
+                )
+                OutlinedTextField(
+                    value = relayKey,
+                    onValueChange = { relayKey = it.filterNot(Char::isWhitespace) },
+                    label = { Text("KEY", fontSize = 8.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(.75f)
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = {
+                        val next = InternetPitRelaySettings(
+                            enabled = relayEnabled,
+                            baseUrl = relayBaseUrl,
+                            room = relayRoom,
+                            key = relayKey
+                        )
+                        InternetPitRelaySettingsRepository.save(context, next)
+                        InternetPitRelay.applySettings(next)
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
+                ) {
+                    Text("СОХРАНИТЬ / ПОДКЛЮЧИТЬ", fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = {
+                        val next = InternetPitRelaySettingsRepository.regenerate(context)
+                        relayEnabled = next.enabled
+                        relayBaseUrl = next.baseUrl
+                        relayRoom = next.room
+                        relayKey = next.key
+                        InternetPitRelay.applySettings(next)
+                    },
+                    modifier = Modifier.weight(.62f)
+                ) {
+                    Text("НОВЫЙ ROOM", fontSize = 8.sp)
+                }
+            }
+
+            if (state.internetPitViewerUrl.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        state.internetPitViewerUrl,
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    TextButton(
+                        onClick = { clipboard.setText(AnnotatedString(state.internetPitViewerUrl)) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text("КОПИЯ", color = Amber, fontSize = 8.sp)
+                    }
+                }
+            }
+
+            Text(
+                "Телефон гонщика отправляет только телеметрию PIT по HTTPS. Команда открывает Viewer URL через любой интернет — Wi‑Fi между устройствами не нужен.",
+                color = Muted,
+                fontSize = 8.sp
+            )
+        }
+
         Column(
             Modifier.fillMaxWidth()
                 .background(Color(0xFF111315), RoundedCornerShape(12.dp))
