@@ -11,6 +11,8 @@ import ru.racelab.phone.core.GeoPoint
 import ru.racelab.phone.core.ObdReading
 import ru.racelab.phone.core.RaceEngine
 import ru.racelab.phone.core.RaceGeometry
+import ru.racelab.phone.sensor.MotionProcessor
+import ru.racelab.phone.sensor.MountDirection
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -50,6 +52,7 @@ object RaceRuntime {
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
+            armed = engine.startLine != null,
             sessionId = writer?.sessionId,
             sessionDir = writer?.directory?.absolutePath,
             laps = emptyList(), bestLapMs = null, deltaMs = null, predictedLapMs = null,
@@ -62,7 +65,7 @@ object RaceRuntime {
         val w = writer
         writer = null
         w?.close(engine.laps, JSONObject().put("startConfigured", engine.startLine != null).put("sectorCount", engine.sectors.size))
-        _state.value = _state.value.copy(sessionActive = false, lastMessage = "Сессия сохранена")
+        _state.value = _state.value.copy(sessionActive = false, armed = false, lastMessage = "Сессия сохранена")
     }
 
     @Synchronized
@@ -77,7 +80,12 @@ object RaceRuntime {
         val prev = previousPoint ?: return false
         if (RaceGeometry.distance(prev, cur) < 2.0) return false
         engine.setStart(RaceGeometry.lineAt(cur, prev, 35.0))
-        _state.value = _state.value.copy(startConfigured = true, sectorCount = engine.sectors.size, lastMessage = "START/FINISH установлен")
+        _state.value = _state.value.copy(
+            startConfigured = true,
+            armed = _state.value.sessionActive,
+            sectorCount = engine.sectors.size,
+            lastMessage = "START/FINISH установлен"
+        )
         return true
     }
 
@@ -152,6 +160,7 @@ object RaceRuntime {
             deltaMs = prediction?.deltaMs,
             predictedLapMs = prediction?.projectedMs,
             laps = engine.laps.toList(),
+            armed = _state.value.sessionActive && engine.startLine != null && engine.currentLapStartMs == null,
             startConfigured = engine.startLine != null,
             sectorCount = engine.sectors.size,
             gpsSource = point.source,
@@ -180,17 +189,59 @@ object RaceRuntime {
             gZ = values[2] / 9.80665
             gTotal = sqrt(gX * gX + gY * gY + gZ * gZ)
         }
+        val motion = MotionProcessor.onSensor(sensor.type, values)
         if (persist) writer?.writeSensor(ts, sensor, accuracy, hz, values)
 
         if (ts - lastSensorUiPush >= 100) {
             lastSensorUiPush = ts
             _state.value = _state.value.copy(
                 gX = gX, gY = gY, gZ = gZ, gTotal = gTotal,
+                longitudinalG = motion.longitudinalG,
+                lateralG = motion.lateralG,
+                verticalG = motion.verticalG,
+                yawDeg = motion.yawDeg,
+                pitchDeg = motion.pitchDeg,
+                rollDeg = motion.rollDeg,
+                imuCalibrated = motion.calibrated,
+                mountDirection = motion.mountDirection,
                 sensors = sensorMap.values.sortedBy { it.type },
                 availableSensorCount = availableSensors,
                 activeSensorCount = sensorMap.size
             )
         }
+    }
+
+    @Synchronized
+    fun calibrateImu() {
+        val motion = MotionProcessor.calibrate()
+        _state.value = _state.value.copy(
+            imuCalibrated = motion.calibrated,
+            yawDeg = motion.yawDeg,
+            pitchDeg = motion.pitchDeg,
+            rollDeg = motion.rollDeg,
+            lastMessage = if (motion.calibrated) "IMU откалиброван" else "Нет rotation-vector для калибровки"
+        )
+    }
+
+    @Synchronized
+    fun resetImuCalibration() {
+        val motion = MotionProcessor.resetCalibration()
+        _state.value = _state.value.copy(
+            imuCalibrated = false,
+            yawDeg = motion.yawDeg,
+            pitchDeg = motion.pitchDeg,
+            rollDeg = motion.rollDeg,
+            lastMessage = "Калибровка IMU сброшена"
+        )
+    }
+
+    @Synchronized
+    fun setMountDirection(direction: MountDirection) {
+        val motion = MotionProcessor.setMountDirection(direction)
+        _state.value = _state.value.copy(
+            mountDirection = motion.mountDirection,
+            lastMessage = "Направление крепления: ${direction.label}"
+        )
     }
 
     @Synchronized
