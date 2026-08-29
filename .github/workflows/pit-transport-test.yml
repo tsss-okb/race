@@ -1,0 +1,97 @@
+name: Test RaceLab PIT Transport
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/pit-transport-test.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check WebSocket relay health
+        run: |
+          body="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            https://racelab-pit-relay.chalk-armadillo.workers.dev/health)"
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
+          echo "$body" | grep -q '"transport":"websocket"'
+          echo "$body" | grep -q '"protocol":2'
+
+      - name: Check legacy HTTP fallback health
+        run: |
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            https://racelab-pit-relay.glacier-boursin.workers.dev/health | grep -q '"ok":true'
+
+      - name: WebSocket publisher to viewer round trip
+        run: |
+          node <<'NODE'
+          const room = 'ci-' + Date.now();
+          const key = 'ci-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+          const base = 'wss://racelab-pit-relay.chalk-armadillo.workers.dev';
+          const pubUrl = `${base}/ws/room/${encodeURIComponent(room)}?key=${encodeURIComponent(key)}&role=publisher`;
+          const viewUrl = `${base}/ws/room/${encodeURIComponent(room)}?key=${encodeURIComponent(key)}&role=viewer`;
+
+          const timeout = setTimeout(() => {
+            console.error('TIMEOUT: WebSocket round trip did not complete');
+            process.exit(2);
+          }, 12000);
+
+          let publisher;
+          let viewer;
+          let pubOpen = false;
+          let viewerOpen = false;
+          const sentAt = Date.now();
+
+          function maybeSend() {
+            if (!pubOpen || !viewerOpen) return;
+            const payload = {
+              test: true,
+              serverTimeMs: Date.now(),
+              pitActive: true,
+              pitCurrentMs: 1234,
+              pitCount: 7,
+              pitTrigger: 'CI'
+            };
+            publisher.send(JSON.stringify(payload));
+          }
+
+          publisher = new WebSocket(pubUrl);
+          publisher.addEventListener('open', () => {
+            pubOpen = true;
+            console.log('publisher open');
+            viewer = new WebSocket(viewUrl);
+            viewer.addEventListener('open', () => {
+              viewerOpen = true;
+              console.log('viewer open');
+              maybeSend();
+            });
+            viewer.addEventListener('message', (event) => {
+              let data;
+              try { data = JSON.parse(event.data); } catch { return; }
+              if (data.test === true && data.pitTrigger === 'CI') {
+                const rtt = Date.now() - sentAt;
+                console.log('ROUNDTRIP_OK rtt_ms=' + rtt + ' relayReceivedAtMs=' + data.relayReceivedAtMs);
+                clearTimeout(timeout);
+                try { publisher.close(1000, 'done'); } catch {}
+                try { viewer.close(1000, 'done'); } catch {}
+                process.exit(0);
+              }
+            });
+            viewer.addEventListener('error', (e) => console.error('viewer error', e.message || e));
+          });
+          publisher.addEventListener('error', (e) => console.error('publisher error', e.message || e));
+          publisher.addEventListener('message', (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === 'ack') console.log('publisher ack', data.relayReceivedAtMs);
+            } catch {}
+          });
+          NODE
