@@ -67,7 +67,6 @@ export class PitRoom {
 
   async webSocketMessage(ws, message) {
     const attachment = ws.deserializeAttachment() || {};
-    if (attachment.role !== "publisher") return;
 
     let payload;
     try {
@@ -76,6 +75,17 @@ export class PitRoom {
       return;
     }
     if (!payload || typeof payload !== "object") return;
+
+    if (attachment.role === "viewer") {
+      if (payload.type === "ping") {
+        try {
+          ws.send(JSON.stringify({ type: "pong", nonce: payload.nonce }));
+        } catch (_) {}
+      }
+      return;
+    }
+
+    if (attachment.role !== "publisher") return;
 
     const record = {
       ...payload,
