@@ -16,6 +16,7 @@ import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.service.RecordingService
 import ru.racelab.phone.gnss.PhoneGnssMonitor
 import ru.racelab.phone.gnss.UsbNmeaManager
+import ru.racelab.phone.canbus.UsbCanManager
 import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
 
@@ -25,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var phoneSensors: PhoneSensorMonitor
     private lateinit var phoneGnss: PhoneGnssMonitor
     private lateinit var usbGnss: UsbNmeaManager
+    private lateinit var usbCan: UsbCanManager
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val denied = grants.filterValues { !it }.keys
@@ -48,6 +50,11 @@ class MainActivity : ComponentActivity() {
             onPoint = { RaceRuntime.ingestPoint(it) },
             onQuality = { RaceRuntime.updateGnssQuality(it, "usb_nmea") }
         )
+        usbCan = UsbCanManager(
+            context = this,
+            onFrame = { RaceRuntime.updateCanFrame(it) },
+            onSignal = { RaceRuntime.updateCanSignal(it) }
+        )
         obd = Elm327Manager(
             context = this,
             onReading = { RaceRuntime.updateObd(it) },
@@ -62,6 +69,7 @@ class MainActivity : ComponentActivity() {
             RaceLabApp(
                 bleGps = bleGps,
                 usbGnss = usbGnss,
+                usbCan = usbCan,
                 obd = obd,
                 onStartSession = { startNativeSession() },
                 onStopSession = { stopNativeSession() },
@@ -120,6 +128,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         bleGps.disconnect()
         usbGnss.close()
+        usbCan.close()
         obd.disconnect()
         super.onDestroy()
     }
