@@ -286,3 +286,12 @@ Cloudflare Worker:
 - Durable Object хранит только последнее состояние комнаты;
 - deploy workflow: `.github/workflows/pit-relay.yml`;
 - GitHub Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+
+
+### RaceLab 2.7.0 Auto Internet PIT
+- Default relay is built into the APK: `https://racelab-pit-relay.glacier-boursin.workers.dev`.
+- Internet PIT relay is enabled by default on a clean install.
+- ROOM and KEY are generated locally on first launch.
+- Existing manually configured valid HTTPS relay URLs are preserved.
+- If an older install has an empty relay URL, it is migrated automatically to the default relay.
+- Pit Relay deployment workflow is manual-only to avoid creating new temporary Cloudflare accounts on unrelated pushes.
