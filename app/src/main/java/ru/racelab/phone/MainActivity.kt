@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import android.view.KeyEvent
+import android.view.InputDevice
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -123,6 +125,33 @@ class MainActivity : ComponentActivity() {
         phoneSensors.stop()
         phoneGnss.stop()
         super.onPause()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val directPitKeys = setOf(
+                KeyEvent.KEYCODE_F1,
+                KeyEvent.KEYCODE_BUTTON_1,
+                KeyEvent.KEYCODE_BUTTON_A,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_HEADSETHOOK,
+                KeyEvent.KEYCODE_CAMERA
+            )
+            val device = InputDevice.getDevice(event.deviceId)
+            val externalVolumeButton =
+                device?.isExternal == true &&
+                    event.keyCode in setOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
+
+            if (event.keyCode in directPitKeys || externalVolumeButton) {
+                val source = when {
+                    externalVolumeButton -> "HID:EXT_VOLUME"
+                    else -> "HID:" + KeyEvent.keyCodeToString(event.keyCode)
+                }
+                RaceRuntime.togglePitTimer(source)
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {
