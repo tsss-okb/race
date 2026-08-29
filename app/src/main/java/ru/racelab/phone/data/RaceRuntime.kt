@@ -13,6 +13,8 @@ import ru.racelab.phone.core.RaceEngine
 import ru.racelab.phone.core.RaceGeometry
 import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
+import ru.racelab.phone.track.TrackProfile
+import ru.racelab.phone.track.TrackRepository
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -36,6 +38,7 @@ object RaceRuntime {
     private var satellites = 0
     private var obd = ObdState()
     private val preview = ArrayDeque<GeoPoint>()
+    private var lowSpeedSinceMs: Long? = null
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -56,7 +59,8 @@ object RaceRuntime {
             sessionId = writer?.sessionId,
             sessionDir = writer?.directory?.absolutePath,
             laps = emptyList(), bestLapMs = null, deltaMs = null, predictedLapMs = null,
-            lapElapsedMs = 0, trackPreview = emptyList(), lastMessage = "Сессия запущена"
+            lapElapsedMs = 0, trackPreview = emptyList(), autoStopRequested = false,
+            lastMessage = if (engine.startLine != null) "ARM: ожидаю пересечение START" else "Сессия запущена"
         )
     }
 
@@ -65,7 +69,8 @@ object RaceRuntime {
         val w = writer
         writer = null
         w?.close(engine.laps, JSONObject().put("startConfigured", engine.startLine != null).put("sectorCount", engine.sectors.size))
-        _state.value = _state.value.copy(sessionActive = false, armed = false, lastMessage = "Сессия сохранена")
+        lowSpeedSinceMs = null
+        _state.value = _state.value.copy(sessionActive = false, armed = false, autoStopRequested = false, lastMessage = "Сессия сохранена")
     }
 
     @Synchronized
@@ -103,6 +108,50 @@ object RaceRuntime {
     fun clearSectors() {
         engine.clearSectors()
         _state.value = _state.value.copy(sectorCount = 0, lastMessage = "Секторы очищены")
+    }
+
+    @Synchronized
+    fun loadTrack(profile: TrackProfile, auto: Boolean = false) {
+        engine.setStart(profile.start)
+        engine.clearSectors()
+        profile.sectors.take(3).forEach { engine.addSector(it) }
+        _state.value = _state.value.copy(
+            startConfigured = true,
+            sectorCount = engine.sectors.size,
+            currentTrackId = profile.id,
+            currentTrackName = profile.name,
+            lastMessage = if (auto) "Автовыбор трассы: " + profile.name else "Трасса загружена: " + profile.name
+        )
+    }
+
+    @Synchronized
+    fun currentTrackProfile(name: String): TrackProfile? {
+        val start = engine.startLine ?: return null
+        return TrackRepository.create(name, start, engine.sectors)
+    }
+
+    @Synchronized
+    fun setNearestTrack(name: String?, distanceM: Double?) {
+        _state.value = _state.value.copy(nearestTrackName = name, nearestTrackDistanceM = distanceM)
+    }
+
+    @Synchronized
+    fun clearLoadedTrack() {
+        engine.resetSession(keepTrack = false)
+        _state.value = _state.value.copy(
+            startConfigured = false,
+            sectorCount = 0,
+            currentTrackId = null,
+            currentTrackName = null,
+            armed = false,
+            lastMessage = "Трасса выгружена"
+        )
+    }
+
+    @Synchronized
+    fun setAutoStopEnabled(enabled: Boolean) {
+        if (!enabled) lowSpeedSinceMs = null
+        _state.value = _state.value.copy(autoStopEnabled = enabled, autoStopRequested = false)
     }
 
     fun ingestLocation(location: Location) {
@@ -148,10 +197,24 @@ object RaceRuntime {
         writer?.writeGps(point, gX, gY, gZ, gTotal, obd)
         if (update.lapCompleted != null) writer?.flush()
 
+        val speedKmhNow = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0)
+        var autoStop = false
+        if (_state.value.sessionActive && _state.value.autoStopEnabled && engine.laps.isNotEmpty()) {
+            if (speedKmhNow < 3.0) {
+                if (lowSpeedSinceMs == null) lowSpeedSinceMs = point.ts
+                autoStop = point.ts - (lowSpeedSinceMs ?: point.ts) >= 90_000L
+            } else {
+                lowSpeedSinceMs = null
+            }
+        } else {
+            lowSpeedSinceMs = null
+        }
+
         _state.value = _state.value.copy(
             latestPoint = point,
             previousPoint = prev,
-            speedKmh = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0),
+            speedKmh = speedKmhNow,
+            autoStopRequested = autoStop,
             gpsHz = gpsHz,
             satellites = satellites,
             accuracyM = point.accuracyM,
