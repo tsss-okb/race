@@ -14,6 +14,7 @@ import ru.racelab.phone.ble.BleNmeaManager
 import ru.racelab.phone.ble.Elm327Manager
 import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.service.RecordingService
+import ru.racelab.phone.gnss.PhoneGnssMonitor
 import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
 
@@ -21,11 +22,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
     private lateinit var obd: Elm327Manager
     private lateinit var phoneSensors: PhoneSensorMonitor
+    private lateinit var phoneGnss: PhoneGnssMonitor
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val denied = grants.filterValues { !it }.keys
-        if (denied.isEmpty()) RaceRuntime.markMessage("Разрешения выданы")
-        else RaceRuntime.markMessage("Часть разрешений не выдана: ${denied.size}")
+        if (denied.isEmpty()) {
+            RaceRuntime.markMessage("Разрешения выданы")
+            phoneGnss.start()
+        } else RaceRuntime.markMessage("Часть разрешений не выдана: ${denied.size}")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +39,7 @@ class MainActivity : ComponentActivity() {
         bleGps = BleNmeaManager(this) { RaceRuntime.ingestPoint(it) }
         obd = Elm327Manager(this) { RaceRuntime.updateObd(it) }
         phoneSensors = PhoneSensorMonitor(this)
+        phoneGnss = PhoneGnssMonitor(this)
         requestCorePermissions()
 
         setContent {
@@ -55,6 +60,7 @@ class MainActivity : ComponentActivity() {
             RaceRuntime.markMessage("Сначала разреши точное местоположение")
             return
         }
+        phoneGnss.stop()
         ContextCompat.startForegroundService(
             this,
             Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_START)
@@ -63,6 +69,7 @@ class MainActivity : ComponentActivity() {
 
     private fun stopNativeSession() {
         startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+        window.decorView.postDelayed({ phoneGnss.start() }, 800L)
     }
 
     private fun requestCorePermissions() {
@@ -84,10 +91,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         phoneSensors.start()
+        phoneGnss.start()
     }
 
     override fun onPause() {
         phoneSensors.stop()
+        phoneGnss.stop()
         super.onPause()
     }
 
