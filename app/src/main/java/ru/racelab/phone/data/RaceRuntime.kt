@@ -24,6 +24,7 @@ import ru.racelab.phone.gnss.GnssSourceMode
 import ru.racelab.phone.canbus.CanChannel
 import ru.racelab.phone.canbus.CanFrame
 import ru.racelab.phone.canbus.CanSignalValue
+import ru.racelab.phone.remote.RemoteAction
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -558,6 +559,30 @@ object RaceRuntime {
 
     fun pitElapsedMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long =
         pitTimer.elapsed(nowElapsedMs)
+
+    @Synchronized
+    fun setGm204Enabled(enabled: Boolean) {
+        _state.value = _state.value.copy(
+            gm204Enabled = enabled,
+            lastMessage = if (enabled) "HOCO GM204 профиль включён" else "HOCO GM204 профиль выключен"
+        )
+    }
+
+    @Synchronized
+    fun reportRemoteKey(deviceName: String?, keyCodeName: String) {
+        _state.value = _state.value.copy(
+            remoteDeviceName = deviceName?.takeIf { it.isNotBlank() } ?: "Bluetooth HID",
+            remoteLastKey = keyCodeName
+        )
+    }
+
+    @Synchronized
+    fun postRemoteAction(action: RemoteAction) {
+        _state.value = _state.value.copy(
+            remoteAction = action,
+            remoteActionSeq = _state.value.remoteActionSeq + 1L
+        )
+    }
 
     fun updateVideoState(recording: Boolean, status: String) {
         _state.value = _state.value.copy(videoRecording = recording, videoStatus = status)
