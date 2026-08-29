@@ -21,7 +21,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -41,6 +43,8 @@ import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.data.SensorSnapshot
 import ru.racelab.phone.diag.DiagnosticsProvider
 import ru.racelab.phone.sensor.MountDirection
+import ru.racelab.phone.track.TrackProfile
+import ru.racelab.phone.track.TrackRepository
 import kotlin.math.abs
 
 private val Bg = Color(0xFF0B0F0C)
@@ -207,6 +211,7 @@ private fun DriveControlPane(
     modifier: Modifier,
     compact: Boolean
 ) {
+    var showTracks by remember { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PanelCard {
             val headline = when {
@@ -219,7 +224,24 @@ private fun DriveControlPane(
             Spacer(Modifier.height(4.dp))
             Text("GNSS: ${state.gpsSource} • SAT ${state.satellites} • ±${state.accuracyM?.let { "%.1f".format(it) } ?: "—"} м", fontSize = 12.sp)
             Text("IMU ${if (state.imuCalibrated) "CAL" else "RAW"} • ${state.activeSensorCount}/${state.availableSensorCount} • Sectors ${state.sectorCount}/3", fontSize = 12.sp)
+            Text(
+                "Track: " + (state.currentTrackName ?: "не выбрана") +
+                    (state.nearestTrackName?.let { " • рядом " + it + " " + (state.nearestTrackDistanceM?.let { d -> "%.0f м".format(d) } ?: "") } ?: ""),
+                color = Muted,
+                fontSize = 11.sp
+            )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { showTracks = true }, modifier = Modifier.weight(1f)) { Text("ТРАССЫ") }
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = state.autoStopEnabled,
+                    onCheckedChange = { RaceRuntime.setAutoStopEnabled(it) }
+                )
+                Text(" автостоп", fontSize = 10.sp)
+            }
+        }
+        if (showTracks) TrackLibraryDialog(state = state, onDismiss = { showTracks = false })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = if (state.sessionActive) onStop else onStart,
@@ -253,6 +275,127 @@ private fun DriveControlPane(
                     LapRow(lap.no, lap.timeMs, lap.maxSpeedKmh, lap.timeMs == state.bestLapMs)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TrackLibraryDialog(state: AppState, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var tracks by remember { mutableStateOf(TrackRepository.list(context)) }
+    var name by remember { mutableStateOf(state.currentTrackName ?: "Моя трасса") }
+    var info by remember { mutableStateOf("") }
+
+    fun refresh() { tracks = TrackRepository.list(context) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("ТРАССЫ") },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("ГОТОВО") }
+        },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Название текущей трассы") }
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = {
+                            val profile = RaceRuntime.currentTrackProfile(name)
+                            if (profile == null) {
+                                info = "Сначала установи START"
+                            } else {
+                                val saved = TrackRepository.save(context, profile)
+                                RaceRuntime.loadTrack(saved)
+                                refresh()
+                                info = "Сохранено: " + saved.name
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("СОХРАНИТЬ") }
+                    OutlinedButton(
+                        onClick = {
+                            val raw = clipboard.getText()?.text.orEmpty()
+                            val imported = runCatching {
+                                if (raw.trimStart().startsWith("<")) TrackRepository.fromGpx(raw)
+                                else TrackRepository.fromJson(raw)
+                            }.getOrNull()
+                            if (imported == null) info = "Буфер не содержит RaceLab JSON/GPX"
+                            else {
+                                TrackRepository.save(context, imported)
+                                RaceRuntime.loadTrack(imported)
+                                refresh()
+                                info = "Импорт: " + imported.name
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("ИМПОРТ") }
+                }
+                if (info.isNotBlank()) Text(info, color = Amber, fontSize = 11.sp)
+                Text("Сохранено: " + tracks.size, color = Muted, fontSize = 11.sp)
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    items(tracks, key = { it.id }) { track ->
+                        TrackRow(
+                            track = track,
+                            selected = track.id == state.currentTrackId,
+                            onLoad = {
+                                RaceRuntime.loadTrack(track)
+                                info = "Загружено: " + track.name
+                            },
+                            onDelete = {
+                                TrackRepository.delete(context, track.id)
+                                refresh()
+                            },
+                            onJson = {
+                                clipboard.setText(AnnotatedString(TrackRepository.toJson(track)))
+                                info = "JSON скопирован в буфер"
+                            },
+                            onGpx = {
+                                clipboard.setText(AnnotatedString(TrackRepository.toGpx(track)))
+                                info = "GPX скопирован в буфер"
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun TrackRow(
+    track: TrackProfile,
+    selected: Boolean,
+    onLoad: () -> Unit,
+    onDelete: () -> Unit,
+    onJson: () -> Unit,
+    onGpx: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(if (selected) Color(0xFF17361B) else Color(0xFF0E1410), RoundedCornerShape(10.dp))
+            .padding(9.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(track.name, fontWeight = FontWeight.Bold, color = if (selected) Green else Color.White)
+                Text("Sectors: " + track.sectors.size, color = Muted, fontSize = 10.sp)
+            }
+            TextButton(onClick = onLoad) { Text("LOAD") }
+            TextButton(onClick = onDelete) { Text("×", color = Red) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            OutlinedButton(onClick = onJson, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY JSON", fontSize = 9.sp) }
+            OutlinedButton(onClick = onGpx, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY GPX", fontSize = 9.sp) }
         }
     }
 }
