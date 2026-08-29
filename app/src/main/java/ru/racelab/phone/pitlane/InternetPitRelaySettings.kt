@@ -14,7 +14,8 @@ data class InternetPitRelaySettings(
 }
 
 object InternetPitRelaySettingsRepository {
-    const val DEFAULT_BASE_URL = "https://racelab-pit-relay.glacier-boursin.workers.dev"
+    const val DEFAULT_BASE_URL = "https://racelab-pit-relay.petalite-reference.workers.dev"
+    const val LEGACY_HTTP_FALLBACK_URL = "https://racelab-pit-relay.glacier-boursin.workers.dev"
     private const val PREFS = "racelab_pit_internet"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASE_URL = "base_url"
@@ -29,9 +30,14 @@ object InternetPitRelaySettingsRepository {
             prefs.edit().putString(KEY_ROOM, room).putString(KEY_SECRET, key).apply()
         }
         val storedBaseUrl = prefs.getString(KEY_BASE_URL, null)?.trim()?.trimEnd('/')
-        val baseUrl = storedBaseUrl?.takeIf { it.startsWith("https://") } ?: DEFAULT_BASE_URL
+        val baseUrl = when {
+            storedBaseUrl.isNullOrBlank() -> DEFAULT_BASE_URL
+            storedBaseUrl == LEGACY_HTTP_FALLBACK_URL -> DEFAULT_BASE_URL
+            storedBaseUrl.startsWith("https://") -> storedBaseUrl
+            else -> DEFAULT_BASE_URL
+        }
         val enabled = if (prefs.contains(KEY_ENABLED)) prefs.getBoolean(KEY_ENABLED, true) else true
-        if (!prefs.contains(KEY_BASE_URL) || storedBaseUrl.isNullOrBlank()) {
+        if (!prefs.contains(KEY_BASE_URL) || storedBaseUrl.isNullOrBlank() || storedBaseUrl == LEGACY_HTTP_FALLBACK_URL) {
             prefs.edit().putString(KEY_BASE_URL, baseUrl).apply()
         }
         return InternetPitRelaySettings(
