@@ -597,6 +597,23 @@ object RaceRuntime {
         )
     }
 
+    @Synchronized
+    fun setInternetPitRelayStatus(
+        enabled: Boolean,
+        configured: Boolean,
+        status: String,
+        viewerUrl: String,
+        lastSuccessMs: Long?
+    ) {
+        _state.value = _state.value.copy(
+            internetPitRelayEnabled = enabled,
+            internetPitRelayConfigured = configured,
+            internetPitRelayStatus = status,
+            internetPitViewerUrl = viewerUrl,
+            internetPitLastSuccessMs = lastSuccessMs
+        )
+    }
+
     fun updateVideoState(recording: Boolean, status: String) {
         _state.value = _state.value.copy(videoRecording = recording, videoStatus = status)
     }
