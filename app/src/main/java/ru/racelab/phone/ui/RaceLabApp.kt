@@ -646,6 +646,13 @@ private fun DriveControlPane(
             Text("GNSS: ${state.gpsSource} • SAT ${state.satellites} • ±${state.accuracyM?.let { "%.1f".format(it) } ?: "—"} м", fontSize = 12.sp)
             Text("IMU ${if (state.imuCalibrated) "CAL" else "RAW"} • ${state.activeSensorCount}/${state.availableSensorCount} • Sectors ${state.sectorCount}/3", fontSize = 12.sp)
             Text(
+                "PIT IN " + (if (state.pitEntryConfigured) "✓" else "—") +
+                    " • PIT OUT " + (if (state.pitExitConfigured) "✓" else "—") +
+                    (if (state.pitLaneActive) " • LANE ACTIVE" else ""),
+                color = if (state.pitLaneActive) Red else Muted,
+                fontSize = 11.sp
+            )
+            Text(
                 "Track: " + (state.currentTrackName ?: "не выбрана") +
                     (state.nearestTrackName?.let { " • рядом " + it + " " + (state.nearestTrackDistanceM?.let { d -> "%.0f м".format(d) } ?: "") } ?: ""),
                 color = Muted,
@@ -684,6 +691,26 @@ private fun DriveControlPane(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { RaceRuntime.addSectorHere() }, modifier = Modifier.weight(1f)) { Text("+ СЕКТОР") }
             OutlinedButton(onClick = { RaceRuntime.clearSectors() }, modifier = Modifier.weight(1f)) { Text("СБРОС S") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { RaceRuntime.setPitEntryHere() },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (state.pitEntryConfigured) "PIT IN ✓" else "SET PIT IN")
+            }
+            OutlinedButton(
+                onClick = { RaceRuntime.setPitExitHere() },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (state.pitExitConfigured) "PIT OUT ✓" else "SET PIT OUT")
+            }
+            TextButton(
+                onClick = { RaceRuntime.clearPitLaneLines() },
+                modifier = Modifier.width(76.dp)
+            ) {
+                Text("CLR PIT", fontSize = 9.sp)
+            }
         }
         Text("КРУГИ", color = Muted, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         if (compact) {
