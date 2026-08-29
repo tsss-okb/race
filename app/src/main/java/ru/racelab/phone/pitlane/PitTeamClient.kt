@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,11 +51,19 @@ class PitTeamClient(private val config: PitTeamConfig) {
     val state: StateFlow<PitTeamSnapshot> = _state.asStateFlow()
 
     fun start(scope: CoroutineScope): Job = scope.launch(Dispatchers.IO) {
-        while (isActive) {
+        coroutineScope {
+            launch { pollLoop(initialDelayMs = 0L) }
+            launch { pollLoop(initialDelayMs = 55L) }
+        }
+    }
+
+    private suspend fun pollLoop(initialDelayMs: Long) {
+        if (initialDelayMs > 0L) delay(initialDelayMs)
+        while (kotlin.coroutines.coroutineContext.isActive) {
             val cycleStart = SystemClock.elapsedRealtime()
             fetchOnce()
             val spent = SystemClock.elapsedRealtime() - cycleStart
-            delay((100L - spent).coerceAtLeast(20L))
+            delay((200L - spent).coerceAtLeast(25L))
         }
     }
 
@@ -66,11 +75,12 @@ class PitTeamClient(private val config: PitTeamConfig) {
         try {
             val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 900
-                readTimeout = 900
+                connectTimeout = 550
+                readTimeout = 550
                 useCaches = false
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Cache-Control", "no-store")
+                setRequestProperty("Connection", "keep-alive")
             }
 
             val code = connection.responseCode
@@ -83,6 +93,12 @@ class PitTeamClient(private val config: PitTeamConfig) {
             connection.disconnect()
             val data = JSONObject(json)
             val nowElapsed = SystemClock.elapsedRealtime()
+
+            val incomingRelayMs = data.optNullableLong("relayReceivedAtMs")
+            val currentRelayMs = _state.value.relayReceivedAtMs
+            if (incomingRelayMs != null && currentRelayMs != null && incomingRelayMs < currentRelayMs) {
+                return
+            }
 
             _state.value = PitTeamSnapshot(
                 pitActive = data.optBoolean("pitActive", false),
@@ -100,7 +116,7 @@ class PitTeamClient(private val config: PitTeamConfig) {
                 gpsHz = data.optDouble("gpsHz", 0.0),
                 satellites = data.optInt("satellites", 0),
                 lastReceiveElapsedMs = nowElapsed,
-                relayReceivedAtMs = data.optNullableLong("relayReceivedAtMs"),
+                relayReceivedAtMs = incomingRelayMs,
                 lastError = null
             )
         } catch (t: Throwable) {
