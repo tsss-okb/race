@@ -362,6 +362,47 @@ object RaceRuntime {
         while (preview.size > 1200) preview.removeFirst()
 
         val prediction = engine.prediction(point.ts, point)
+
+        if ((update.lapStarted || update.lapCompleted != null) && prediction == null) {
+            miniSectorTracker.reset()
+        }
+        val miniSector = prediction?.let {
+            miniSectorTracker.update(
+                progress = it.progress,
+                cumulativeDeltaMs = it.deltaMs,
+                newLap = update.lapStarted || update.lapCompleted != null
+            )
+        }
+
+        var pitEntered = false
+        var pitExited = false
+        var pitLaneActive = _state.value.pitLaneActive
+        var pitLaneLastMs = _state.value.pitLaneLastMs
+
+        if (prev != null) {
+            if (!pitLaneActive) {
+                val hit = pitEntryLine?.let { RaceGeometry.crossing(prev, point, it) }
+                if (hit != null) {
+                    pitLaneStartedMs = hit
+                    pitLaneActive = true
+                    pitEntered = true
+                }
+            } else {
+                val hit = pitExitLine?.let { RaceGeometry.crossing(prev, point, it) }
+                val started = pitLaneStartedMs
+                if (hit != null && started != null && hit > started) {
+                    pitLaneLastMs = hit - started
+                    pitLaneStartedMs = null
+                    pitLaneActive = false
+                    pitExited = true
+                }
+            }
+        }
+
+        val pitLaneElapsed = if (pitLaneActive) {
+            (point.ts - (pitLaneStartedMs ?: point.ts)).coerceAtLeast(0L)
+        } else 0L
+
         val lapElapsed = engine.currentLapStartMs?.let { (point.ts - it).coerceAtLeast(0) } ?: 0L
         val activeLapNo = engine.currentLapStartMs?.let { engine.laps.size + 1 }
         writer?.writeGps(point, activeLapNo, gX, gY, gZ, gTotal, obd, ev)
@@ -392,13 +433,22 @@ object RaceRuntime {
             bestLapMs = engine.bestLapMs,
             deltaMs = prediction?.deltaMs,
             predictedLapMs = prediction?.projectedMs,
+            currentMiniSector = miniSector?.currentIndex ?: 0,
+            miniSectorDeltaMs = miniSector?.currentDeltaMs,
+            miniSectorDeltasMs = miniSector?.deltasMs ?: _state.value.miniSectorDeltasMs,
             laps = engine.laps.toList(),
             armed = _state.value.sessionActive && engine.startLine != null && engine.currentLapStartMs == null,
             startConfigured = engine.startLine != null,
             sectorCount = engine.sectors.size,
             gpsSource = point.source,
             trackPreview = preview.toList(),
+            referenceTrack = engine.bestLapTrace?.map { it.first } ?: _state.value.referenceTrack,
+            pitLaneActive = pitLaneActive,
+            pitLaneElapsedMs = pitLaneElapsed,
+            pitLaneLastMs = pitLaneLastMs,
             lastMessage = when {
+                pitEntered -> "PIT IN • отсчёт pit lane начат"
+                pitExited -> "PIT OUT • pit lane " + formatLap(pitLaneLastMs ?: 0L)
                 update.lapCompleted != null -> "Круг ${update.lapCompleted.no}: ${formatLap(update.lapCompleted.timeMs)}"
                 update.sectorCompleted != null -> "S${update.sectorCompleted.first}: ${formatLap(update.sectorCompleted.second)}"
                 update.lapStarted -> "Круг начат"
