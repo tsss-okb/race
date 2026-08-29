@@ -14,6 +14,7 @@ data class InternetPitRelaySettings(
 }
 
 object InternetPitRelaySettingsRepository {
+    const val DEFAULT_BASE_URL = "https://racelab-pit-relay.glacier-boursin.workers.dev"
     private const val PREFS = "racelab_pit_internet"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BASE_URL = "base_url"
@@ -27,9 +28,15 @@ object InternetPitRelaySettingsRepository {
         if (!prefs.contains(KEY_ROOM) || !prefs.contains(KEY_SECRET)) {
             prefs.edit().putString(KEY_ROOM, room).putString(KEY_SECRET, key).apply()
         }
+        val storedBaseUrl = prefs.getString(KEY_BASE_URL, null)?.trim()?.trimEnd('/')
+        val baseUrl = storedBaseUrl?.takeIf { it.startsWith("https://") } ?: DEFAULT_BASE_URL
+        val enabled = if (prefs.contains(KEY_ENABLED)) prefs.getBoolean(KEY_ENABLED, true) else true
+        if (!prefs.contains(KEY_BASE_URL) || storedBaseUrl.isNullOrBlank()) {
+            prefs.edit().putString(KEY_BASE_URL, baseUrl).apply()
+        }
         return InternetPitRelaySettings(
-            enabled = prefs.getBoolean(KEY_ENABLED, false),
-            baseUrl = prefs.getString(KEY_BASE_URL, "")?.trim()?.trimEnd('/') ?: "",
+            enabled = enabled,
+            baseUrl = baseUrl,
             room = room,
             key = key
         )
