@@ -16,6 +16,7 @@ import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.effects.OverlayEffect
+import androidx.camera.effects.Frame
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
@@ -26,12 +27,13 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
+import androidx.core.util.Consumer
+import androidx.core.util.Function
 import androidx.lifecycle.LifecycleOwner
 import ru.racelab.phone.data.RaceRuntime
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.function.Consumer
 
 class BackgroundCameraRecorder(
     private val context: Context,
@@ -206,9 +208,9 @@ class BackgroundCameraRecorder(
             CameraEffect.VIDEO_CAPTURE,
             0,
             handler,
-            Consumer { RaceRuntime.markMessage("HUD effect: " + (it.message ?: "error")) }
+            Consumer<Throwable> { throwable -> RaceRuntime.markMessage("HUD effect: " + (throwable.message ?: "error")) }
         )
-        overlay.setOnDrawListener { frame ->
+        overlay.setOnDrawListener(Function<Frame, Boolean> { frame ->
             val canvas = frame.overlayCanvas
             canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
             val st = RaceRuntime.state.value
@@ -231,7 +233,7 @@ class BackgroundCameraRecorder(
             y += base * .65f
             canvas.drawText("RPM " + (st.obd.rpm?.toInt()?.toString() ?: "—") + "  THR " + (st.obd.throttlePct?.let { "%.0f%%".format(it) } ?: "—"), x, y, small)
             true
-        }
+        })
         return overlay
     }
 
