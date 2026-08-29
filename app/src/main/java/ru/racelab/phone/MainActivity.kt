@@ -125,6 +125,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        PitLaneServer.start()
+        PitLaneServer.refreshStatus()
         phoneSensors.start()
         phoneGnss.start()
     }
