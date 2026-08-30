@@ -146,18 +146,18 @@ fun RaceLabApp(
 @Composable
 private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
     Surface(
-        color = Color(0xFF0A0C0E),
+        color = Color(0xFF080A0C),
         tonalElevation = 0.dp,
-        border = BorderStroke(1.dp, Color(0xFF24282B))
+        border = BorderStroke(1.dp, Color(0xFF202326))
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                .navigationBarsPadding()
-                .height(48.dp)
-                .padding(horizontal = 4.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                .height(22.dp)
+                .padding(horizontal = 3.dp, vertical = 1.dp),
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Tab.entries.forEach { item ->
                 val active = selected == item
@@ -171,32 +171,16 @@ private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
                 Surface(
                     onClick = { onSelect(item) },
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(4.dp),
                     color = if (active) Color(0xFF171A1D) else Color.Transparent
                 ) {
-                    Column(
-                        Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             glyph,
                             color = if (active) Amber else Muted,
-                            fontSize = 14.sp,
+                            fontSize = 10.sp,
+                            lineHeight = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        Text(
-                            when (item) {
-                                Tab.DASHBOARD -> "Дашборд"
-                                Tab.LAPS -> "Круги"
-                                Tab.ANALYSIS -> "Анализ"
-                                Tab.DATA -> "Данные"
-                                Tab.SETTINGS -> "Настройки"
-                            },
-                            color = if (active) Amber else Color(0xFFC5C8CA),
-                            fontSize = 7.sp,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                             maxLines = 1
                         )
                     }
