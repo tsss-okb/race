@@ -10,6 +10,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,7 +25,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.AnnotatedString
@@ -89,6 +94,7 @@ fun RaceLabApp(
 ) {
     val state by RaceRuntime.state.collectAsStateWithLifecycle()
     var tab by remember { mutableStateOf(Tab.DASHBOARD) }
+    val swipeThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
 
     LaunchedEffect(state.remoteActionSeq) {
         when (state.remoteAction) {
@@ -123,7 +129,40 @@ fun RaceLabApp(
                 CompactTabBar(selected = tab, onSelect = { tab = it })
             }
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .pointerInput(tab, swipeThresholdPx) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val start = down.position
+                            var end = start
+                            var pressed = true
+
+                            while (pressed) {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                end = change.position
+                                pressed = change.pressed
+                            }
+
+                            val dx = end.x - start.x
+                            val dy = end.y - start.y
+                            if (kotlin.math.abs(dx) >= swipeThresholdPx &&
+                                kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.25f
+                            ) {
+                                val index = Tab.entries.indexOf(tab)
+                                val nextIndex = if (dx < 0f) {
+                                    (index + 1).coerceAtMost(Tab.entries.lastIndex)
+                                } else {
+                                    (index - 1).coerceAtLeast(0)
+                                }
+                                if (nextIndex != index) tab = Tab.entries[nextIndex]
+                            }
+                        }
+                    }
+            ) {
                 when (tab) {
                     Tab.DASHBOARD -> GT3DashboardScreen(state, onStartSession, onStopSession)
                     Tab.LAPS -> SessionsScreen()
