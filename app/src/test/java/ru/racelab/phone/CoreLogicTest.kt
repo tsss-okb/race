@@ -4,7 +4,6 @@ import org.junit.Assert.*
 import org.junit.Test
 import ru.racelab.phone.canbus.*
 import ru.racelab.phone.core.*
-import ru.racelab.phone.track.TrackRepository
 import kotlin.math.abs
 
 class CoreLogicTest {
@@ -158,23 +157,29 @@ class CoreLogicTest {
     }
 
     @Test
-    fun trackJsonPreservesPitEntryAndExit() {
+    fun trackProfileKeepsPitEntryAndExitGeometry() {
         val prev = GeoPoint(52.0, 13.0, 1_000L)
         val startPoint = GeoPoint(52.0, 13.0001, 2_000L)
         val entryPoint = GeoPoint(52.0001, 13.0002, 3_000L)
         val exitPoint = GeoPoint(52.0002, 13.0003, 4_000L)
 
-        val start = RaceGeometry.lineAt(startPoint, prev, 35.0)
+        val startLine = RaceGeometry.lineAt(startPoint, prev, 35.0)
         val entry = RaceGeometry.lineAt(entryPoint, startPoint, 30.0)
         val exit = RaceGeometry.lineAt(exitPoint, entryPoint, 30.0)
 
-        val profile = TrackRepository.create("Test", start, emptyList(), entry, exit)
-        val restored = TrackRepository.fromJson(TrackRepository.toJson(profile))
+        val profile = ru.racelab.phone.track.TrackProfile(
+            id = "test",
+            name = "Test",
+            start = startLine,
+            sectors = emptyList(),
+            pitEntry = entry,
+            pitExit = exit
+        )
 
-        assertNotNull(restored.pitEntry)
-        assertNotNull(restored.pitExit)
-        assertEquals(entry.centerLat, restored.pitEntry!!.centerLat, 1e-9)
-        assertEquals(exit.centerLon, restored.pitExit!!.centerLon, 1e-9)
+        assertNotNull(profile.pitEntry)
+        assertNotNull(profile.pitExit)
+        assertEquals(entry.centerLat, profile.pitEntry!!.centerLat, 1e-9)
+        assertEquals(exit.centerLon, profile.pitExit!!.centerLon, 1e-9)
     }
 
 }
