@@ -63,13 +63,209 @@ fun GT3DashboardScreen(
         }
     }
 
-    GT3LandscapeDashboard(
-        state = state,
-        battery = battery,
-        pitElapsedMs = if (state.pitTimerActive) RaceRuntime.pitElapsedMs(pitTick) else (state.pitLastMs ?: 0L),
-        onStart = onStart,
-        onStop = onStop
-    )
+    val pitElapsedMs = if (state.pitTimerActive) {
+        RaceRuntime.pitElapsedMs(pitTick)
+    } else {
+        state.pitLastMs ?: 0L
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val portrait = maxHeight > maxWidth
+        if (portrait) {
+            GT3PortraitDashboard(
+                state = state,
+                battery = battery,
+                pitElapsedMs = pitElapsedMs,
+                onStart = onStart,
+                onStop = onStop
+            )
+        } else {
+            GT3LandscapeDashboard(
+                state = state,
+                battery = battery,
+                pitElapsedMs = pitElapsedMs,
+                onStart = onStart,
+                onStop = onStop
+            )
+        }
+    }
+}
+
+@Composable
+private fun GT3PortraitDashboard(
+    state: AppState,
+    battery: Int,
+    pitElapsedMs: Long,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(GtBg)
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        GT3LandscapeRpmStrip(
+            rpm = state.obd.rpm,
+            modifier = Modifier.fillMaxWidth().height(46.dp)
+        )
+
+        Row(
+            Modifier.fillMaxWidth().height(57.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GT3LandscapeLapCard(
+                "ТЕКУЩИЙ",
+                gtFmt(state.lapElapsedMs),
+                Modifier.weight(1f),
+                GtWhite,
+                GtYellow
+            )
+            GT3LandscapeLapCard(
+                "ЛУЧШИЙ",
+                gtFmt(state.bestLapMs),
+                Modifier.weight(1f),
+                GtWhite,
+                Color.Transparent
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().height(53.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GT3LandscapeLapCard(
+                "ДЕЛЬТА",
+                gtDelta(state.deltaMs),
+                Modifier.weight(.9f),
+                gtDeltaColor(state.deltaMs),
+                Color.Transparent
+            )
+            GT3LandscapeLapCard(
+                "ПРОГНОЗ",
+                gtFmt(state.predictedLapMs),
+                Modifier.weight(1.15f),
+                when {
+                    state.predictedLapMs == null -> GtMuted
+                    state.bestLapMs != null && state.predictedLapMs <= state.bestLapMs -> GtGreen
+                    else -> GtWhite
+                },
+                Color.Transparent
+            )
+            GT3LandscapeLapCard(
+                "КРУГ",
+                (state.laps.size + if (state.lapElapsedMs > 0L) 1 else 0).toString(),
+                Modifier.weight(.55f),
+                if (state.sessionActive || state.armed) GtYellow else GtWhite,
+                Color.Transparent
+            )
+        }
+
+        GT3MiniSectorStrip(
+            state = state,
+            modifier = Modifier.fillMaxWidth().height(27.dp)
+        )
+
+        GT3LandscapeStatus(
+            state = state,
+            battery = battery,
+            modifier = Modifier.fillMaxWidth().height(46.dp)
+        )
+
+        Row(
+            Modifier.fillMaxWidth().height(124.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GT3LandscapeSpeed(
+                speedKmh = state.speedKmh,
+                modifier = Modifier.weight(.95f).fillMaxHeight()
+            )
+            GT3LandscapePit(
+                state = state,
+                elapsedMs = pitElapsedMs,
+                modifier = Modifier.weight(1.15f).fillMaxHeight()
+            )
+        }
+
+        GT3TrackMap(
+            state = state,
+            modifier = Modifier.fillMaxWidth().weight(1f)
+        )
+
+        Row(
+            Modifier.fillMaxWidth().height(66.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GT3ReadableMetric(
+                title = "МАСЛО",
+                value = state.obd.oilTempC?.let { "%.0f".format(it) } ?: "—",
+                unit = "°C",
+                accent = temperatureColor(state.obd.oilTempC),
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            GT3ReadableMetric(
+                title = "ОЖ",
+                value = state.obd.coolantC?.let { "%.0f".format(it) } ?: "—",
+                unit = "°C",
+                accent = temperatureColor(state.obd.coolantC),
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            GT3ReadableMetric(
+                title = "LAT G",
+                value = "%+.2f".format(state.lateralG),
+                unit = "g",
+                accent = GtWhite,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+            GT3ReadableMetric(
+                title = "LONG G",
+                value = "%+.2f".format(state.longitudinalG),
+                unit = "g",
+                accent = GtWhite,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().height(38.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            GT3RoundAction(
+                label = if (state.pitTimerActive) "PIT ■" else "PIT ▶",
+                onClick = { RaceRuntime.togglePitTimer("SCREEN") },
+                modifier = Modifier.width(68.dp).fillMaxHeight(),
+                active = state.pitTimerActive
+            )
+            Button(
+                onClick = if (state.sessionActive) onStop else onStart,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF101214),
+                    contentColor = if (state.sessionActive) GtRed else GtYellow
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (state.sessionActive) GtRed.copy(alpha = .70f) else GtYellow.copy(alpha = .70f)
+                ),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    if (state.sessionActive) "■ СТОП" else if (state.startConfigured) "● ARM / СТАРТ" else "● СТАРТ",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 9.sp,
+                    maxLines = 1
+                )
+            }
+            GT3RoundAction(
+                label = "START",
+                onClick = { RaceRuntime.setStartLineHere() },
+                modifier = Modifier.width(64.dp).fillMaxHeight()
+            )
+        }
+    }
 }
 
 @Composable
