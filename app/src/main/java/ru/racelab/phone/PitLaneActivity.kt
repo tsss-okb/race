@@ -264,82 +264,169 @@ private fun PitTeamDashboard(
         )
     }
 
-    Column(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(TeamBg)
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(9.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
-        TeamHeader(
-            live = live,
-            receiveAgeMs = receiveAge,
-            transport = snapshot.transport,
-            rttMs = snapshot.rttMs,
-            track = snapshot.track,
-            targetSeconds = targetSeconds,
-            onTarget = { showTargetDialog = true },
-            onSettings = onSettings
-        )
+        val portrait = maxHeight > maxWidth
 
-        Row(
-            Modifier.fillMaxWidth().weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(7.dp)
-        ) {
-            TeamPitCard(
-                active = snapshot.pitActive,
-                pitMs = pitMs,
-                remainingMs = remainingMs,
-                targetSeconds = targetSeconds,
-                warningActive = warningActive,
-                flashOn = flashOn,
-                targetReached = targetReached,
-                trigger = snapshot.pitTrigger,
-                modifier = Modifier.weight(1.55f).fillMaxHeight()
-            )
-
+        if (portrait) {
             Column(
-                Modifier.weight(.8f).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(7.dp)
+                Modifier.fillMaxSize().padding(7.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                TeamMetric("LAST", format100(snapshot.pitLastMs), TeamWhite, Modifier.weight(1f))
-                TeamMetric("BEST", format100(snapshot.pitBestMs), TeamGreen, Modifier.weight(1f))
-            }
+                TeamHeader(
+                    live = live,
+                    receiveAgeMs = receiveAge,
+                    transport = snapshot.transport,
+                    rttMs = snapshot.rttMs,
+                    track = snapshot.track,
+                    targetSeconds = targetSeconds,
+                    onTarget = { showTargetDialog = true },
+                    onSettings = onSettings
+                )
 
-            Column(
-                Modifier.weight(.72f).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(7.dp)
-            ) {
-                TeamMetric("PIT #", snapshot.pitCount.toString(), TeamYellow, Modifier.weight(1f))
-                TeamMetric("SPEED", "${snapshot.speedKmh.toInt()} км/ч", TeamWhite, Modifier.weight(1f))
-            }
-        }
+                TeamPitCard(
+                    active = snapshot.pitActive,
+                    pitMs = pitMs,
+                    remainingMs = remainingMs,
+                    targetSeconds = targetSeconds,
+                    warningActive = warningActive,
+                    flashOn = flashOn,
+                    targetReached = targetReached,
+                    trigger = snapshot.pitTrigger,
+                    modifier = Modifier.fillMaxWidth().weight(1.55f)
+                )
 
-        Row(
-            Modifier.fillMaxWidth().height(72.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp)
-        ) {
-            TeamBottomMetric("CURRENT LAP", format100(snapshot.lapCurrentMs), Modifier.weight(1f))
-            TeamBottomMetric("BEST LAP", format100(snapshot.lapBestMs), Modifier.weight(1f))
-            TeamBottomMetric(
-                "DELTA",
-                formatDelta100(snapshot.deltaMs),
-                Modifier.weight(.8f),
-                valueColor = when {
-                    snapshot.deltaMs == null -> TeamWhite
-                    snapshot.deltaMs!! <= 0 -> TeamGreen
-                    else -> TeamRed
+                Row(
+                    Modifier.fillMaxWidth().height(92.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TeamMetric("LAST", format100(snapshot.pitLastMs), TeamWhite, Modifier.weight(1f))
+                    TeamMetric("BEST", format100(snapshot.pitBestMs), TeamGreen, Modifier.weight(1f))
                 }
-            )
-            TeamBottomMetric("GPS", "%.1f Hz · S%d".format(snapshot.gpsHz, snapshot.satellites), Modifier.weight(.95f))
-            TeamBottomMetric(
-                "SIGNAL RTT",
-                snapshot.rttMs?.let { "${it} ms" } ?: if (live) snapshot.transport else "—",
-                Modifier.weight(.9f),
-                valueColor = if (snapshot.transport == "WEBSOCKET" && snapshot.rttMs != null) TeamGreen
-                    else if (live) TeamYellow else TeamRed
-            )
+
+                Row(
+                    Modifier.fillMaxWidth().height(84.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TeamMetric("PIT #", snapshot.pitCount.toString(), TeamYellow, Modifier.weight(1f))
+                    TeamMetric("SPEED", "${snapshot.speedKmh.toInt()} км/ч", TeamWhite, Modifier.weight(1f))
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().height(66.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TeamBottomMetric("CURRENT LAP", format100(snapshot.lapCurrentMs), Modifier.weight(1f))
+                    TeamBottomMetric("BEST LAP", format100(snapshot.lapBestMs), Modifier.weight(1f))
+                    TeamBottomMetric(
+                        "DELTA",
+                        formatDelta100(snapshot.deltaMs),
+                        Modifier.weight(.82f),
+                        valueColor = when {
+                            snapshot.deltaMs == null -> TeamWhite
+                            snapshot.deltaMs!! <= 0 -> TeamGreen
+                            else -> TeamRed
+                        }
+                    )
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().height(62.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TeamBottomMetric(
+                        "GPS",
+                        "%.1f Hz · S%d".format(snapshot.gpsHz, snapshot.satellites),
+                        Modifier.weight(1f)
+                    )
+                    TeamBottomMetric(
+                        "SIGNAL RTT",
+                        snapshot.rttMs?.let { "${it} ms" } ?: if (live) snapshot.transport else "—",
+                        Modifier.weight(1f),
+                        valueColor = if (snapshot.transport == "WEBSOCKET" && snapshot.rttMs != null) TeamGreen
+                            else if (live) TeamYellow else TeamRed
+                    )
+                }
+            }
+        } else {
+            Column(
+                Modifier.fillMaxSize().padding(9.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                TeamHeader(
+                    live = live,
+                    receiveAgeMs = receiveAge,
+                    transport = snapshot.transport,
+                    rttMs = snapshot.rttMs,
+                    track = snapshot.track,
+                    targetSeconds = targetSeconds,
+                    onTarget = { showTargetDialog = true },
+                    onSettings = onSettings
+                )
+
+                Row(
+                    Modifier.fillMaxWidth().weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    TeamPitCard(
+                        active = snapshot.pitActive,
+                        pitMs = pitMs,
+                        remainingMs = remainingMs,
+                        targetSeconds = targetSeconds,
+                        warningActive = warningActive,
+                        flashOn = flashOn,
+                        targetReached = targetReached,
+                        trigger = snapshot.pitTrigger,
+                        modifier = Modifier.weight(1.55f).fillMaxHeight()
+                    )
+
+                    Column(
+                        Modifier.weight(.8f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        TeamMetric("LAST", format100(snapshot.pitLastMs), TeamWhite, Modifier.weight(1f))
+                        TeamMetric("BEST", format100(snapshot.pitBestMs), TeamGreen, Modifier.weight(1f))
+                    }
+
+                    Column(
+                        Modifier.weight(.72f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        TeamMetric("PIT #", snapshot.pitCount.toString(), TeamYellow, Modifier.weight(1f))
+                        TeamMetric("SPEED", "${snapshot.speedKmh.toInt()} км/ч", TeamWhite, Modifier.weight(1f))
+                    }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().height(72.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    TeamBottomMetric("CURRENT LAP", format100(snapshot.lapCurrentMs), Modifier.weight(1f))
+                    TeamBottomMetric("BEST LAP", format100(snapshot.lapBestMs), Modifier.weight(1f))
+                    TeamBottomMetric(
+                        "DELTA",
+                        formatDelta100(snapshot.deltaMs),
+                        Modifier.weight(.8f),
+                        valueColor = when {
+                            snapshot.deltaMs == null -> TeamWhite
+                            snapshot.deltaMs!! <= 0 -> TeamGreen
+                            else -> TeamRed
+                        }
+                    )
+                    TeamBottomMetric("GPS", "%.1f Hz · S%d".format(snapshot.gpsHz, snapshot.satellites), Modifier.weight(.95f))
+                    TeamBottomMetric(
+                        "SIGNAL RTT",
+                        snapshot.rttMs?.let { "${it} ms" } ?: if (live) snapshot.transport else "—",
+                        Modifier.weight(.9f),
+                        valueColor = if (snapshot.transport == "WEBSOCKET" && snapshot.rttMs != null) TeamGreen
+                            else if (live) TeamYellow else TeamRed
+                    )
+                }
+            }
         }
     }
 }
