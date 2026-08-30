@@ -126,8 +126,12 @@ object TrackRepository {
             name = o.optString("name", "Импортированная трасса"),
             start = lineFromJson(o.getJSONObject("start")),
             sectors = sectors,
-            pitEntry = o.optJSONObject("pitEntry")?.let(::lineFromJson),
-            pitExit = o.optJSONObject("pitExit")?.let(::lineFromJson),
+            pitEntry = if (o.has("pitEntry") && !o.isNull("pitEntry")) {
+                lineFromJson(o.getJSONObject("pitEntry"))
+            } else null,
+            pitExit = if (o.has("pitExit") && !o.isNull("pitExit")) {
+                lineFromJson(o.getJSONObject("pitExit"))
+            } else null,
             createdAtMs = o.optLong("createdAtMs", System.currentTimeMillis())
         )
     }
