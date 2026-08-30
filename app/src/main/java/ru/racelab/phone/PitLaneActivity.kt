@@ -442,58 +442,125 @@ private fun TeamHeader(
     onTarget: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(54.dp),
-        color = TeamPanel,
-        border = BorderStroke(1.dp, TeamBorder),
-        shape = RoundedCornerShape(13.dp)
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = 13.dp),
-            verticalAlignment = Alignment.CenterVertically
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 600.dp
+
+        Surface(
+            modifier = Modifier.fillMaxWidth().height(if (compact) 72.dp else 54.dp),
+            color = TeamPanel,
+            border = BorderStroke(1.dp, TeamBorder),
+            shape = RoundedCornerShape(13.dp)
         ) {
-            Text("RACELAB · PIT LANE TEAM", color = TeamWhite, fontSize = 17.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.width(12.dp))
-            Text(
-                track,
-                color = TeamMuted,
-                fontSize = 10.sp,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                when {
-                    !live -> "● НЕТ СВЯЗИ"
-                    transport == "WEBSOCKET" -> "● WS LIVE"
-                    else -> "● HTTP FALLBACK"
-                },
-                color = when {
-                    !live -> TeamRed
-                    transport == "WEBSOCKET" -> TeamGreen
-                    else -> TeamYellow
-                },
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Black
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                rttMs?.let { "RTT ${it}ms" }
-                    ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
-                color = TeamMuted,
-                fontSize = 8.sp
-            )
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(
-                onClick = onTarget,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(34.dp)
-            ) {
-                Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.width(6.dp))
-            TextButton(onClick = onSettings) {
-                Text("⚙", color = TeamMuted, fontSize = 16.sp)
+            if (compact) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "RACELAB · PIT TEAM",
+                            color = TeamWhite,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            track,
+                            color = TeamMuted,
+                            fontSize = 9.sp,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        TextButton(
+                            onClick = onSettings,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Text("⚙", color = TeamMuted, fontSize = 15.sp)
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when {
+                                !live -> "● НЕТ СВЯЗИ"
+                                transport == "WEBSOCKET" -> "● WS LIVE"
+                                else -> "● HTTP"
+                            },
+                            color = when {
+                                !live -> TeamRed
+                                transport == "WEBSOCKET" -> TeamGreen
+                                else -> TeamYellow
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            rttMs?.let { "RTT ${it}ms" }
+                                ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
+                            color = TeamMuted,
+                            fontSize = 8.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(
+                            onClick = onTarget,
+                            contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("RACELAB · PIT LANE TEAM", color = TeamWhite, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        track,
+                        color = TeamMuted,
+                        fontSize = 10.sp,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        when {
+                            !live -> "● НЕТ СВЯЗИ"
+                            transport == "WEBSOCKET" -> "● WS LIVE"
+                            else -> "● HTTP FALLBACK"
+                        },
+                        color = when {
+                            !live -> TeamRed
+                            transport == "WEBSOCKET" -> TeamGreen
+                            else -> TeamYellow
+                        },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        rttMs?.let { "RTT ${it}ms" }
+                            ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
+                        color = TeamMuted,
+                        fontSize = 8.sp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onTarget,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    TextButton(onClick = onSettings) {
+                        Text("⚙", color = TeamMuted, fontSize = 16.sp)
+                    }
+                }
             }
         }
     }
