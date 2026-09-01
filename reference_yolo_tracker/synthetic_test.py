@@ -71,7 +71,20 @@ def main():
         if bbox is not None:
             iou = bbox_iou(bbox, gt)
             ious.append(iou)
-            if bbox[0] > 430:
+            bx, by, bw, bh = bbox
+            bc_x = bx + bw / 2.0
+            bc_y = by + bh / 2.0
+
+            gx, gy, gw, gh = gt
+            gt_x = gx + gw / 2.0
+            gt_y = gy + gh / 2.0
+
+            distractor_x = 500 + 15 * math.sin(frame * .1) + 30
+            distractor_y = 80 + 22.5
+
+            d_gt = math.hypot(bc_x - gt_x, bc_y - gt_y)
+            d_dist = math.hypot(bc_x - distractor_x, bc_y - distractor_y)
+            if d_dist < d_gt:
                 wrong_jumps += 1
 
     mean_iou = sum(ious) / max(1, len(ious))
