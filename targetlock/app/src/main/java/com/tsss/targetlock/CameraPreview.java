@@ -460,19 +460,31 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
             // Detector is sparse: fast during SEARCH, slower while tracker is locked.
             try{
-                detector.maybeSubmit(trackerPixels,TRACK_W,TRACK_H,tracker.locked?850:260);
+                long yoloIntervalMs;
+                if(tracker.reacquiring) yoloIntervalMs=140;
+                else if(tracker.coasting) yoloIntervalMs=200;
+                else if(tracker.locked) yoloIntervalMs=420;
+                else yoloIntervalMs=240;
+
+                detector.maybeSubmit(trackerPixels,TRACK_W,TRACK_H,yoloIntervalMs);
 
                 long serial=detector.resultSerial;
-                if(tracker.locked&&serial!=0&&serial!=lastAppliedYoloSerial){
+                if((tracker.locked||tracker.coasting||tracker.reacquiring)&&
+                        serial!=0&&serial!=lastAppliedYoloSerial){
                     YoloDetector.Detection best=null;
-                    float bestD=Float.MAX_VALUE;
+                    float bestScore=Float.MAX_VALUE;
+
                     for(YoloDetector.Detection d:detector.getDetections()){
-                        if(tracker.targetClass>=0&&d.classId!=tracker.targetClass)continue;
-                        float dx=d.cx()-tracker.predX,dy=d.cy()-tracker.predY;
-                        float dd=dx*dx+dy*dy;
-                        if(dd<bestD){bestD=dd;best=d;}
+                        float s=tracker.associationScore(d);
+                        if(s<bestScore){
+                            bestScore=s;
+                            best=d;
+                        }
                     }
-                    if(best!=null&&bestD<.10f)tracker.onYoloDetection(best);
+
+                    if(best!=null&&bestScore<Float.MAX_VALUE){
+                        tracker.onYoloDetection(best);
+                    }
                     lastAppliedYoloSerial=serial;
                 }
             }catch(Throwable t){
