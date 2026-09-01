@@ -42,7 +42,7 @@ public class HudView extends View {
 
         c.drawText(String.format("FLOW %.0f FPS  Q %.0f%%  dX%+.3f dY%+.3f  pts %d",
                 t.flowFps,t.flowQuality*100f,t.flowDx,t.flowDy,
-                Math.max(0,(int)(t.flowQuality*28))),24,118,p);
+                t.flowPoints),24,118,p);
 
         c.drawText(String.format("FUSION IMU %.0f%% / FLOW %.0f%%   CAM dX%+.3f dY%+.3f",
                 t.imuWeight*100f,t.flowWeight*100f,t.cameraDx,t.cameraDy),24,146,p);
