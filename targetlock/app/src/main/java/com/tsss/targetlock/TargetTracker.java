@@ -18,6 +18,8 @@ public class TargetTracker {
     public volatile int lostFrames=0,targetClass=-1,yoloCorrections=0;
     public volatile int imuCorrections=0,flowCorrections=0;
     public volatile String targetName="manual";
+    public volatile int tapCount=0;
+    public volatile String acquireStatus="IDLE";
 
     private ImuCompensator imu;
 
@@ -39,17 +41,41 @@ public class TargetTracker {
     public synchronized void setImu(ImuCompensator compensator){imu=compensator;}
 
     public synchronized void requestLock(float nx,float ny){
-        pendingX=clamp(nx);pendingY=clamp(ny);
-        acquiring=true;locked=false;confidence=0;lostFrames=0;
+        pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
+        acquiring=true;locked=false;confidence=.15f;lostFrames=0;
         vx=vy=0;hasTemplate=false;
         renderX=predX=pendingX;renderY=predY=pendingY;
-        targetName="manual";
+        targetName="manual";tapCount++;acquireStatus="TAP";
         if(imu!=null)imu.resetMotion();
+    }
+
+    public synchronized boolean seedFromArgb(int[] pixels,int w,int h,float nx,float ny){
+        if(pixels==null||pixels.length<w*h||w<80||h<60)return false;
+        ensureBuffers(w*h);
+        toGray(pixels,gray,w*h);
+        int cx=Math.round(clamp(nx,.06f,.94f)*(w-1));
+        int cy=Math.round(clamp(ny,.10f,.90f)*(h-1));
+        cx=Math.max(HALF_SPAN+1,Math.min(w-HALF_SPAN-2,cx));
+        cy=Math.max(HALF_SPAN+1,Math.min(h-HALF_SPAN-2,cy));
+        if(!extractTemplate(gray,w,h,cx,cy,template)){
+            acquireStatus="SEED FAIL";
+            return false;
+        }
+        x=predX=renderX=cx/(float)(w-1);
+        y=predY=renderY=cy/(float)(h-1);
+        pendingX=pendingY=-1;
+        vx=vy=0;confidence=.88f;lostFrames=0;
+        locked=true;acquiring=false;hasTemplate=true;
+        lastNs=System.nanoTime();
+        acquireStatus="LOCKED";
+        copyCurrentToPrev(w*h);
+        if(imu!=null)imu.resetMotion();
+        return true;
     }
 
     public synchronized void clear(){
         locked=false;acquiring=false;hasTemplate=false;
-        confidence=0;lostFrames=0;vx=vy=0;
+        confidence=0;lostFrames=0;vx=vy=0;acquireStatus="IDLE";
         pendingX=pendingY=-1;
         renderX=predX=.5f;renderY=predY=.5f;
         if(imu!=null)imu.resetMotion();
@@ -101,6 +127,8 @@ public class TargetTracker {
             synchronized(this){px=pendingX;py=pendingY;}
             if(px>=0&&py>=0){
                 int cx=Math.round(px*(w-1)),cy=Math.round(py*(h-1));
+                cx=Math.max(HALF_SPAN+1,Math.min(w-HALF_SPAN-2,cx));
+                cy=Math.max(HALF_SPAN+1,Math.min(h-HALF_SPAN-2,cy));
                 if(extractTemplate(gray,w,h,cx,cy,template)){
                     synchronized(this){
                         x=predX=renderX=px;
@@ -111,7 +139,10 @@ public class TargetTracker {
                         pendingX=pendingY=-1;lostFrames=0;
                         lastNs=System.nanoTime();
                         if(imu!=null)imu.resetMotion();
+                        acquireStatus="LOCKED";
                     }
+                } else {
+                    acquireStatus="SEED FAIL";
                 }
                 copyCurrentToPrev(w*h);
                 return;
