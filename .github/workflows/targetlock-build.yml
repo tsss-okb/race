@@ -31,6 +31,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TargetLock-v0.7.4-Preview-transform-apk
+          name: TargetLock-v0.8-Tracker-fusion-apk
           path: targetlock/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
