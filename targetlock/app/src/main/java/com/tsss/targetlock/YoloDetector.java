@@ -30,6 +30,7 @@ public class YoloDetector {
     public volatile float detectorFps=0f,latencyMs=0f;
     public volatile String backend="CPU";
     public volatile int detectionCount=0;
+    public volatile long resultSerial=0;
 
     private final Context context;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -97,6 +98,7 @@ public class YoloDetector {
                 interpreter.run(input,output);
                 detections=postprocess();
                 detectionCount=detections.size();
+                resultSerial++;
                 long done=System.nanoTime();
                 latencyMs=(done-t0)/1_000_000f;
                 if(lastDoneNs!=0){
