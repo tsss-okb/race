@@ -59,11 +59,32 @@ public class ImuCompensator implements SensorEventListener {
     public void start(){
         resetMotion();
         beginCalibration();
+
         if(gyro!=null){
-            sm.registerListener(this,gyro,SensorManager.SENSOR_DELAY_FASTEST);
-            active=true;
+            boolean ok=false;
+            try{
+                // Try high-rate first. On Android 12+ this requires HIGH_SAMPLING_RATE_SENSORS.
+                ok=sm.registerListener(this,gyro,SensorManager.SENSOR_DELAY_FASTEST);
+            }catch(SecurityException denied){
+                // Guaranteed-safe fallback: 5000 us = 200 Hz, within the unprivileged Android cap.
+                try{ ok=sm.registerListener(this,gyro,5000); }catch(Throwable ignored){}
+            }catch(Throwable ignored){}
+
+            if(!ok){
+                try{ ok=sm.registerListener(this,gyro,5000); }catch(Throwable ignored){}
+            }
+            if(!ok){
+                try{ ok=sm.registerListener(this,gyro,10000); }catch(Throwable ignored){}
+            }
+            active=ok;
         }
-        if(rotation!=null)sm.registerListener(this,rotation,SensorManager.SENSOR_DELAY_GAME);
+
+        if(rotation!=null){
+            try{ sm.registerListener(this,rotation,10000); }
+            catch(Throwable ignored){
+                try{ sm.registerListener(this,rotation,SensorManager.SENSOR_DELAY_GAME); }catch(Throwable ignored2){}
+            }
+        }
     }
 
     public void stop(){
