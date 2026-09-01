@@ -9,8 +9,9 @@ public class TargetTracker {
     public volatile float x = .5f, y = .5f, predX = .5f, predY = .5f;
     public volatile float vx = 0, vy = 0, box = .075f, confidence = 0;
     public volatile float trackerFps = 0, latencyMs = 0, yoloConfidence = 0;
-    public volatile int lostFrames = 0, targetClass = -1, yoloCorrections = 0;
+    public volatile int lostFrames = 0, targetClass = -1, yoloCorrections = 0, imuCorrections = 0;
     public volatile String targetName = "—";
+    private ImuCompensator imu;
 
     private static final int GRID = 19;
     private static final int HALF_SPAN_PX = 24;
@@ -19,10 +20,24 @@ public class TargetTracker {
     private float pendingX = -1, pendingY = -1;
     private long lastNs = 0, lastFrameNs = 0;
 
+    public synchronized void setImu(ImuCompensator compensator) { imu = compensator; }
+
+    private synchronized void applyImuShift() {
+        if (imu == null) return;
+        float[] d = imu.consumeFrameShift();
+        if (!locked) return;
+        float dx=d[0], dy=d[1];
+        if (Math.abs(dx) < 0.00001f && Math.abs(dy) < 0.00001f) return;
+        x = clamp(x + dx); y = clamp(y + dy);
+        predX = clamp(predX + dx); predY = clamp(predY + dy);
+        imuCorrections++;
+    }
+
     public synchronized void requestLock(float nx, float ny) {
         pendingX = clamp(nx); pendingY = clamp(ny);
         acquiring = true; locked = false; confidence = 0; lostFrames = 0;
         targetClass = -1; targetName = "manual"; yoloConfidence = 0;
+        if (imu != null) imu.reset();
     }
 
     public synchronized void onYoloDetection(YoloDetector.Detection d) {
@@ -56,6 +71,7 @@ public class TargetTracker {
         confidence = 0; lostFrames = 0; vx = vy = 0;
         pendingX = pendingY = -1;
         targetClass = -1; targetName = "—"; yoloConfidence = 0;
+        if (imu != null) imu.reset();
     }
 
     public void processImage(Image image) {
@@ -68,6 +84,7 @@ public class TargetTracker {
             int pixelStride = plane.getPixelStride();
             int w = image.getWidth(), h = image.getHeight();
 
+            applyImuShift();
             long now = System.nanoTime();
             if (lastFrameNs != 0) {
                 float f = 1e9f / Math.max(1, now - lastFrameNs);
@@ -200,6 +217,7 @@ public class TargetTracker {
     }
 
     public synchronized void predictOnly() {
+        applyImuShift();
         if (!locked) return;
         long now = System.nanoTime();
         float dt = lastNs == 0 ? .016f : Math.min(.06f, (now - lastNs) / 1e9f);
