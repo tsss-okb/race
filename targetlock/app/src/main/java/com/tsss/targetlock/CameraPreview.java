@@ -1,11 +1,9 @@
 package com.tsss.targetlock;
 
 import android.content.Context;
-import android.graphics.ImageFormat;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.*;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Range;
@@ -22,16 +20,16 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private CameraCaptureSession session;
     private HandlerThread thread;
     private Handler bg;
-    private ImageReader analysisReader;
     private boolean opening=false;
-    private long lastImageTs=0;
+    private long lastSensorTs=0;
 
     public volatile String status="INIT";
     public volatile String lastError="";
-    public volatile int requestedFps=60;
+    public volatile String cameraId="?";
+    public volatile int requestedFps=30;
     public volatile float cameraFps=0f;
     public volatile boolean highSpeed120Supported=false;
-    public volatile Size analysisSize=new Size(320,180);
+    public volatile Size previewSize=new Size(0,0);
 
     private final TargetTracker tracker;
     private final ImuCompensator imu;
@@ -41,6 +39,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
     public CameraPreview(Context c){
         super(c);
+        setOpaque(false);
         tracker=new TargetTracker();
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
@@ -66,8 +65,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         try{imu.stop();}catch(Throwable ignored){}
         try{if(session!=null)session.close();}catch(Throwable ignored){}
         try{if(camera!=null)camera.close();}catch(Throwable ignored){}
-        try{if(analysisReader!=null)analysisReader.close();}catch(Throwable ignored){}
-        session=null;camera=null;analysisReader=null;opening=false;
+        session=null;camera=null;opening=false;
+        lastSensorTs=0;cameraFps=0;
         if(thread!=null){
             try{thread.quitSafely();}catch(Throwable ignored){}
             thread=null;bg=null;
@@ -84,21 +83,24 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                 thread.start();
                 bg=new Handler(thread.getLooper());
             }
+
             CameraManager m=(CameraManager)getContext().getSystemService(Context.CAMERA_SERVICE);
-            String id=chooseBackCamera(m);
-            CameraCharacteristics ch=m.getCameraCharacteristics(id);
+            cameraId=chooseBackCamera(m);
+            CameraCharacteristics ch=m.getCameraCharacteristics(cameraId);
             configureFov(ch);
-            inspectHighSpeed(ch);
+            inspectCapabilities(ch);
+            previewSize=choosePreviewSize(ch,getWidth(),getHeight());
+            requestedFps=chooseRequestedFps(ch);
 
             if(getContext().checkSelfPermission(android.Manifest.permission.CAMERA)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
                 opening=false;status="NO CAMERA PERMISSION";return;
             }
 
-            status="OPEN CAMERA";
-            m.openCamera(id,new CameraDevice.StateCallback(){
+            status="OPEN CAMERA "+cameraId;
+            m.openCamera(cameraId,new CameraDevice.StateCallback(){
                 @Override public void onOpened(CameraDevice c){
                     camera=c;opening=false;
-                    createSafeSession(ch);
+                    createPreviewOnlySession(ch);
                 }
                 @Override public void onDisconnected(CameraDevice c){
                     try{c.close();}catch(Throwable ignored){}
@@ -111,17 +113,94 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                     status="CAMERA ERROR";
                 }
             },bg);
-        }catch(Throwable t){opening=false;fail("open",t);}
+        }catch(Throwable t){
+            opening=false;
+            fail("open",t);
+        }
     }
 
     private String chooseBackCamera(CameraManager m)throws CameraAccessException{
         String[] ids=m.getCameraIdList();
         if(ids.length==0)throw new IllegalStateException("No camera IDs");
+        String fallback=ids[0];
         for(String id:ids){
-            Integer f=m.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING);
-            if(f!=null&&f==CameraCharacteristics.LENS_FACING_BACK)return id;
+            CameraCharacteristics ch=m.getCameraCharacteristics(id);
+            Integer f=ch.get(CameraCharacteristics.LENS_FACING);
+            Integer level=ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+            if(f!=null&&f==CameraCharacteristics.LENS_FACING_BACK){
+                // Prefer a logical/main back camera over very limited auxiliary IDs.
+                if(level==null||level!=CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY)return id;
+                fallback=id;
+            }
         }
-        return ids[0];
+        return fallback;
+    }
+
+    private Size choosePreviewSize(CameraCharacteristics ch,int vw,int vh){
+        try{
+            StreamConfigurationMap map=ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size[] sizes=map==null?null:map.getOutputSizes(SurfaceTexture.class);
+            if(sizes==null||sizes.length==0)return new Size(1280,720);
+
+            float targetRatio=vw>0&&vh>0?vw/(float)vh:16f/9f;
+            Size best=null;
+            double bestScore=Double.MAX_VALUE;
+
+            for(Size s:sizes){
+                int sw=s.getWidth(),sh=s.getHeight();
+                if(sw<640||sh<360)continue;
+                // Avoid giant 4K preview buffers in this diagnostic build.
+                if(sw>1920||sh>1080)continue;
+                float ratio=sw/(float)sh;
+                double ratioPenalty=Math.abs(ratio-targetRatio)*1600.0;
+                double sizePenalty=Math.abs(sw-1280)*0.15+Math.abs(sh-720)*0.15;
+                double score=ratioPenalty+sizePenalty;
+                if(score<bestScore){bestScore=score;best=s;}
+            }
+
+            if(best!=null)return best;
+
+            // Fallback: smallest valid SurfaceTexture output.
+            best=sizes[0];
+            for(Size s:sizes){
+                if((long)s.getWidth()*s.getHeight()<(long)best.getWidth()*best.getHeight())best=s;
+            }
+            return best;
+        }catch(Throwable t){
+            return new Size(1280,720);
+        }
+    }
+
+    private int chooseRequestedFps(CameraCharacteristics ch){
+        try{
+            Range<Integer>[] rs=ch.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+            if(rs==null||rs.length==0)return 30;
+            int best=30;
+            for(Range<Integer> r:rs){
+                int hi=r.getUpper();
+                if(hi<=60)best=Math.max(best,hi);
+            }
+            return best;
+        }catch(Throwable t){return 30;}
+    }
+
+    private Range<Integer> chooseNormalRange(CameraCharacteristics ch,int target){
+        try{
+            Range<Integer>[] rs=ch.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+            if(rs==null||rs.length==0)return null;
+            Range<Integer> best=null;
+            for(Range<Integer> r:rs){
+                if(r.getUpper()>60)continue;
+                if(r.getUpper()>=target){
+                    if(best==null||r.getLower()>best.getLower())best=r;
+                }
+            }
+            if(best!=null)return best;
+            for(Range<Integer> r:rs){
+                if(r.getUpper()<=60&&(best==null||r.getUpper()>best.getUpper()))best=r;
+            }
+            return best;
+        }catch(Throwable t){return null;}
     }
 
     private void configureFov(CameraCharacteristics c){
@@ -136,92 +215,84 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         }catch(Throwable ignored){}
     }
 
-    private void inspectHighSpeed(CameraCharacteristics c){
+    private void inspectCapabilities(CameraCharacteristics c){
         highSpeed120Supported=false;
         try{
             int[] caps=c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
-            boolean hsCap=false;
-            if(caps!=null)for(int v:caps)if(v==CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO)hsCap=true;
-            if(!hsCap)return;
+            boolean hs=false;
+            if(caps!=null){
+                for(int v:caps){
+                    if(v==CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO){
+                        hs=true;break;
+                    }
+                }
+            }
+            if(!hs)return;
+
             StreamConfigurationMap map=c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             if(map==null)return;
             Size[] sizes=map.getHighSpeedVideoSizes();
             if(sizes==null)return;
             for(Size s:sizes){
                 Range<Integer>[] rs=map.getHighSpeedVideoFpsRangesFor(s);
-                if(rs!=null)for(Range<Integer> r:rs)if(r.getUpper()>=120){highSpeed120Supported=true;return;}
+                if(rs!=null){
+                    for(Range<Integer> r:rs){
+                        if(r.getUpper()>=120){highSpeed120Supported=true;return;}
+                    }
+                }
             }
         }catch(Throwable ignored){}
     }
 
-    private Range<Integer> chooseSafeFps(CameraCharacteristics c){
-        try{
-            Range<Integer>[] rs=c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-            if(rs==null||rs.length==0)return null;
-            Range<Integer> best=null;
-            for(Range<Integer> r:rs){
-                int hi=r.getUpper();
-                if(hi>60)continue; // normal session only
-                if(best==null||hi>best.getUpper()||(hi==best.getUpper()&&r.getLower()>best.getLower()))best=r;
-            }
-            if(best!=null){requestedFps=best.getUpper();return best;}
-            best=rs[0];
-            for(Range<Integer> r:rs)if(r.getUpper()>best.getUpper())best=r;
-            requestedFps=Math.min(60,best.getUpper());
-            return best;
-        }catch(Throwable t){requestedFps=30;return null;}
-    }
-
-    private void createSafeSession(CameraCharacteristics ch){
+    private void createPreviewOnlySession(CameraCharacteristics ch){
         try{
             SurfaceTexture st=getSurfaceTexture();
             if(st==null){status="NO SURFACE";return;}
-            st.setDefaultBufferSize(1280,720);
+
+            st.setDefaultBufferSize(previewSize.getWidth(),previewSize.getHeight());
             Surface preview=new Surface(st);
 
-            analysisReader=ImageReader.newInstance(320,180,ImageFormat.YUV_420_888,2);
-            analysisReader.setOnImageAvailableListener(r->{
-                android.media.Image img=null;
-                try{
-                    img=r.acquireLatestImage();
-                    if(img==null)return;
-                    long ts=img.getTimestamp();
-                    if(lastImageTs!=0&&ts>lastImageTs){
-                        float f=1e9f/(ts-lastImageTs);
-                        cameraFps=cameraFps==0?f:.9f*cameraFps+.1f*f;
-                    }
-                    lastImageTs=ts;
-                    tracker.processImage(img);
-                    img=null; // tracker owns and closes
-                }catch(Throwable t){
-                    fail("frame",t);
-                    if(img!=null)try{img.close();}catch(Throwable ignored){}
-                }
-            },bg);
-
-            Surface analysis=analysisReader.getSurface();
             CaptureRequest.Builder b=camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            b.addTarget(preview);b.addTarget(analysis);
-            b.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
-            b.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON);
-            Range<Integer> fps=chooseSafeFps(ch);
-            if(fps!=null)b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,fps);
+            b.addTarget(preview);
+            b.set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);
+            try{b.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);}catch(Throwable ignored){}
+            try{b.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON);}catch(Throwable ignored){}
+            Range<Integer> fps=chooseNormalRange(ch,requestedFps);
+            if(fps!=null){
+                requestedFps=fps.getUpper();
+                try{b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,fps);}catch(Throwable ignored){}
+            }
 
-            status="CONFIGURE SAFE";
-            camera.createCaptureSession(Arrays.asList(preview,analysis),new CameraCaptureSession.StateCallback(){
+            status="CONFIG PREVIEW "+previewSize.getWidth()+"x"+previewSize.getHeight();
+            camera.createCaptureSession(Collections.singletonList(preview),new CameraCaptureSession.StateCallback(){
                 @Override public void onConfigured(CameraCaptureSession cs){
                     session=cs;
                     try{
-                        session.setRepeatingRequest(b.build(),null,bg);
-                        status="RUNNING SAFE";
+                        session.setRepeatingRequest(b.build(),new CameraCaptureSession.CaptureCallback(){
+                            @Override public void onCaptureCompleted(CameraCaptureSession s,CaptureRequest req,TotalCaptureResult result){
+                                Long ts=result.get(CaptureResult.SENSOR_TIMESTAMP);
+                                if(ts!=null&&ts>0){
+                                    if(lastSensorTs!=0&&ts>lastSensorTs){
+                                        float f=1e9f/(ts-lastSensorTs);
+                                        if(f>0&&f<240)cameraFps=cameraFps==0?f:.92f*cameraFps+.08f*f;
+                                    }
+                                    lastSensorTs=ts;
+                                }
+                            }
+                        },bg);
+                        status="PREVIEW OK";
                     }catch(Throwable t){fail("repeat",t);}
                 }
+
                 @Override public void onConfigureFailed(CameraCaptureSession cs){
-                    lastError="Safe capture session failed";
+                    lastError="Preview-only session failed";
                     status="SESSION ERROR";
                 }
             },bg);
-        }catch(Throwable t){fail("session",t);}
+
+        }catch(Throwable t){
+            fail("preview",t);
+        }
     }
 
     private void fail(String where,Throwable t){
@@ -230,8 +301,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     }
 
     @Override public void onSurfaceTextureAvailable(SurfaceTexture s,int w,int h){
-        // Let the view finish attaching before opening camera.
-        postDelayed(this::start,150);
+        postDelayed(this::start,200);
     }
     @Override public void onSurfaceTextureSizeChanged(SurfaceTexture s,int w,int h){}
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture s){stop();return true;}
