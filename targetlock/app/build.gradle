@@ -1,7 +1,7 @@
 plugins { id 'com.android.application' }
 
 android { namespace 'com.tsss.targetlock'; compileSdk 35
-    defaultConfig { applicationId 'com.tsss.targetlock'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+    defaultConfig { applicationId 'com.tsss.targetlock'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.4.0' }
 }
 
 dependencies {
