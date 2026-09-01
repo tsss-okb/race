@@ -14,6 +14,7 @@ public class TargetTracker {
     public volatile float trackerFps=0,latencyMs=0,yoloConfidence=0;
     public volatile float flowDx=0,flowDy=0,flowQuality=0,flowFps=0;
     public volatile float cameraDx=0,cameraDy=0,imuWeight=1f,flowWeight=0f;
+    public volatile int flowPoints=0;
 
     public volatile int lostFrames=0,targetClass=-1,yoloCorrections=0;
     public volatile int imuCorrections=0,flowCorrections=0;
@@ -87,7 +88,7 @@ public class TargetTracker {
 
             // Global visual motion is estimated from background patches, excluding the target region.
             VisualMotionEstimator.Motion vm=flow.estimate(image,predX,predY,box,locked);
-            flowDx=vm.dx;flowDy=vm.dy;flowQuality=vm.quality;flowFps=flow.fps;
+            flowDx=vm.dx;flowDy=vm.dy;flowQuality=vm.quality;flowFps=flow.fps;flowPoints=vm.points;
 
             float rawDx=0,rawDy=0;
             float appliedImuDx=0,appliedImuDy=0;
