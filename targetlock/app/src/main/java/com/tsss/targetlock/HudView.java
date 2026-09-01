@@ -7,23 +7,31 @@ import android.view.View;
 public class HudView extends View {
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TargetTracker t;
-    private long last=System.nanoTime(); private float uiFps=0;
+    private final YoloDetector yolo;
 
-    public HudView(Context c, TargetTracker tr) {
-        super(c); t=tr; p.setTypeface(Typeface.MONOSPACE); setWillNotDraw(false);
+    public HudView(Context c, TargetTracker tr, YoloDetector detector) {
+        super(c); t=tr; yolo=detector; p.setTypeface(Typeface.MONOSPACE); setWillNotDraw(false);
     }
 
     @Override protected void onDraw(Canvas c) {
         super.onDraw(c);
-        long n=System.nanoTime(); float inst=1e9f/Math.max(1,n-last); last=n; uiFps=uiFps==0?inst:.90f*uiFps+.10f*inst;
         int w=getWidth(), h=getHeight();
-        int green=Color.rgb(112,255,125), dim=Color.argb(175,112,255,125), panel=Color.argb(115,0,12,4);
+        int green=Color.rgb(112,255,125), amber=Color.rgb(255,210,92);
+        int dim=Color.argb(175,112,255,125), panel=Color.argb(135,0,12,4);
 
-        p.setColor(panel); p.setStyle(Paint.Style.FILL); c.drawRoundRect(12,10,520,92,12,12,p);
-        p.setColor(green); p.setTextSize(22); p.setStyle(Paint.Style.FILL);
-        String state = t.acquiring ? "ЗАХВАТ" : (t.locked ? "LOCK" : "ПОИСК");
-        c.drawText(String.format("%s   TRK %.0f FPS   %.1f ms",state,t.trackerFps,t.latencyMs),24,39,p);
-        c.drawText(String.format("Q %3.0f%%   lead 50 ms   lost %d",t.confidence*100,t.lostFrames),24,70,p);
+        p.setColor(panel); p.setStyle(Paint.Style.FILL); c.drawRoundRect(12,10,690,122,12,12,p);
+        p.setTextSize(20); p.setStyle(Paint.Style.FILL);
+
+        String state = t.acquiring ? "ACQUIRE" : (t.locked ? "LOCK" : "SEARCH");
+        p.setColor(t.locked ? green : amber);
+        c.drawText(String.format("%s   TRK %.0f FPS / %.1f ms",state,t.trackerFps,t.latencyMs),24,38,p);
+
+        p.setColor(green);
+        String ys = yolo.ready ? String.format("YOLO26n %.1f FPS / %.0f ms",yolo.detectorFps,yolo.latencyMs)
+                               : (yolo.error.length()>0 ? "YOLO ERROR" : "YOLO LOADING");
+        c.drawText(ys,24,70,p);
+        c.drawText(String.format("TARGET %s   Q %.0f%%   lost %d   corr %d",
+                t.targetName,t.confidence*100,t.lostFrames,t.yoloCorrections),24,102,p);
 
         p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2.5f); p.setColor(dim);
         c.drawLine(w/2-18,h/2,w/2-5,h/2,p); c.drawLine(w/2+5,h/2,w/2+18,h/2,p);
@@ -35,8 +43,8 @@ public class HudView extends View {
             drawCorners(c,x-s,y-s,x+s,y+s,14,p); c.drawCircle(x,y,6,p);
             c.drawLine(w/2,h/2,x,y,p);
         } else {
-            p.setStyle(Paint.Style.FILL); p.setTextSize(22); p.setColor(green);
-            c.drawText("КОСНИСЬ ЦЕЛИ ДЛЯ ЗАХВАТА",24,h-28,p);
+            p.setStyle(Paint.Style.FILL); p.setTextSize(20); p.setColor(green);
+            c.drawText("AUTO YOLO26n SEARCH  •  tap = manual lock",24,h-28,p);
         }
         postInvalidateOnAnimation();
     }
