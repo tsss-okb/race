@@ -1,5 +1,9 @@
 plugins { id 'com.android.application' }
 
 android { namespace 'com.tsss.targetlock'; compileSdk 35
-    defaultConfig { applicationId 'com.tsss.targetlock'; minSdk 26; targetSdk 35; versionCode 2; versionName '0.2.0' }
+    defaultConfig { applicationId 'com.tsss.targetlock'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+}
+
+dependencies {
+    implementation 'org.tensorflow:tensorflow-lite:2.17.0'
 }
