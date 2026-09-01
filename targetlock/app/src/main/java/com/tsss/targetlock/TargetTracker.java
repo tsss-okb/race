@@ -22,6 +22,9 @@ public class TargetTracker {
     public volatile String targetName="manual";
     public volatile int tapCount=0;
     public volatile String acquireStatus="IDLE";
+    public volatile boolean useImu=true;
+    public volatile boolean useFlow=true;
+    public volatile boolean autoReacq=true;
 
     private ImuCompensator imu;
 
@@ -47,6 +50,9 @@ public class TargetTracker {
     private long coastStartNs=0;
 
     public synchronized void setImu(ImuCompensator compensator){imu=compensator;}
+    public void setUseImu(boolean v){useImu=v;}
+    public void setUseFlow(boolean v){useFlow=v;}
+    public void setAutoReacq(boolean v){autoReacq=v;}
 
     public synchronized void requestLock(float nx,float ny){
         pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
@@ -136,14 +142,14 @@ public class TargetTracker {
             lastFlowNs=now;
 
             float imuDx=0,imuDy=0;
-            if(imu!=null){
+            if(imu!=null&&useImu){
                 float[] raw=imu.consumeAnalysisRawShift();
                 imu.updateCalibration(raw[0],raw[1],vm.dx,vm.dy,vm.quality);
                 float[] scaled=imu.scaleRaw(raw[0],raw[1]);
                 imuDx=scaled[0];imuDy=scaled[1];
             }
 
-            float fw=computeFlowWeight(vm.quality,imu==null?0:imu.angularSpeedDeg);
+            float fw=useFlow?computeFlowWeight(vm.quality,imu==null?0:imu.angularSpeedDeg):0f;
             float iw=1f-fw;
             float fusedDx=imuDx*iw+vm.dx*fw;
             float fusedDy=imuDy*iw+vm.dy*fw;
@@ -195,8 +201,7 @@ public class TargetTracker {
                 int base=Math.max(12,Math.round(Math.max(templateSpan*1.5f,box*Math.min(w,h)*1.2f)));
                 int radius=Math.min(92,base+lostFrames*5+(imu!=null&&imu.angularSpeedDeg>55f?10:0));
 
-                Match coarse=search(gray,w,h,cx,cy,radius,3);
-                Match best=coarse==null?null:search(gray,w,h,coarse.x,coarse.y,6,1);
+                Match best=searchMultiScale(gray,w,h,cx,cy,radius);
 
                 if(best!=null&&best.quality>=.52f){
                     updateMeasurement(best.x/(float)(w-1),best.y/(float)(h-1),best.quality);
@@ -217,13 +222,15 @@ public class TargetTracker {
                         if(coastStartNs==0)coastStartNs=now;
                         acquireStatus="COAST";
                     }
-                    if(lostFrames>=7){
+                    if(lostFrames>=7&&autoReacq){
                         reacquiring=true;
                         acquireStatus="REACQUIRE";
                     }
 
-                    // Keep target identity alive for about 1.2 s at 30-60 Hz.
-                    if(lostFrames>55 || (coastStartNs!=0&&now-coastStartNs>1_250_000_000L)){
+                    // Keep target identity alive longer when auto reacquisition is enabled.
+                    int maxLost=autoReacq?70:24;
+                    long maxCoast=autoReacq?1_600_000_000L:650_000_000L;
+                    if(lostFrames>maxLost || (coastStartNs!=0&&now-coastStartNs>maxCoast)){
                         clear();
                     }
                 }
@@ -237,6 +244,7 @@ public class TargetTracker {
 
     public synchronized float associationScore(YoloDetector.Detection d){
         if(d==null)return Float.MAX_VALUE;
+        if((coasting||reacquiring)&&!autoReacq)return Float.MAX_VALUE;
         if(targetClass>=0&&d.classId!=targetClass)return Float.MAX_VALUE;
 
         float dx=d.cx()-predX,dy=d.cy()-predY;
@@ -263,7 +271,7 @@ public class TargetTracker {
 
         yoloConfidence=d.confidence;
 
-        if(reacquiring||coasting||!locked){
+        if((reacquiring||coasting||!locked)&&autoReacq){
             pendingX=clamp(d.cx(),.06f,.94f);
             pendingY=clamp(d.cy(),.10f,.90f);
             pendingBox=clamp(d.halfBox(),.025f,.28f);
@@ -387,16 +395,38 @@ public class TargetTracker {
         return sum/(float)n;
     }
 
-    private Match search(byte[] g,int w,int h,int cx,int cy,int radius,int step){
+    private Match searchMultiScale(byte[] g,int w,int h,int cx,int cy,int radius){
+        int[] spans={
+                Math.max(8,Math.round(templateSpan*.82f)),
+                Math.max(8,Math.round(templateSpan*.92f)),
+                templateSpan,
+                Math.min(38,Math.round(templateSpan*1.10f)),
+                Math.min(38,Math.round(templateSpan*1.22f))
+        };
         Match best=null;
-        int span=templateSpan;
+        for(int span:spans){
+            Match coarse=search(g,w,h,cx,cy,radius,4,span);
+            if(coarse==null)continue;
+            Match fine=search(g,w,h,coarse.x,coarse.y,7,1,span);
+            Match candidate=fine!=null?fine:coarse;
+            if(best==null||candidate.quality>best.quality)best=candidate;
+        }
+        if(best!=null&&best.quality>.74f&&Math.abs(best.span-templateSpan)>=3){
+            templateSpan=best.span;
+            box=clamp(templateSpan/(float)Math.max(1,Math.min(w,h)),.025f,.28f);
+        }
+        return best;
+    }
+
+    private Match search(byte[] g,int w,int h,int cx,int cy,int radius,int step,int span){
+        Match best=null;
         int minX=Math.max(span+2,cx-radius),maxX=Math.min(w-span-3,cx+radius);
         int minY=Math.max(span+2,cy-radius),maxY=Math.min(h-span-3,cy+radius);
 
         for(int yy=minY;yy<=maxY;yy+=step){
             for(int xx=minX;xx<=maxX;xx+=step){
                 float q=znccQuality(g,w,h,xx,yy,span);
-                if(best==null||q>best.quality)best=new Match(xx,yy,q);
+                if(best==null||q>best.quality)best=new Match(xx,yy,q,span);
             }
         }
         return best;
@@ -531,7 +561,7 @@ public class TargetTracker {
     public synchronized void predictOnly(){
         if(!(locked||coasting||reacquiring))return;
         float dx=0,dy=0;
-        if(imu!=null){
+        if(imu!=null&&useImu){
             float[] d=imu.peekDisplayAppliedShift();
             dx=d[0];dy=d[1];
         }
@@ -549,8 +579,8 @@ public class TargetTracker {
     private static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
 
     private static final class Match{
-        final int x,y;final float quality;
-        Match(int x,int y,float q){this.x=x;this.y=y;this.quality=q;}
+        final int x,y,span;final float quality;
+        Match(int x,int y,float q,int span){this.x=x;this.y=y;this.quality=q;this.span=span;}
     }
 
     private static final class FlowMatch{
