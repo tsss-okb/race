@@ -53,9 +53,11 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
     private final TargetTracker tracker;
     private final ImuCompensator imu;
+    private final YoloDetector detector;
 
     public TargetTracker getTracker(){return tracker;}
     public ImuCompensator getImu(){return imu;}
+    public YoloDetector getDetector(){return detector;}
 
     public CameraPreview(Context c){
         super(c);
@@ -63,14 +65,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         tracker=new TargetTracker();
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
+        detector=new YoloDetector(c);
         setSurfaceTextureListener(this);
-        setOnTouchListener((v,e)->{
-            if(e.getAction()==MotionEvent.ACTION_DOWN&&getWidth()>0&&getHeight()>0){
-                tracker.requestLock(e.getX()/getWidth(),e.getY()/getHeight());
-                return true;
-            }
-            return false;
-        });
     }
 
     public void start(){
@@ -348,6 +344,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                             }
                         },bg);
                         status="PREVIEW OK";
+                        try{detector.start();}catch(Throwable ignored){}
                     }catch(Throwable t){fail("repeat",t);}
                 }
 
@@ -422,6 +419,22 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         captureTrackerFrame();
     }
 
+    public void selectTargetAt(float nx,float ny){
+        nx=Math.max(0f,Math.min(1f,nx));
+        ny=Math.max(0f,Math.min(1f,ny));
+        try{
+            YoloDetector.Detection d=detector.pick(nx,ny);
+            if(d!=null){
+                tracker.requestDetectedLock(d);
+            }else{
+                tracker.requestLock(nx,ny);
+            }
+        }catch(Throwable t){
+            tracker.requestLock(nx,ny);
+            lastError="select: "+t.getClass().getSimpleName();
+        }
+    }
+
     private void captureTrackerFrame(){
         if(!"PREVIEW OK".equals(status))return;
 
@@ -443,6 +456,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                 return;
             }
             out.getPixels(trackerPixels,0,TRACK_W,0,0,TRACK_W,TRACK_H);
+
+            // Detector is sparse: fast during SEARCH, slower while tracker is locked.
+            try{
+                detector.maybeSubmit(trackerPixels,TRACK_W,TRACK_H,tracker.locked?850:260);
+            }catch(Throwable t){
+                lastError="yolo submit: "+t.getClass().getSimpleName();
+            }
 
             trackerExecutor.execute(()->{
                 try{
