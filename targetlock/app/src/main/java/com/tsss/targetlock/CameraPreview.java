@@ -54,8 +54,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile float analysisGrabFps=0f;
     public volatile boolean detectEnabled=true;
     public volatile boolean trackEnabled=true;
-    public volatile boolean imuEnabled=true;
-    public volatile boolean flowEnabled=true;
+    public volatile boolean imuEnabled=false;
+    public volatile boolean flowEnabled=false;
     public volatile boolean autoReacqEnabled=true;
 
     private final TargetTracker tracker;
@@ -97,15 +97,15 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
         detector=new YoloDetector(c);
-        tracker.setUseImu(true);
-        tracker.setUseFlow(true);
+        tracker.setUseImu(false);
+        tracker.setUseFlow(false);
         tracker.setAutoReacq(true);
         setSurfaceTextureListener(this);
     }
 
     public void start(){
         try{
-            if(!imu.active)imu.start();
+            if(imuEnabled&&!imu.active)imu.start();
             if(isAvailable())open();
             else status="WAIT SURFACE";
         }catch(Throwable t){fail("start",t);}
@@ -500,16 +500,11 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
             try{
                 if(detectEnabled){
-                    long baseLatency=Math.max(35,Math.round(detector.latencyMs));
-                    long yoloIntervalMs;
-                    if(tracker.reacquiring)
-                        yoloIntervalMs=Math.max(70,baseLatency+25);
-                    else if(tracker.coasting)
-                        yoloIntervalMs=Math.max(100,baseLatency+55);
-                    else if(tracker.locked)
-                        yoloIntervalMs=baseLatency<80?190:(baseLatency<140?260:380);
-                    else
-                        yoloIntervalMs=baseLatency<80?120:(baseLatency<140?180:240);
+                    // Reference behavior: while a target is selected, run the
+                    // detector again as soon as the previous inference completes.
+                    long yoloIntervalMs=(tracker.locked||tracker.coasting||tracker.reacquiring)
+                            ?0
+                            :80;
 
                     detector.maybeSubmit(trackerPixels,analysisW,analysisH,yoloIntervalMs);
 
