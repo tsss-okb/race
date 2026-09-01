@@ -19,12 +19,16 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private Handler bg;
     private ImageReader analysisReader;
     private boolean opening = false;
+    private int frameIndex = 0;
     private final TargetTracker tracker = new TargetTracker();
+    private final YoloDetector detector;
 
     public TargetTracker getTracker() { return tracker; }
+    public YoloDetector getDetector() { return detector; }
 
     public CameraPreview(Context c) {
         super(c);
+        detector = new YoloDetector(c, tracker);
         setSurfaceTextureListener(this);
         setOnTouchListener((v,e) -> {
             if (e.getAction() == MotionEvent.ACTION_DOWN && getWidth() > 0 && getHeight() > 0) {
@@ -75,10 +79,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             SurfaceTexture st = getSurfaceTexture();
             st.setDefaultBufferSize(1280,720);
             Surface preview = new Surface(st);
-            analysisReader = ImageReader.newInstance(640,360,ImageFormat.YUV_420_888,2);
+            analysisReader = ImageReader.newInstance(640,360,ImageFormat.YUV_420_888,3);
             analysisReader.setOnImageAvailableListener(r -> {
                 android.media.Image img = r.acquireLatestImage();
-                if (img != null) tracker.processImage(img);
+                if (img != null) {
+                    detector.maybeSubmit(img, frameIndex++);
+                    tracker.processImage(img);
+                }
             }, bg);
             Surface analysis = analysisReader.getSurface();
             CaptureRequest.Builder b = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
