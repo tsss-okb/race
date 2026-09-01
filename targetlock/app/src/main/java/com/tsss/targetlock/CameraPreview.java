@@ -7,6 +7,7 @@ import android.hardware.camera2.*;
 import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.util.SizeF;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
@@ -20,15 +21,22 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private ImageReader analysisReader;
     private boolean opening = false;
     private int frameIndex = 0;
-    private final TargetTracker tracker = new TargetTracker();
+
+    private final TargetTracker tracker;
     private final YoloDetector detector;
+    private final ImuCompensator imu;
 
     public TargetTracker getTracker() { return tracker; }
     public YoloDetector getDetector() { return detector; }
+    public ImuCompensator getImu() { return imu; }
 
     public CameraPreview(Context c) {
         super(c);
+        tracker = new TargetTracker();
+        imu = new ImuCompensator(c);
+        tracker.setImu(imu);
         detector = new YoloDetector(c, tracker);
+
         setSurfaceTextureListener(this);
         setOnTouchListener((v,e) -> {
             if (e.getAction() == MotionEvent.ACTION_DOWN && getWidth() > 0 && getHeight() > 0) {
@@ -39,9 +47,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         });
     }
 
-    public void start() { if (isAvailable()) open(); }
+    public void start() {
+        if (!imu.active) imu.start();
+        if (isAvailable()) open();
+    }
 
     public void stop() {
+        imu.stop();
         try { if (session != null) session.close(); } catch(Exception ignored) {}
         try { if (camera != null) camera.close(); } catch(Exception ignored) {}
         try { if (analysisReader != null) analysisReader.close(); } catch(Exception ignored) {}
@@ -56,6 +68,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         try {
             CameraManager m = (CameraManager)getContext().getSystemService(Context.CAMERA_SERVICE);
             String id = chooseBackCamera(m);
+            configureFov(m.getCameraCharacteristics(id));
             if (getContext().checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) { opening=false; return; }
             m.openCamera(id, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice c) { camera=c; opening=false; create(); }
@@ -72,6 +85,18 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) return id;
         }
         return fallback;
+    }
+
+    private void configureFov(CameraCharacteristics c) {
+        try {
+            SizeF physical = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            float[] focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            if (physical != null && focal != null && focal.length > 0 && focal[0] > 0) {
+                float hfov = (float)Math.toDegrees(2.0 * Math.atan(physical.getWidth() / (2.0 * focal[0])));
+                float vfov = (float)Math.toDegrees(2.0 * Math.atan(physical.getHeight() / (2.0 * focal[0])));
+                imu.setFovDegrees(hfov, vfov);
+            }
+        } catch(Throwable ignored) {}
     }
 
     private void create() {
