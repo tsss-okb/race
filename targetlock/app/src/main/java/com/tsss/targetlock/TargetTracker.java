@@ -27,6 +27,12 @@ public class TargetTracker {
     public volatile boolean autoReacq=true;
 
     private ImuCompensator imu;
+    private final PrecisionFilter precision=new PrecisionFilter();
+
+    public volatile float filterSigmaX=.02f,filterSigmaY=.02f;
+    public volatile float filterInnovation=0f;
+    public volatile float errorX=0f,errorY=0f;
+    public volatile float errorEmaX=0f,errorEmaY=0f;
 
     private static final int GRID=15;
     private static final int FLOW_PATCH=2;
@@ -57,6 +63,7 @@ public class TargetTracker {
     public synchronized void requestLock(float nx,float ny){
         pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
         pendingBox=-1f;pendingReseed=false;
+        precision.clear();
         acquiring=true;locked=false;coasting=false;reacquiring=false;
         confidence=.15f;lostFrames=0;vx=vy=0;hasTemplate=false;
         renderX=predX=pendingX;renderY=predY=pendingY;
@@ -69,6 +76,7 @@ public class TargetTracker {
         float nx=clamp(d.cx(),.06f,.94f);
         float ny=clamp(d.cy(),.10f,.90f);
         pendingX=nx;pendingY=ny;
+        precision.clear();
         pendingBox=clamp(d.halfBox(),.025f,.28f);
         pendingReseed=false;
         acquiring=true;locked=false;coasting=false;reacquiring=false;
@@ -100,6 +108,8 @@ public class TargetTracker {
 
         x=predX=renderX=cx/(float)(w-1);
         y=predY=renderY=cy/(float)(h-1);
+        precision.reset(x,y);
+        syncFromPrecision(.055f);
         pendingX=pendingY=-1;pendingBox=-1;
         vx=vy=0;confidence=.90f;lostFrames=0;
         locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
@@ -115,6 +125,9 @@ public class TargetTracker {
         confidence=0;lostFrames=0;vx=vy=0;acquireStatus="IDLE";
         pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
         targetClass=-1;targetName="manual";
+        precision.clear();
+        filterSigmaX=filterSigmaY=.02f;filterInnovation=0f;
+        errorX=errorY=errorEmaX=errorEmaY=0f;
         renderX=predX=.5f;renderY=predY=.5f;
         if(imu!=null)imu.resetMotion();
     }
@@ -127,6 +140,8 @@ public class TargetTracker {
             toGray(pixels,gray,w*h);
 
             long now=System.nanoTime();
+            float frameDt=lastFrameNs==0?.016f:
+                    Math.max(.004f,Math.min(.10f,(now-lastFrameNs)/1e9f));
             if(lastFrameNs!=0){
                 float f=1e9f/Math.max(1,now-lastFrameNs);
                 trackerFps=trackerFps==0?f:.86f*trackerFps+.14f*f;
@@ -156,7 +171,12 @@ public class TargetTracker {
             imuWeight=iw;flowWeight=fw;cameraDx=fusedDx;cameraDy=fusedDy;
 
             if(locked||coasting||reacquiring){
-                applyCameraShift(fusedDx,fusedDy);
+                if(precision.isInitialized()){
+                    precision.predict(frameDt,fusedDx,fusedDy,coasting||reacquiring);
+                    syncFromPrecision(.055f);
+                }else{
+                    applyCameraShift(fusedDx,fusedDy);
+                }
                 if(Math.abs(imuDx)+Math.abs(imuDy)>.00002f)imuCorrections++;
                 if(fw>.08f&&vm.quality>.25f)flowCorrections++;
             }
@@ -178,7 +198,9 @@ public class TargetTracker {
                     synchronized(this){
                         x=predX=renderX=cx/(float)(w-1);
                         y=predY=renderY=cy/(float)(h-1);
+                        precision.reset(x,y);
                         if(!reseed){vx=vy=0;}
+                        syncFromPrecision(.055f);
                         confidence=Math.max(.82f,confidence);
                         locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
                         pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
@@ -247,19 +269,21 @@ public class TargetTracker {
         if((coasting||reacquiring)&&!autoReacq)return Float.MAX_VALUE;
         if(targetClass>=0&&d.classId!=targetClass)return Float.MAX_VALUE;
 
-        float dx=d.cx()-predX,dy=d.cy()-predY;
-        float dist=(float)Math.sqrt(dx*dx+dy*dy);
-
         float currentSize=Math.max(.025f,box);
         float newSize=Math.max(.025f,d.halfBox());
         float scaleErr=Math.abs((float)Math.log(newSize/currentSize));
-
-        float gate=reacquiring?.34f:(coasting?.24f:.16f);
-        if(dist>gate)return Float.MAX_VALUE;
         if(scaleErr>1.0f)return Float.MAX_VALUE;
 
-        float confPenalty=(1f-d.confidence)*.12f;
-        return dist + scaleErr*.08f + confPenalty;
+        float sigma=.040f-(clamp(d.confidence,.05f,1f)*.025f);
+        float innovation=precision.isInitialized()
+                ?precision.innovationScore(d.cx(),d.cy(),sigma)
+                :(float)Math.sqrt((d.cx()-predX)*(d.cx()-predX)+(d.cy()-predY)*(d.cy()-predY))/.02f;
+
+        float gate=reacquiring?11f:(coasting?8f:5.5f);
+        if(innovation>gate)return Float.MAX_VALUE;
+
+        float confPenalty=(1f-d.confidence)*.60f;
+        return innovation + scaleErr*.75f + confPenalty;
     }
 
     public synchronized void onYoloDetection(YoloDetector.Detection d){
@@ -283,13 +307,16 @@ public class TargetTracker {
             return;
         }
 
+        if(precision.isInitialized()){
+            precision.updateYolo(d.cx(),d.cy(),d.confidence);
+            filterInnovation=precision.lastInnovation();
+            syncFromPrecision(.055f);
+        }else{
+            precision.reset(d.cx(),d.cy());
+            syncFromPrecision(.055f);
+        }
         float a=d.confidence>.65f?.20f:.12f;
-        x=(1f-a)*x+a*d.cx();
-        y=(1f-a)*y+a*d.cy();
         box=(1f-a)*box+a*clamp(d.halfBox(),.025f,.28f);
-        predX=clamp(x+vx*.05f);
-        predY=clamp(y+vy*.05f);
-        renderX=predX;renderY=predY;
         confidence=Math.max(confidence,d.confidence*.88f);
         yoloCorrections++;
 
@@ -530,36 +557,48 @@ public class TargetTracker {
     }
 
     private synchronized void updateMeasurement(float nx,float ny,float q){
-        long now=System.nanoTime();
-        float dt=lastNs==0?.016f:Math.max(.004f,Math.min(.12f,(now-lastNs)/1e9f));
-        lastNs=now;
+        lastNs=System.nanoTime();
 
-        float mx=(nx-x)/dt,my=(ny-y)/dt;
-        float va=q>.75f?.30f:.18f;
-        vx=(1f-va)*vx+va*mx;
-        vy=(1f-va)*vy+va*my;
+        if(!precision.isInitialized())precision.reset(nx,ny);
+        else precision.updateTracker(nx,ny,q);
 
-        float pa=q>.75f?.48f:.30f;
-        x=(1f-pa)*x+pa*nx;
-        y=(1f-pa)*y+pa*ny;
+        filterInnovation=precision.lastInnovation();
+        syncFromPrecision(.055f);
 
-        float lead=.055f;
-        predX=clamp(x+vx*lead);predY=clamp(y+vy*lead);
-        renderX=predX;renderY=predY;
+        // ArduPilot-style normalized image error with adaptive EMA.
+        float alpha=q>.78f?.32f:(q>.60f?.22f:.14f);
+        errorX=(predX-.5f)*2f;
+        errorY=(predY-.5f)*2f;
+        errorEmaX=(1f-alpha)*errorEmaX+alpha*errorX;
+        errorEmaY=(1f-alpha)*errorEmaY+alpha*errorY;
+
         confidence=.78f*confidence+.22f*q;
     }
 
     private synchronized void coast(){
-        long now=System.nanoTime();
-        float dt=lastNs==0?.016f:Math.min(.08f,(now-lastNs)/1e9f);
-        predX=clamp(x+vx*(dt+.055f));
-        predY=clamp(y+vy*(dt+.055f));
-        renderX=predX;renderY=predY;
-        confidence*=.955f;
+        if(precision.isInitialized())syncFromPrecision(.075f);
+        else{
+            long now=System.nanoTime();
+            float dt=lastNs==0?.016f:Math.min(.08f,(now-lastNs)/1e9f);
+            predX=clamp(x+vx*(dt+.055f));
+            predY=clamp(y+vy*(dt+.055f));
+            renderX=predX;renderY=predY;
+        }
+        errorX=(predX-.5f)*2f;
+        errorY=(predY-.5f)*2f;
+        errorEmaX=.90f*errorEmaX+.10f*errorX;
+        errorEmaY=.90f*errorEmaY+.10f*errorY;
+        confidence*=.965f;
     }
 
     public synchronized void predictOnly(){
         if(!(locked||coasting||reacquiring))return;
+
+        if(precision.isInitialized()){
+            predX=precision.predictedX(coasting||reacquiring?.075f:.055f);
+            predY=precision.predictedY(coasting||reacquiring?.075f:.055f);
+        }
+
         float dx=0,dy=0;
         if(imu!=null&&useImu){
             float[] d=imu.peekDisplayAppliedShift();
@@ -567,6 +606,23 @@ public class TargetTracker {
         }
         renderX=clamp(predX+dx);
         renderY=clamp(predY+dy);
+
+        errorX=(renderX-.5f)*2f;
+        errorY=(renderY-.5f)*2f;
+        errorEmaX=.94f*errorEmaX+.06f*errorX;
+        errorEmaY=.94f*errorEmaY+.06f*errorY;
+    }
+
+    private synchronized void syncFromPrecision(float lead){
+        if(!precision.isInitialized())return;
+        x=precision.x();y=precision.y();
+        vx=precision.vx();vy=precision.vy();
+        predX=precision.predictedX(lead);
+        predY=precision.predictedY(lead);
+        renderX=predX;renderY=predY;
+        filterSigmaX=precision.sigmaX();
+        filterSigmaY=precision.sigmaY();
+        filterInnovation=precision.lastInnovation();
     }
 
     private static float median(float[] a,int n){
