@@ -30,12 +30,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private long lastSensorTs=0;
     private int sensorOrientation=90;
 
-    private static final int TRACK_W=320;
-    private static final int TRACK_H=180;
+    private static final int ANALYSIS_H=192;
     private final ExecutorService trackerExecutor=Executors.newSingleThreadExecutor();
     private final AtomicBoolean trackerBusy=new AtomicBoolean(false);
     private Bitmap trackerBitmap;
-    private final int[] trackerPixels=new int[TRACK_W*TRACK_H];
+    private int[] trackerPixels;
+    private int analysisW=384;
+    private int analysisH=ANALYSIS_H;
     private long lastTrackCaptureNs=0;
     private long lastTrackDoneNs=0;
     private long lastAppliedYoloSerial=0;
@@ -51,6 +52,11 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile Size previewSize=new Size(0,0);
     public volatile int displayRotation=0;
     public volatile float analysisGrabFps=0f;
+    public volatile boolean detectEnabled=true;
+    public volatile boolean trackEnabled=true;
+    public volatile boolean imuEnabled=true;
+    public volatile boolean flowEnabled=true;
+    public volatile boolean autoReacqEnabled=true;
 
     private final TargetTracker tracker;
     private final ImuCompensator imu;
@@ -59,6 +65,30 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public TargetTracker getTracker(){return tracker;}
     public ImuCompensator getImu(){return imu;}
     public YoloDetector getDetector(){return detector;}
+    public int getAnalysisW(){return analysisW;}
+    public int getAnalysisH(){return analysisH;}
+
+    public void setDetectEnabled(boolean v){
+        detectEnabled=v;
+        if(!v)detector.clearDetections();
+    }
+    public void setTrackEnabled(boolean v){
+        trackEnabled=v;
+        if(!v)tracker.clear();
+    }
+    public void setImuEnabled(boolean v){
+        imuEnabled=v;
+        tracker.setUseImu(v);
+    }
+    public void setFlowEnabled(boolean v){
+        flowEnabled=v;
+        tracker.setUseFlow(v);
+    }
+    public void setAutoReacqEnabled(boolean v){
+        autoReacqEnabled=v;
+        tracker.setAutoReacq(v);
+    }
+    public void clearTarget(){tracker.clear();}
 
     public CameraPreview(Context c){
         super(c);
@@ -67,6 +97,9 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
         detector=new YoloDetector(c);
+        tracker.setUseImu(true);
+        tracker.setUseFlow(true);
+        tracker.setAutoReacq(true);
         setSurfaceTextureListener(this);
     }
 
@@ -424,14 +457,14 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         nx=Math.max(0f,Math.min(1f,nx));
         ny=Math.max(0f,Math.min(1f,ny));
         try{
-            YoloDetector.Detection d=detector.pick(nx,ny);
-            if(d!=null){
+            YoloDetector.Detection d=detectEnabled?detector.pick(nx,ny):null;
+            if(d!=null&&trackEnabled){
                 tracker.requestDetectedLock(d);
-            }else{
+            }else if(trackEnabled){
                 tracker.requestLock(nx,ny);
             }
         }catch(Throwable t){
-            tracker.requestLock(nx,ny);
+            if(trackEnabled)tracker.requestLock(nx,ny);
             lastError="select: "+t.getClass().getSimpleName();
         }
     }
@@ -446,9 +479,16 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         lastTrackCaptureNs=now;
 
         try{
+            float aspect=getHeight()>0?getWidth()/(float)getHeight():2.0f;
+            int desiredW=Math.max(320,Math.min(480,Math.round(ANALYSIS_H*aspect)));
+            desiredW=(desiredW/2)*2;
+            analysisW=desiredW;
+            analysisH=ANALYSIS_H;
+
             if(trackerBitmap==null||trackerBitmap.isRecycled()||
-                    trackerBitmap.getWidth()!=TRACK_W||trackerBitmap.getHeight()!=TRACK_H){
-                trackerBitmap=Bitmap.createBitmap(TRACK_W,TRACK_H,Bitmap.Config.ARGB_8888);
+                    trackerBitmap.getWidth()!=analysisW||trackerBitmap.getHeight()!=analysisH){
+                trackerBitmap=Bitmap.createBitmap(analysisW,analysisH,Bitmap.Config.ARGB_8888);
+                trackerPixels=new int[analysisW*analysisH];
             }
 
             Bitmap out=getBitmap(trackerBitmap);
@@ -456,36 +496,32 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                 trackerBusy.set(false);
                 return;
             }
-            out.getPixels(trackerPixels,0,TRACK_W,0,0,TRACK_W,TRACK_H);
+            out.getPixels(trackerPixels,0,analysisW,0,0,analysisW,analysisH);
 
-            // Detector is sparse: fast during SEARCH, slower while tracker is locked.
             try{
-                long yoloIntervalMs;
-                if(tracker.reacquiring) yoloIntervalMs=140;
-                else if(tracker.coasting) yoloIntervalMs=200;
-                else if(tracker.locked) yoloIntervalMs=420;
-                else yoloIntervalMs=240;
+                if(detectEnabled){
+                    long yoloIntervalMs;
+                    if(tracker.reacquiring) yoloIntervalMs=120;
+                    else if(tracker.coasting) yoloIntervalMs=170;
+                    else if(tracker.locked) yoloIntervalMs=360;
+                    else yoloIntervalMs=210;
 
-                detector.maybeSubmit(trackerPixels,TRACK_W,TRACK_H,yoloIntervalMs);
+                    detector.maybeSubmit(trackerPixels,analysisW,analysisH,yoloIntervalMs);
 
-                long serial=detector.resultSerial;
-                if((tracker.locked||tracker.coasting||tracker.reacquiring)&&
-                        serial!=0&&serial!=lastAppliedYoloSerial){
-                    YoloDetector.Detection best=null;
-                    float bestScore=Float.MAX_VALUE;
-
-                    for(YoloDetector.Detection d:detector.getDetections()){
-                        float s=tracker.associationScore(d);
-                        if(s<bestScore){
-                            bestScore=s;
-                            best=d;
+                    long serial=detector.resultSerial;
+                    if(autoReacqEnabled&&(tracker.locked||tracker.coasting||tracker.reacquiring)&&
+                            serial!=0&&serial!=lastAppliedYoloSerial){
+                        YoloDetector.Detection best=null;
+                        float bestScore=Float.MAX_VALUE;
+                        for(YoloDetector.Detection d:detector.getDetections()){
+                            float s=tracker.associationScore(d);
+                            if(s<bestScore){bestScore=s;best=d;}
                         }
+                        if(best!=null&&bestScore<Float.MAX_VALUE)tracker.onYoloDetection(best);
+                        lastAppliedYoloSerial=serial;
                     }
-
-                    if(best!=null&&bestScore<Float.MAX_VALUE){
-                        tracker.onYoloDetection(best);
-                    }
-                    lastAppliedYoloSerial=serial;
+                }else{
+                    detector.clearDetections();
                 }
             }catch(Throwable t){
                 lastError="yolo submit: "+t.getClass().getSimpleName();
@@ -493,7 +529,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
             trackerExecutor.execute(()->{
                 try{
-                    tracker.processArgb(trackerPixels,TRACK_W,TRACK_H);
+                    if(trackEnabled)tracker.processArgb(trackerPixels,analysisW,analysisH);
                     long done=System.nanoTime();
                     if(lastTrackDoneNs!=0){
                         float f=1e9f/Math.max(1,done-lastTrackDoneNs);
