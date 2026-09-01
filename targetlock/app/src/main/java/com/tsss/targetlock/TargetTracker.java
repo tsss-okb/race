@@ -5,6 +5,8 @@ import java.util.Arrays;
 public class TargetTracker {
     public volatile boolean locked=false;
     public volatile boolean acquiring=false;
+    public volatile boolean coasting=false;
+    public volatile boolean reacquiring=false;
 
     public volatile float x=.5f,y=.5f,predX=.5f,predY=.5f;
     public volatile float renderX=.5f,renderY=.5f;
@@ -15,7 +17,7 @@ public class TargetTracker {
     public volatile float cameraDx=0,cameraDy=0,imuWeight=1f,flowWeight=0f;
     public volatile int flowPoints=0;
 
-    public volatile int lostFrames=0,targetClass=-1,yoloCorrections=0;
+    public volatile int lostFrames=0,targetClass=-1,yoloCorrections=0,reacquireCount=0;
     public volatile int imuCorrections=0,flowCorrections=0;
     public volatile String targetName="manual";
     public volatile int tapCount=0;
@@ -24,28 +26,35 @@ public class TargetTracker {
     private ImuCompensator imu;
 
     private static final int GRID=15;
-    private static final int HALF_SPAN=18;
     private static final int FLOW_PATCH=2;
     private static final int FLOW_SEARCH=4;
 
     private final float[] template=new float[GRID*GRID];
+    private float templateMean=0f;
+    private float templateStd=1f;
+    private int templateSpan=18;
+
     private boolean hasTemplate=false;
     private float pendingX=-1,pendingY=-1;
+    private float pendingBox=-1f;
+    private boolean pendingReseed=false;
 
     private byte[] gray;
     private byte[] prevGray;
     private boolean havePrev=false;
 
     private long lastNs=0,lastFrameNs=0,lastFlowNs=0;
+    private long coastStartNs=0;
 
     public synchronized void setImu(ImuCompensator compensator){imu=compensator;}
 
     public synchronized void requestLock(float nx,float ny){
         pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
-        acquiring=true;locked=false;confidence=.15f;lostFrames=0;
-        vx=vy=0;hasTemplate=false;
+        pendingBox=-1f;pendingReseed=false;
+        acquiring=true;locked=false;coasting=false;reacquiring=false;
+        confidence=.15f;lostFrames=0;vx=vy=0;hasTemplate=false;
         renderX=predX=pendingX;renderY=predY=pendingY;
-        targetName="manual";tapCount++;acquireStatus="TAP";
+        targetClass=-1;targetName="manual";tapCount++;acquireStatus="TAP";
         if(imu!=null)imu.resetMotion();
     }
 
@@ -54,13 +63,16 @@ public class TargetTracker {
         float nx=clamp(d.cx(),.06f,.94f);
         float ny=clamp(d.cy(),.10f,.90f);
         pendingX=nx;pendingY=ny;
-        acquiring=true;locked=false;
-        confidence=Math.max(.25f,d.confidence);
+        pendingBox=clamp(d.halfBox(),.025f,.28f);
+        pendingReseed=false;
+        acquiring=true;locked=false;coasting=false;reacquiring=false;
+        confidence=Math.max(.30f,d.confidence);
         lostFrames=0;vx=vy=0;hasTemplate=false;
         renderX=predX=nx;renderY=predY=ny;
-        box=clamp(d.halfBox(),.035f,.22f);
+        box=pendingBox;
         targetName=d.className;
         targetClass=d.classId;
+        yoloConfidence=d.confidence;
         tapCount++;
         acquireStatus="YOLO SELECT";
         if(imu!=null)imu.resetMotion();
@@ -70,20 +82,22 @@ public class TargetTracker {
         if(pixels==null||pixels.length<w*h||w<80||h<60)return false;
         ensureBuffers(w*h);
         toGray(pixels,gray,w*h);
-        int cx=Math.round(clamp(nx,.06f,.94f)*(w-1));
-        int cy=Math.round(clamp(ny,.10f,.90f)*(h-1));
-        cx=Math.max(HALF_SPAN+1,Math.min(w-HALF_SPAN-2,cx));
-        cy=Math.max(HALF_SPAN+1,Math.min(h-HALF_SPAN-2,cy));
-        if(!extractTemplate(gray,w,h,cx,cy,template)){
+
+        templateSpan=spanFromBox(box,w,h);
+        int cx=safeX(Math.round(clamp(nx,.06f,.94f)*(w-1)),w);
+        int cy=safeY(Math.round(clamp(ny,.10f,.90f)*(h-1)),h);
+        if(!extractTemplate(gray,w,h,cx,cy,template,templateSpan)){
             acquireStatus="SEED FAIL";
             return false;
         }
+        recomputeTemplateStats();
+
         x=predX=renderX=cx/(float)(w-1);
         y=predY=renderY=cy/(float)(h-1);
-        pendingX=pendingY=-1;
-        vx=vy=0;confidence=.88f;lostFrames=0;
-        locked=true;acquiring=false;hasTemplate=true;
-        lastNs=System.nanoTime();
+        pendingX=pendingY=-1;pendingBox=-1;
+        vx=vy=0;confidence=.90f;lostFrames=0;
+        locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
+        lastNs=System.nanoTime();coastStartNs=0;
         acquireStatus="LOCKED";
         copyCurrentToPrev(w*h);
         if(imu!=null)imu.resetMotion();
@@ -91,9 +105,10 @@ public class TargetTracker {
     }
 
     public synchronized void clear(){
-        locked=false;acquiring=false;hasTemplate=false;
+        locked=false;acquiring=false;coasting=false;reacquiring=false;hasTemplate=false;
         confidence=0;lostFrames=0;vx=vy=0;acquireStatus="IDLE";
-        pendingX=pendingY=-1;
+        pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
+        targetClass=-1;targetName="manual";
         renderX=predX=.5f;renderY=predY=.5f;
         if(imu!=null)imu.resetMotion();
     }
@@ -134,63 +149,146 @@ public class TargetTracker {
             float fusedDy=imuDy*iw+vm.dy*fw;
             imuWeight=iw;flowWeight=fw;cameraDx=fusedDx;cameraDy=fusedDy;
 
-            if(locked){
+            if(locked||coasting||reacquiring){
                 applyCameraShift(fusedDx,fusedDy);
                 if(Math.abs(imuDx)+Math.abs(imuDy)>.00002f)imuCorrections++;
                 if(fw>.08f&&vm.quality>.25f)flowCorrections++;
             }
 
-            float px,py;
-            synchronized(this){px=pendingX;py=pendingY;}
+            float px,py,pb;
+            boolean reseed;
+            synchronized(this){
+                px=pendingX;py=pendingY;pb=pendingBox;reseed=pendingReseed;
+            }
+
             if(px>=0&&py>=0){
-                int cx=Math.round(px*(w-1)),cy=Math.round(py*(h-1));
-                cx=Math.max(HALF_SPAN+1,Math.min(w-HALF_SPAN-2,cx));
-                cy=Math.max(HALF_SPAN+1,Math.min(h-HALF_SPAN-2,cy));
-                if(extractTemplate(gray,w,h,cx,cy,template)){
+                if(pb>0)box=pb;
+                templateSpan=spanFromBox(box,w,h);
+                int cx=safeX(Math.round(px*(w-1)),w);
+                int cy=safeY(Math.round(py*(h-1)),h);
+
+                if(extractTemplate(gray,w,h,cx,cy,template,templateSpan)){
+                    recomputeTemplateStats();
                     synchronized(this){
-                        x=predX=renderX=px;
-                        y=predY=renderY=py;
-                        vx=vy=0;
-                        confidence=.82f;
-                        locked=true;acquiring=false;hasTemplate=true;
-                        pendingX=pendingY=-1;lostFrames=0;
-                        lastNs=System.nanoTime();
+                        x=predX=renderX=cx/(float)(w-1);
+                        y=predY=renderY=cy/(float)(h-1);
+                        if(!reseed){vx=vy=0;}
+                        confidence=Math.max(.82f,confidence);
+                        locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
+                        pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
+                        lostFrames=0;coastStartNs=0;lastNs=System.nanoTime();
+                        acquireStatus=reseed?"REACQUIRED":"LOCKED";
+                        if(reseed)reacquireCount++;
                         if(imu!=null)imu.resetMotion();
-                        acquireStatus="LOCKED";
                     }
-                } else {
+                }else{
                     acquireStatus="SEED FAIL";
                 }
                 copyCurrentToPrev(w*h);
                 return;
             }
 
-            if(hasTemplate&&locked){
-                int cx=Math.round(predX*(w-1)),cy=Math.round(predY*(h-1));
-                int radius=Math.min(70,22+lostFrames*8+(imu!=null&&imu.angularSpeedDeg>55f?10:0));
+            if(hasTemplate&&(locked||coasting||reacquiring)){
+                int cx=safeX(Math.round(predX*(w-1)),w);
+                int cy=safeY(Math.round(predY*(h-1)),h);
+
+                int base=Math.max(12,Math.round(Math.max(templateSpan*1.5f,box*Math.min(w,h)*1.2f)));
+                int radius=Math.min(92,base+lostFrames*5+(imu!=null&&imu.angularSpeedDeg>55f?10:0));
+
                 Match coarse=search(gray,w,h,cx,cy,radius,3);
                 Match best=coarse==null?null:search(gray,w,h,coarse.x,coarse.y,6,1);
 
-                if(best!=null){
-                    float q=scoreToConfidence(best.score);
-                    if(q>=.22f){
-                        updateMeasurement(best.x/(float)(w-1),best.y/(float)(h-1),q);
-                        lostFrames=0;
-                        if(q>.62f)adaptTemplate(gray,w,h,best.x,best.y,.035f);
-                    }else{
-                        lostFrames++;
-                        coast();
+                if(best!=null&&best.quality>=.52f){
+                    updateMeasurement(best.x/(float)(w-1),best.y/(float)(h-1),best.quality);
+                    lostFrames=0;
+                    coasting=false;reacquiring=false;locked=true;
+                    coastStartNs=0;
+                    acquireStatus="LOCKED";
+
+                    if(best.quality>.72f){
+                        adaptTemplate(gray,w,h,best.x,best.y,.025f,templateSpan);
                     }
                 }else{
                     lostFrames++;
                     coast();
+
+                    if(lostFrames>=3){
+                        coasting=true;locked=false;
+                        if(coastStartNs==0)coastStartNs=now;
+                        acquireStatus="COAST";
+                    }
+                    if(lostFrames>=7){
+                        reacquiring=true;
+                        acquireStatus="REACQUIRE";
+                    }
+
+                    // Keep target identity alive for about 1.2 s at 30-60 Hz.
+                    if(lostFrames>55 || (coastStartNs!=0&&now-coastStartNs>1_250_000_000L)){
+                        clear();
+                    }
                 }
-                if(lostFrames>18||confidence<.08f)clear();
             }
 
             copyCurrentToPrev(w*h);
         }finally{
             latencyMs=(System.nanoTime()-started)/1_000_000f;
+        }
+    }
+
+    public synchronized float associationScore(YoloDetector.Detection d){
+        if(d==null)return Float.MAX_VALUE;
+        if(targetClass>=0&&d.classId!=targetClass)return Float.MAX_VALUE;
+
+        float dx=d.cx()-predX,dy=d.cy()-predY;
+        float dist=(float)Math.sqrt(dx*dx+dy*dy);
+
+        float currentSize=Math.max(.025f,box);
+        float newSize=Math.max(.025f,d.halfBox());
+        float scaleErr=Math.abs((float)Math.log(newSize/currentSize));
+
+        float gate=reacquiring?.34f:(coasting?.24f:.16f);
+        if(dist>gate)return Float.MAX_VALUE;
+        if(scaleErr>1.0f)return Float.MAX_VALUE;
+
+        float confPenalty=(1f-d.confidence)*.12f;
+        return dist + scaleErr*.08f + confPenalty;
+    }
+
+    public synchronized void onYoloDetection(YoloDetector.Detection d){
+        if(d==null)return;
+        if(targetClass>=0&&d.classId!=targetClass)return;
+
+        float score=associationScore(d);
+        if(score==Float.MAX_VALUE)return;
+
+        yoloConfidence=d.confidence;
+
+        if(reacquiring||coasting||!locked){
+            pendingX=clamp(d.cx(),.06f,.94f);
+            pendingY=clamp(d.cy(),.10f,.90f);
+            pendingBox=clamp(d.halfBox(),.025f,.28f);
+            pendingReseed=true;
+            acquiring=true;
+            reacquiring=true;
+            acquireStatus="YOLO REACQ";
+            confidence=Math.max(confidence,d.confidence*.80f);
+            return;
+        }
+
+        float a=d.confidence>.65f?.20f:.12f;
+        x=(1f-a)*x+a*d.cx();
+        y=(1f-a)*y+a*d.cy();
+        box=(1f-a)*box+a*clamp(d.halfBox(),.025f,.28f);
+        predX=clamp(x+vx*.05f);
+        predY=clamp(y+vy*.05f);
+        renderX=predX;renderY=predY;
+        confidence=Math.max(confidence,d.confidence*.88f);
+        yoloCorrections++;
+
+        // If scale changed substantially, reseed the visual template on next frame.
+        int desiredSpan=Math.max(10,Math.min(34,Math.round(box*180f)));
+        if(Math.abs(desiredSpan-templateSpan)>=5){
+            pendingX=d.cx();pendingY=d.cy();pendingBox=box;pendingReseed=true;
         }
     }
 
@@ -231,21 +329,20 @@ public class TargetTracker {
             for(int xx:xs){
                 float nx=xx/(float)Math.max(1,w-1);
                 float ny=yy/(float)Math.max(1,h-1);
-                if(locked&&Math.abs(nx-tx)<ex&&Math.abs(ny-ty)<ey)continue;
+                if((locked||coasting||reacquiring)&&Math.abs(nx-tx)<ex&&Math.abs(ny-ty)<ey)continue;
+
                 FlowMatch m=matchPatch(prev,cur,w,h,xx,yy);
                 if(m!=null&&m.score<22f){
-                    dxs[count]=m.dx;
-                    dys[count]=m.dy;
-                    scoreSum+=m.score;
-                    count++;
+                    dxs[count]=m.dx;dys[count]=m.dy;
+                    scoreSum+=m.score;count++;
                 }
             }
         }
 
         if(count<5)return Motion.NONE;
+
         float mdx=median(dxs,count),mdy=median(dys,count);
-        int inliers=0;
-        float spread=0;
+        int inliers=0;float spread=0;
         for(int i=0;i<count;i++){
             float ddx=dxs[i]-mdx,ddy=dys[i]-mdy;
             float d=(float)Math.sqrt(ddx*ddx+ddy*ddy);
@@ -292,57 +389,101 @@ public class TargetTracker {
 
     private Match search(byte[] g,int w,int h,int cx,int cy,int radius,int step){
         Match best=null;
-        int minX=Math.max(HALF_SPAN+2,cx-radius),maxX=Math.min(w-HALF_SPAN-3,cx+radius);
-        int minY=Math.max(HALF_SPAN+2,cy-radius),maxY=Math.min(h-HALF_SPAN-3,cy+radius);
+        int span=templateSpan;
+        int minX=Math.max(span+2,cx-radius),maxX=Math.min(w-span-3,cx+radius);
+        int minY=Math.max(span+2,cy-radius),maxY=Math.min(h-span-3,cy+radius);
+
         for(int yy=minY;yy<=maxY;yy+=step){
             for(int xx=minX;xx<=maxX;xx+=step){
-                float s=sadScore(g,w,h,xx,yy);
-                if(best==null||s<best.score)best=new Match(xx,yy,s);
+                float q=znccQuality(g,w,h,xx,yy,span);
+                if(best==null||q>best.quality)best=new Match(xx,yy,q);
             }
         }
         return best;
     }
 
-    private float sadScore(byte[] g,int w,int h,int cx,int cy){
-        float sum=0;
-        int k=0;
+    private float znccQuality(byte[] g,int w,int h,int cx,int cy,int span){
+        float mean=0f;
+        int n=GRID*GRID;
+
         for(int gy=0;gy<GRID;gy++){
-            int yy=cy+((gy-GRID/2)*HALF_SPAN*2)/(GRID-1);
-            for(int gx=0;gx<GRID;gx++,k++){
-                int xx=cx+((gx-GRID/2)*HALF_SPAN*2)/(GRID-1);
-                sum+=Math.abs((g[yy*w+xx]&255)-template[k]);
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                mean+=(g[yy*w+xx]&255);
             }
         }
-        return sum/(GRID*GRID);
-    }
+        mean/=n;
 
-    private boolean extractTemplate(byte[] g,int w,int h,int cx,int cy,float[] out){
-        if(cx<HALF_SPAN||cy<HALF_SPAN||cx>=w-HALF_SPAN||cy>=h-HALF_SPAN)return false;
+        float num=0f,den=0f;
         int k=0;
         for(int gy=0;gy<GRID;gy++){
-            int yy=cy+((gy-GRID/2)*HALF_SPAN*2)/(GRID-1);
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
             for(int gx=0;gx<GRID;gx++,k++){
-                int xx=cx+((gx-GRID/2)*HALF_SPAN*2)/(GRID-1);
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                float a=(g[yy*w+xx]&255)-mean;
+                float b=template[k]-templateMean;
+                num+=a*b;
+                den+=a*a;
+            }
+        }
+
+        if(den<1f||templateStd<1f)return 0f;
+        float corr=(float)(num/(Math.sqrt(den)*templateStd));
+        return clamp((corr+1f)*.5f,0f,1f);
+    }
+
+    private boolean extractTemplate(byte[] g,int w,int h,int cx,int cy,float[] out,int span){
+        if(cx<span||cy<span||cx>=w-span||cy>=h-span)return false;
+        int k=0;
+        for(int gy=0;gy<GRID;gy++){
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++,k++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
                 out[k]=g[yy*w+xx]&255;
             }
         }
         return true;
     }
 
-    private void adaptTemplate(byte[] g,int w,int h,int cx,int cy,float alpha){
-        if(cx<HALF_SPAN||cy<HALF_SPAN||cx>=w-HALF_SPAN||cy>=h-HALF_SPAN)return;
+    private void adaptTemplate(byte[] g,int w,int h,int cx,int cy,float alpha,int span){
+        if(cx<span||cy<span||cx>=w-span||cy>=h-span)return;
         int k=0;
         for(int gy=0;gy<GRID;gy++){
-            int yy=cy+((gy-GRID/2)*HALF_SPAN*2)/(GRID-1);
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
             for(int gx=0;gx<GRID;gx++,k++){
-                int xx=cx+((gx-GRID/2)*HALF_SPAN*2)/(GRID-1);
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
                 float v=g[yy*w+xx]&255;
                 template[k]=(1f-alpha)*template[k]+alpha*v;
             }
         }
+        recomputeTemplateStats();
     }
 
-    private float scoreToConfidence(float sad){return clamp(1f-sad/48f);}
+    private void recomputeTemplateStats(){
+        float m=0f;
+        for(float v:template)m+=v;
+        m/=template.length;
+        float ss=0f;
+        for(float v:template){
+            float d=v-m;ss+=d*d;
+        }
+        templateMean=m;
+        templateStd=(float)Math.sqrt(Math.max(1f,ss));
+    }
+
+    private int spanFromBox(float halfBox,int w,int h){
+        int span=Math.round(clamp(halfBox,.035f,.22f)*Math.min(w,h));
+        return Math.max(10,Math.min(34,span));
+    }
+
+    private int safeX(int x,int w){
+        return Math.max(templateSpan+2,Math.min(w-templateSpan-3,x));
+    }
+
+    private int safeY(int y,int h){
+        return Math.max(templateSpan+2,Math.min(h-templateSpan-3,y));
+    }
 
     private float computeFlowWeight(float q,float angularSpeedDeg){
         float w=clamp((q-.20f)/.60f,0f,.68f);
@@ -364,33 +505,31 @@ public class TargetTracker {
         lastNs=now;
 
         float mx=(nx-x)/dt,my=(ny-y)/dt;
-        float va=q>.65f?.32f:.20f;
+        float va=q>.75f?.30f:.18f;
         vx=(1f-va)*vx+va*mx;
         vy=(1f-va)*vy+va*my;
 
-        float pa=q>.65f?.50f:.34f;
+        float pa=q>.75f?.48f:.30f;
         x=(1f-pa)*x+pa*nx;
         y=(1f-pa)*y+pa*ny;
 
-        float lead=.050f;
+        float lead=.055f;
         predX=clamp(x+vx*lead);predY=clamp(y+vy*lead);
         renderX=predX;renderY=predY;
-        confidence=.70f*confidence+.30f*q;
-        locked=true;
+        confidence=.78f*confidence+.22f*q;
     }
 
     private synchronized void coast(){
-        if(!locked)return;
         long now=System.nanoTime();
-        float dt=lastNs==0?.016f:Math.min(.07f,(now-lastNs)/1e9f);
-        predX=clamp(x+vx*(dt+.050f));
-        predY=clamp(y+vy*(dt+.050f));
+        float dt=lastNs==0?.016f:Math.min(.08f,(now-lastNs)/1e9f);
+        predX=clamp(x+vx*(dt+.055f));
+        predY=clamp(y+vy*(dt+.055f));
         renderX=predX;renderY=predY;
-        confidence*=.92f;
+        confidence*=.955f;
     }
 
     public synchronized void predictOnly(){
-        if(!locked)return;
+        if(!(locked||coasting||reacquiring))return;
         float dx=0,dy=0;
         if(imu!=null){
             float[] d=imu.peekDisplayAppliedShift();
@@ -398,22 +537,6 @@ public class TargetTracker {
         }
         renderX=clamp(predX+dx);
         renderY=clamp(predY+dy);
-    }
-
-    public synchronized void onYoloDetection(YoloDetector.Detection d){
-        if(d==null||!locked)return;
-        if(targetClass>=0&&d.classId!=targetClass)return;
-        float dx=d.cx()-predX,dy=d.cy()-predY;
-        if(dx*dx+dy*dy>.10f)return;
-        float a=.16f;
-        x=(1f-a)*x+a*d.cx();
-        y=(1f-a)*y+a*d.cy();
-        box=(1f-a)*box+a*clamp(d.halfBox(),.035f,.22f);
-        predX=clamp(x+vx*.05f);
-        predY=clamp(y+vy*.05f);
-        renderX=predX;renderY=predY;
-        confidence=Math.max(confidence,d.confidence*.85f);
-        yoloCorrections++;
     }
 
     private static float median(float[] a,int n){
@@ -426,13 +549,15 @@ public class TargetTracker {
     private static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
 
     private static final class Match{
-        final int x,y;final float score;
-        Match(int x,int y,float s){this.x=x;this.y=y;this.score=s;}
+        final int x,y;final float quality;
+        Match(int x,int y,float q){this.x=x;this.y=y;this.quality=q;}
     }
+
     private static final class FlowMatch{
         final int dx,dy;final float score;
         FlowMatch(int dx,int dy,float s){this.dx=dx;this.dy=dy;this.score=s;}
     }
+
     private static final class Motion{
         static final Motion NONE=new Motion(0,0,0,0);
         final float dx,dy,quality;final int points;
