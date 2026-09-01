@@ -29,6 +29,7 @@ public class YoloDetector {
     private final TargetTracker tracker;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean busy = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
     private Interpreter interpreter;
     private long lastDoneNs = 0;
 
@@ -47,8 +48,15 @@ public class YoloDetector {
     public YoloDetector(Context c, TargetTracker t) {
         context = c.getApplicationContext();
         tracker = t;
-        executor.execute(this::load);
     }
+
+    public void start() {
+        if (started.compareAndSet(false, true)) {
+            executor.execute(this::load);
+        }
+    }
+
+    public boolean isStarted() { return started.get(); }
 
     private void load() {
         try {
@@ -82,6 +90,7 @@ public class YoloDetector {
     }
 
     public void maybeSubmit(Image image, int frameIndex) {
+        if (!started.get()) start();
         if (!ready || interpreter == null || busy.get()) return;
         int stride = tracker.locked ? 7 : 2;
         if ((frameIndex % stride) != 0) return;
