@@ -32,10 +32,11 @@ public class HudView extends View {
                 camera.cameraId,camera.rearCameraCount,camera.selectedHfovDeg,
                 camera.previewSize.getWidth(),camera.previewSize.getHeight(),
                 camera.highSpeed120Supported?"YES":"NO/API"),24,62,p);
-        c.drawText(String.format("ROT %d  PREVIEW 16:9 CENTER-CROP  •  NO STRETCH",camera.displayRotation),24,118,p);
         c.drawText(String.format("IMU %.0f Hz  %.1f deg/s  Kx %.2f Ky %.2f",imu.gyroHz,imu.angularSpeedDeg,imu.strengthX,imu.strengthY),24,90,p);
-        
-        c.drawText(String.format("TARGET Q %.0f%%  lost %d  IMU/FLOW %.0f/%.0f%%",t.confidence*100,t.lostFrames,t.imuWeight*100,t.flowWeight*100),24,146,p);
+        c.drawText(String.format("TRK %.0f FPS / %.1f ms  FLOW Q %.0f%% pts %d  GRAB %.0f",
+                t.trackerFps,t.latencyMs,t.flowQuality*100f,t.flowPoints,camera.analysisGrabFps),24,118,p);
+        c.drawText(String.format("TARGET Q %.0f%%  lost %d  FUSION IMU/FLOW %.0f/%.0f%%",
+                t.confidence*100,t.lostFrames,t.imuWeight*100,t.flowWeight*100),24,146,p);
 
         if(camera.lastError.length()>0){
             p.setColor(red);c.drawText("ERR "+shortText(camera.lastError,80),24,170,p);
@@ -51,7 +52,7 @@ public class HudView extends View {
             c.drawRect(x-s,y-s,x+s,y+s,p);c.drawCircle(x,y,5,p);
         }else{
             p.setStyle(Paint.Style.FILL);p.setColor(amber);
-            c.drawText("SAFE CORE: YOLO OFF  •  TAP TARGET",24,h-26,p);
+            c.drawText("TAP TARGET  •  TRACK + IMU + FLOW  •  YOLO OFF",24,h-26,p);
         }
         postInvalidateOnAnimation();
     }
