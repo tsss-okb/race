@@ -1,4 +1,4 @@
-name: TargetLock APK
+name: TargetLock Core APK
 
 on:
   push:
@@ -25,22 +25,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: targetlock120-debug-keystore-v1
-      - name: Bundle official YOLO26n LiteRT model
-        run: |
-          mkdir -p targetlock/app/src/main/assets
-          curl -L --fail --retry 4 --retry-delay 2 \
-            https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_w8a32.tflite \
-            -o targetlock/app/src/main/assets/yolo26n_w8a32.tflite
-      - name: Build debug APK
+      - name: Build core APK
         working-directory: targetlock
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon clean assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TargetLock-v0.6-120Hz-safe-apk
+          name: TargetLock-v0.7-Core-safe-apk
           path: targetlock/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
