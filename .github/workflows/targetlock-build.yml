@@ -1,4 +1,4 @@
-name: TargetLock Core APK
+name: TargetLock APK
 
 on:
   push:
@@ -25,12 +25,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build core APK
+      - name: Bundle YOLO26n model
+        run: |
+          mkdir -p targetlock/app/src/main/assets
+          curl -L --fail --retry 4 --retry-delay 2 \
+            https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_w8a32.tflite \
+            -o targetlock/app/src/main/assets/yolo26n_w8a32.tflite
+      - name: Build APK
         working-directory: targetlock
         run: gradle --no-daemon clean assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TargetLock-v0.8-Tracker-fusion-apk
+          name: TargetLock-v0.9-YOLO-select-track-apk
           path: targetlock/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
