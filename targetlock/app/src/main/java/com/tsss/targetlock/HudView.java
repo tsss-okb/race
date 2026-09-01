@@ -97,10 +97,10 @@ public class HudView extends View {
                 camera.getAnalysisW(),camera.getAnalysisH()),24,34,p);
 
         p.setColor(yolo.ready?green:(yolo.error.length()>0?red:amber));
-        c.drawText(String.format("YOLO %s  %.1f FPS / %.0f ms  det %d  %s %s",
+        c.drawText(String.format("YOLO %s %s  %.1f FPS / %.0f ms  det %d  %s",
                 yolo.ready?"READY":(yolo.started?"LOADING":"STANDBY"),
-                yolo.detectorFps,yolo.latencyMs,yolo.detectionCount,
-                yolo.outputShapeText,yolo.decoderMode),24,60,p);
+                yolo.modelMode,yolo.detectorFps,yolo.latencyMs,yolo.detectionCount,
+                yolo.tensorTypes),24,60,p);
 
         if(yolo.error.length()>0){
             p.setColor(red);
