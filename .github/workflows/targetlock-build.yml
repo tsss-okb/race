@@ -31,13 +31,12 @@ jobs:
           curl -L --fail --retry 4 --retry-delay 2 \
             https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_w8a32.tflite \
             -o targetlock/app/src/main/assets/yolo26n_w8a32.tflite
-          ls -lh targetlock/app/src/main/assets/yolo26n_w8a32.tflite
       - name: Build debug APK
         working-directory: targetlock
         run: gradle --no-daemon assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TargetLock-v0.3-debug-apk
+          name: TargetLock-v0.4-IMU-debug-apk
           path: targetlock/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
