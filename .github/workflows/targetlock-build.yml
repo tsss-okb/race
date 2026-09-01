@@ -25,18 +25,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Bundle YOLO26n model
+      - name: Bundle YOLO26n INT8 and fallback
         run: |
           mkdir -p targetlock/app/src/main/assets
           curl -L --fail --retry 4 --retry-delay 2 \
+            https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.2.0/yolo26n_int8.tflite \
+            -o targetlock/app/src/main/assets/yolo26n_int8.tflite
+          curl -L --fail --retry 4 --retry-delay 2 \
             https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_w8a32.tflite \
             -o targetlock/app/src/main/assets/yolo26n_w8a32.tflite
+          ls -lh targetlock/app/src/main/assets/*.tflite
       - name: Build APK
         working-directory: targetlock
         run: gradle --no-daemon clean assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: TargetLock-v1.1-Dashboard-Hold-apk
+          name: TargetLock-v1.2-INT8-Dashboard-Hold-apk
           path: targetlock/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
