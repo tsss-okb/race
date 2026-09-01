@@ -26,6 +26,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile String status="INIT";
     public volatile String lastError="";
     public volatile String cameraId="?";
+    public volatile int rearCameraCount=0;
+    public volatile float selectedHfovDeg=0f;
     public volatile int requestedFps=30;
     public volatile float cameraFps=0f;
     public volatile boolean highSpeed120Supported=false;
@@ -85,7 +87,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             }
 
             CameraManager m=(CameraManager)getContext().getSystemService(Context.CAMERA_SERVICE);
-            cameraId=chooseBackCamera(m);
+            cameraId=chooseMainRearCamera(m);
             CameraCharacteristics ch=m.getCameraCharacteristics(cameraId);
             configureFov(ch);
             inspectCapabilities(ch);
@@ -119,21 +121,66 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         }
     }
 
-    private String chooseBackCamera(CameraManager m)throws CameraAccessException{
+    private String chooseMainRearCamera(CameraManager m)throws CameraAccessException{
         String[] ids=m.getCameraIdList();
         if(ids.length==0)throw new IllegalStateException("No camera IDs");
-        String fallback=ids[0];
+
+        String bestId=null;
+        double bestScore=Double.MAX_VALUE;
+        int count=0;
+
         for(String id:ids){
             CameraCharacteristics ch=m.getCameraCharacteristics(id);
-            Integer f=ch.get(CameraCharacteristics.LENS_FACING);
+            Integer facing=ch.get(CameraCharacteristics.LENS_FACING);
+            if(facing==null||facing!=CameraCharacteristics.LENS_FACING_BACK)continue;
+            count++;
+
+            float hfov=estimateHorizontalFov(ch);
             Integer level=ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
-            if(f!=null&&f==CameraCharacteristics.LENS_FACING_BACK){
-                // Prefer a logical/main back camera over very limited auxiliary IDs.
-                if(level==null||level!=CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY)return id;
-                fallback=id;
+
+            // Main 1x rear cameras are typically around 60-85 degrees HFOV.
+            // Penalize ultrawide (>95), tele (<50), and LEGACY camera IDs.
+            double score=Math.abs(hfov-72.0);
+            if(hfov<=0)score+=50;
+            if(hfov>95)score+=35;
+            if(hfov<48)score+=35;
+            if(level!=null&&level==CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY)score+=20;
+
+            int[] caps=ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+            if(caps!=null){
+                for(int cap:caps){
+                    if(cap==CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA){
+                        score-=6; // Prefer the logical rear camera exposed as the main camera.
+                        break;
+                    }
+                }
+            }
+
+            if(score<bestScore){
+                bestScore=score;
+                bestId=id;
+                selectedHfovDeg=hfov;
             }
         }
-        return fallback;
+
+        rearCameraCount=count;
+        if(bestId!=null)return bestId;
+
+        // Absolute fallback if vendor reports no LENS_FACING metadata correctly.
+        return ids[0];
+    }
+
+    private float estimateHorizontalFov(CameraCharacteristics ch){
+        try{
+            SizeF physical=ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            float[] focal=ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            if(physical==null||focal==null||focal.length==0||focal[0]<=0)return 0f;
+            float minF=focal[0];
+            for(float f:focal)if(f>0&&f<minF)minF=f;
+            return (float)Math.toDegrees(2.0*Math.atan(physical.getWidth()/(2.0*minF)));
+        }catch(Throwable t){
+            return 0f;
+        }
     }
 
     private Size choosePreviewSize(CameraCharacteristics ch,int vw,int vh){
