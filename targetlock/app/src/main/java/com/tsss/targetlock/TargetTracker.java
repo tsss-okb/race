@@ -214,7 +214,7 @@ public class TargetTracker {
                 predictedH/Math.max(.01f,dh));
         if(sizeRatio>3.0f||sizeRatioY>3.0f)return Float.MAX_VALUE;
 
-        float innovation=ref.associationInnovation(d.cx(),d.cy(),d.confidence);
+        float innovation=(float)ref.associationInnovation(d.cx(),d.cy(),d.confidence);
         float confPenalty=(1f-d.confidence)*.20f;
 
         // Old working behavior: nearest same-class box dominates association.
