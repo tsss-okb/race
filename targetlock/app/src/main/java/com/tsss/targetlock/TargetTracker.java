@@ -8,8 +8,9 @@ public class TargetTracker {
     public volatile boolean acquiring = false;
     public volatile float x = .5f, y = .5f, predX = .5f, predY = .5f;
     public volatile float vx = 0, vy = 0, box = .075f, confidence = 0;
-    public volatile float trackerFps = 0, latencyMs = 0;
-    public volatile int lostFrames = 0;
+    public volatile float trackerFps = 0, latencyMs = 0, yoloConfidence = 0;
+    public volatile int lostFrames = 0, targetClass = -1, yoloCorrections = 0;
+    public volatile String targetName = "—";
 
     private static final int GRID = 19;
     private static final int HALF_SPAN_PX = 24;
@@ -21,11 +22,40 @@ public class TargetTracker {
     public synchronized void requestLock(float nx, float ny) {
         pendingX = clamp(nx); pendingY = clamp(ny);
         acquiring = true; locked = false; confidence = 0; lostFrames = 0;
+        targetClass = -1; targetName = "manual"; yoloConfidence = 0;
+    }
+
+    public synchronized void onYoloDetection(YoloDetector.Detection d) {
+        if (d == null) return;
+        yoloConfidence = d.confidence;
+        if (!locked) {
+            targetClass = d.classId;
+            targetName = d.className;
+            box = d.halfBox;
+            pendingX = clamp(d.x); pendingY = clamp(d.y);
+            acquiring = true;
+            confidence = Math.max(confidence, d.confidence);
+            return;
+        }
+
+        if (targetClass >= 0 && d.classId != targetClass) return;
+        float dx = d.x - predX, dy = d.y - predY;
+        float dist = (float)Math.sqrt(dx*dx + dy*dy);
+        if (dist > .35f) return;
+
+        targetClass = d.classId;
+        targetName = d.className;
+        box = .72f * box + .28f * d.halfBox;
+        updateMeasurement(d.x, d.y, Math.max(.45f, d.confidence));
+        confidence = Math.max(confidence, d.confidence);
+        yoloCorrections++;
     }
 
     public synchronized void clear() {
         locked = false; acquiring = false; hasTemplate = false;
         confidence = 0; lostFrames = 0; vx = vy = 0;
+        pendingX = pendingY = -1;
+        targetClass = -1; targetName = "—"; yoloConfidence = 0;
     }
 
     public void processImage(Image image) {
@@ -52,7 +82,8 @@ public class TargetTracker {
                 if (extractTemplate(buf, rowStride, pixelStride, w, h, cx, cy, template)) {
                     synchronized (this) {
                         x = predX = px; y = predY = py; vx = vy = 0;
-                        confidence = 1f; locked = true; acquiring = false;
+                        confidence = Math.max(.72f, confidence);
+                        locked = true; acquiring = false;
                         hasTemplate = true; pendingX = pendingY = -1;
                         lastNs = System.nanoTime(); lostFrames = 0;
                     }
@@ -62,7 +93,7 @@ public class TargetTracker {
             if (!hasTemplate || !locked) return;
 
             int cx = Math.round(predX * (w - 1)), cy = Math.round(predY * (h - 1));
-            int radius = Math.min(96, 30 + lostFrames * 12);
+            int radius = Math.min(108, 30 + lostFrames * 12);
             Match coarse = search(buf, rowStride, pixelStride, w, h, cx, cy, radius, 4);
             Match best = coarse == null ? null : search(buf, rowStride, pixelStride, w, h, coarse.x, coarse.y, 7, 1);
 
@@ -71,7 +102,7 @@ public class TargetTracker {
                 if (q >= .18f) {
                     updateMeasurement(best.x / (float)(w - 1), best.y / (float)(h - 1), q);
                     lostFrames = 0;
-                    if (q > .58f) adaptTemplate(buf, rowStride, pixelStride, w, h, best.x, best.y, .055f);
+                    if (q > .58f) adaptTemplate(buf, rowStride, pixelStride, w, h, best.x, best.y, .045f);
                 } else {
                     lostFrames++;
                     coast();
@@ -80,7 +111,7 @@ public class TargetTracker {
                 lostFrames++;
                 coast();
             }
-            if (lostFrames > 16 || confidence < .10f) clear();
+            if (lostFrames > 18 || confidence < .08f) clear();
         } finally {
             latencyMs = (System.nanoTime() - started) / 1_000_000f;
             if (image != null) image.close();
@@ -146,9 +177,7 @@ public class TargetTracker {
         return b.get(idx) & 0xff;
     }
 
-    private float scoreToConfidence(float sad) {
-        return clamp(1f - sad / 52f);
-    }
+    private float scoreToConfidence(float sad) { return clamp(1f - sad / 52f); }
 
     private synchronized void updateMeasurement(float nx, float ny, float q) {
         long now = System.nanoTime();
