@@ -1,6 +1,7 @@
 package com.tsss.targetlock;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
@@ -16,6 +17,9 @@ import android.view.Surface;
 import android.view.TextureView;
 
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CameraPreview extends TextureView implements TextureView.SurfaceTextureListener {
     private CameraDevice camera;
@@ -25,6 +29,15 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private boolean opening=false;
     private long lastSensorTs=0;
     private int sensorOrientation=90;
+
+    private static final int TRACK_W=320;
+    private static final int TRACK_H=180;
+    private final ExecutorService trackerExecutor=Executors.newSingleThreadExecutor();
+    private final AtomicBoolean trackerBusy=new AtomicBoolean(false);
+    private Bitmap trackerBitmap;
+    private final int[] trackerPixels=new int[TRACK_W*TRACK_H];
+    private long lastTrackCaptureNs=0;
+    private long lastTrackDoneNs=0;
 
     public volatile String status="INIT";
     public volatile String lastError="";
@@ -36,6 +49,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile boolean highSpeed120Supported=false;
     public volatile Size previewSize=new Size(0,0);
     public volatile int displayRotation=0;
+    public volatile float analysisGrabFps=0f;
 
     private final TargetTracker tracker;
     private final ImuCompensator imu;
@@ -73,6 +87,9 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         try{if(camera!=null)camera.close();}catch(Throwable ignored){}
         session=null;camera=null;opening=false;
         lastSensorTs=0;cameraFps=0;
+        trackerBusy.set(false);
+        lastTrackCaptureNs=0;lastTrackDoneNs=0;
+        try{tracker.clear();}catch(Throwable ignored){}
         if(thread!=null){
             try{thread.quitSafely();}catch(Throwable ignored){}
             thread=null;bg=null;
@@ -402,5 +419,49 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
     @Override public void onSurfaceTextureUpdated(SurfaceTexture s){
         try{tracker.predictOnly();}catch(Throwable ignored){}
+        captureTrackerFrame();
+    }
+
+    private void captureTrackerFrame(){
+        if(!"PREVIEW OK".equals(status))return;
+
+        long now=System.nanoTime();
+        // Keep visual analysis near 60 Hz max. IMU/HUD prediction remains 120 Hz.
+        if(now-lastTrackCaptureNs<16_000_000L)return;
+        if(!trackerBusy.compareAndSet(false,true))return;
+        lastTrackCaptureNs=now;
+
+        try{
+            if(trackerBitmap==null||trackerBitmap.isRecycled()||
+                    trackerBitmap.getWidth()!=TRACK_W||trackerBitmap.getHeight()!=TRACK_H){
+                trackerBitmap=Bitmap.createBitmap(TRACK_W,TRACK_H,Bitmap.Config.ARGB_8888);
+            }
+
+            Bitmap out=getBitmap(trackerBitmap);
+            if(out==null){
+                trackerBusy.set(false);
+                return;
+            }
+            out.getPixels(trackerPixels,0,TRACK_W,0,0,TRACK_W,TRACK_H);
+
+            trackerExecutor.execute(()->{
+                try{
+                    tracker.processArgb(trackerPixels,TRACK_W,TRACK_H);
+                    long done=System.nanoTime();
+                    if(lastTrackDoneNs!=0){
+                        float f=1e9f/Math.max(1,done-lastTrackDoneNs);
+                        analysisGrabFps=analysisGrabFps==0?f:.86f*analysisGrabFps+.14f*f;
+                    }
+                    lastTrackDoneNs=done;
+                }catch(Throwable t){
+                    lastError="tracker: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
+                }finally{
+                    trackerBusy.set(false);
+                }
+            });
+        }catch(Throwable t){
+            lastError="bitmap: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
+            trackerBusy.set(false);
+        }
     }
 }
