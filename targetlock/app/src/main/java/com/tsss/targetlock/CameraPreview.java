@@ -38,6 +38,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private final int[] trackerPixels=new int[TRACK_W*TRACK_H];
     private long lastTrackCaptureNs=0;
     private long lastTrackDoneNs=0;
+    private long lastAppliedYoloSerial=0;
 
     public volatile String status="INIT";
     public volatile String lastError="";
@@ -460,6 +461,20 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             // Detector is sparse: fast during SEARCH, slower while tracker is locked.
             try{
                 detector.maybeSubmit(trackerPixels,TRACK_W,TRACK_H,tracker.locked?850:260);
+
+                long serial=detector.resultSerial;
+                if(tracker.locked&&serial!=0&&serial!=lastAppliedYoloSerial){
+                    YoloDetector.Detection best=null;
+                    float bestD=Float.MAX_VALUE;
+                    for(YoloDetector.Detection d:detector.getDetections()){
+                        if(tracker.targetClass>=0&&d.classId!=tracker.targetClass)continue;
+                        float dx=d.cx()-tracker.predX,dy=d.cy()-tracker.predY;
+                        float dd=dx*dx+dy*dy;
+                        if(dd<bestD){bestD=dd;best=d;}
+                    }
+                    if(best!=null&&bestD<.10f)tracker.onYoloDetection(best);
+                    lastAppliedYoloSerial=serial;
+                }
             }catch(Throwable t){
                 lastError="yolo submit: "+t.getClass().getSimpleName();
             }
