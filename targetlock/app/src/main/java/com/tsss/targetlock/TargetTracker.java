@@ -282,8 +282,16 @@ public class TargetTracker {
         float gate=reacquiring?11f:(coasting?8f:5.5f);
         if(innovation>gate)return Float.MAX_VALUE;
 
+        float expectedHalf=Math.max(.025f,box);
+        float iou=boxIou(
+                predX-expectedHalf,predY-expectedHalf,predX+expectedHalf,predY+expectedHalf,
+                d.left,d.top,d.right,d.bottom);
+
+        if(locked&&iou<.015f&&innovation>3.2f)return Float.MAX_VALUE;
+
         float confPenalty=(1f-d.confidence)*.60f;
-        return innovation + scaleErr*.75f + confPenalty;
+        float iouPenalty=(1f-iou)*.85f;
+        return innovation + scaleErr*.75f + confPenalty + iouPenalty;
     }
 
     public synchronized void onYoloDetection(YoloDetector.Detection d){
@@ -623,6 +631,17 @@ public class TargetTracker {
         filterSigmaX=precision.sigmaX();
         filterSigmaY=precision.sigmaY();
         filterInnovation=precision.lastInnovation();
+    }
+
+    private static float boxIou(float l1,float t1,float r1,float b1,
+                                float l2,float t2,float r2,float b2){
+        float l=Math.max(l1,l2),t=Math.max(t1,t2);
+        float r=Math.min(r1,r2),b=Math.min(b1,b2);
+        float iw=Math.max(0f,r-l),ih=Math.max(0f,b-t);
+        float inter=iw*ih;
+        float a1=Math.max(0f,r1-l1)*Math.max(0f,b1-t1);
+        float a2=Math.max(0f,r2-l2)*Math.max(0f,b2-t2);
+        return inter/Math.max(1e-6f,a1+a2-inter);
     }
 
     private static float median(float[] a,int n){
