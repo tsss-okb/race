@@ -49,6 +49,23 @@ public class TargetTracker {
         if(imu!=null)imu.resetMotion();
     }
 
+    public synchronized void requestDetectedLock(YoloDetector.Detection d){
+        if(d==null)return;
+        float nx=clamp(d.cx(),.06f,.94f);
+        float ny=clamp(d.cy(),.10f,.90f);
+        pendingX=nx;pendingY=ny;
+        acquiring=true;locked=false;
+        confidence=Math.max(.25f,d.confidence);
+        lostFrames=0;vx=vy=0;hasTemplate=false;
+        renderX=predX=nx;renderY=predY=ny;
+        box=clamp(d.halfBox(),.035f,.22f);
+        targetName=d.className;
+        targetClass=d.classId;
+        tapCount++;
+        acquireStatus="YOLO SELECT";
+        if(imu!=null)imu.resetMotion();
+    }
+
     public synchronized boolean seedFromArgb(int[] pixels,int w,int h,float nx,float ny){
         if(pixels==null||pixels.length<w*h||w<80||h<60)return false;
         ensureBuffers(w*h);
@@ -383,7 +400,21 @@ public class TargetTracker {
         renderY=clamp(predY+dy);
     }
 
-    public void onYoloDetection(YoloDetector.Detection d){}
+    public synchronized void onYoloDetection(YoloDetector.Detection d){
+        if(d==null||!locked)return;
+        if(targetClass>=0&&d.classId!=targetClass)return;
+        float dx=d.cx()-predX,dy=d.cy()-predY;
+        if(dx*dx+dy*dy>.10f)return;
+        float a=.16f;
+        x=(1f-a)*x+a*d.cx();
+        y=(1f-a)*y+a*d.cy();
+        box=(1f-a)*box+a*clamp(d.halfBox(),.035f,.22f);
+        predX=clamp(x+vx*.05f);
+        predY=clamp(y+vy*.05f);
+        renderX=predX;renderY=predY;
+        confidence=Math.max(confidence,d.confidence*.85f);
+        yoloCorrections++;
+    }
 
     private static float median(float[] a,int n){
         float[] c=Arrays.copyOf(a,n);
