@@ -73,11 +73,11 @@ public class HudView extends View {
         c.drawText(String.format("TRK %.0f FPS / %.1f ms  FLOW Q %.0f%% pts %d  GRAB %.0f",
                 t.trackerFps,t.latencyMs,t.flowQuality*100f,t.flowPoints,camera.analysisGrabFps),24,118,p);
 
-        c.drawText(String.format("STATE %s  TARGET %s  Q %.0f%%  lost %d  Ycorr %d",
-                t.acquireStatus,t.targetName,t.confidence*100,t.lostFrames,t.yoloCorrections),24,146,p);
+        c.drawText(String.format("STATE %s  CLASS %s  Q %.0f%%  lost %d  reacq %d",
+                t.acquireStatus,t.targetName,t.confidence*100,t.lostFrames,t.reacquireCount),24,146,p);
 
-        c.drawText(String.format("FUSION IMU/FLOW %.0f/%.0f%%   tap %d",
-                t.imuWeight*100,t.flowWeight*100,t.tapCount),24,174,p);
+        c.drawText(String.format("FUSION IMU/FLOW %.0f/%.0f%%   Ycorr %d   tap %d",
+                t.imuWeight*100,t.flowWeight*100,t.yoloCorrections,t.tapCount),24,174,p);
 
         if(camera.lastError.length()>0){
             p.setColor(red);
@@ -107,7 +107,7 @@ public class HudView extends View {
         c.drawLine(w/2-18,h/2,w/2-5,h/2,p);c.drawLine(w/2+5,h/2,w/2+18,h/2,p);
         c.drawLine(w/2,h/2-18,w/2,h/2-5,p);c.drawLine(w/2,h/2+5,w/2,h/2+18,p);
 
-        if(t.locked||t.acquiring){
+        if(t.locked||t.acquiring||t.coasting||t.reacquiring){
             float x=t.renderX*w,y=t.renderY*h,s=Math.min(w,h)*t.box;
             p.setStrokeWidth(3f);
             p.setColor(t.locked?green:amber);
