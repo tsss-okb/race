@@ -118,12 +118,16 @@ public class HudView extends View {
         c.drawText(String.format("STATE %s  CLASS %s  Q %.0f%%  lost %d  reacq %d",
                 t.acquireStatus,t.targetName,t.confidence*100,t.lostFrames,t.reacquireCount),24,138,p);
 
-        c.drawText(String.format("FUSION IMU/FLOW %.0f/%.0f%%  Ycorr %d  tap %d",
-                t.imuWeight*100,t.flowWeight*100,t.yoloCorrections,t.tapCount),24,164,p);
+        c.drawText(String.format("KF σ %.3f/%.3f  INN %.2f  EMA %.2f/%.2f",
+                t.filterSigmaX,t.filterSigmaY,t.filterInnovation,t.errorEmaX,t.errorEmaY),24,164,p);
 
         if(camera.lastError.length()>0){
             p.setColor(red);
             c.drawText("ERR "+shortText(camera.lastError,92),24,192,p);
+        }else{
+            p.setColor(green);
+            c.drawText(String.format("FUSION IMU/FLOW %.0f/%.0f%%  Ycorr %d  tap %d",
+                    t.imuWeight*100,t.flowWeight*100,t.yoloCorrections,t.tapCount),24,192,p);
         }
 
         // YOLO candidate boxes are ALWAYS visible when DETECT is enabled.
