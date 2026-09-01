@@ -59,7 +59,14 @@ def main():
     for frame in range(180):
         gt = ground_truth(frame)
         detections = noisy_detection(frame, gt)
-        bbox, _ = tracker.update(detections, now=frame * dt)
+
+        # The real workflow is DETECT -> user selects the intended box -> HOLD.
+        # Seed the intended target once; from then on the tracker must preserve identity.
+        if frame == 0:
+            tracker.initialize(detections[0], now=0.0)
+            bbox = tracker.bbox
+        else:
+            bbox, _ = tracker.update(detections, now=frame * dt)
 
         if bbox is not None:
             iou = bbox_iou(bbox, gt)
