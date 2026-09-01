@@ -1,6 +1,8 @@
 package com.tsss.targetlock;
 
 import android.content.Context;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.*;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -22,6 +24,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private Handler bg;
     private boolean opening=false;
     private long lastSensorTs=0;
+    private int sensorOrientation=90;
 
     public volatile String status="INIT";
     public volatile String lastError="";
@@ -32,6 +35,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile float cameraFps=0f;
     public volatile boolean highSpeed120Supported=false;
     public volatile Size previewSize=new Size(0,0);
+    public volatile int displayRotation=0;
 
     private final TargetTracker tracker;
     private final ImuCompensator imu;
@@ -41,7 +45,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
     public CameraPreview(Context c){
         super(c);
-        setOpaque(false);
+        setOpaque(true);
         tracker=new TargetTracker();
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
@@ -89,10 +93,16 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             CameraManager m=(CameraManager)getContext().getSystemService(Context.CAMERA_SERVICE);
             cameraId=chooseMainRearCamera(m);
             CameraCharacteristics ch=m.getCameraCharacteristics(cameraId);
+
+            Integer so=ch.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            sensorOrientation=so==null?90:so;
+
             configureFov(ch);
             inspectCapabilities(ch);
-            previewSize=choosePreviewSize(ch,getWidth(),getHeight());
+            previewSize=choosePreviewSize(ch);
             requestedFps=chooseRequestedFps(ch);
+
+            post(this::applyPreviewTransform);
 
             if(getContext().checkSelfPermission(android.Manifest.permission.CAMERA)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
                 opening=false;status="NO CAMERA PERMISSION";return;
@@ -138,8 +148,6 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             float hfov=estimateHorizontalFov(ch);
             Integer level=ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
 
-            // Main 1x rear cameras are typically around 60-85 degrees HFOV.
-            // Penalize ultrawide (>95), tele (<50), and LEGACY camera IDs.
             double score=Math.abs(hfov-72.0);
             if(hfov<=0)score+=50;
             if(hfov>95)score+=35;
@@ -150,7 +158,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             if(caps!=null){
                 for(int cap:caps){
                     if(cap==CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA){
-                        score-=6; // Prefer the logical rear camera exposed as the main camera.
+                        score-=6;
                         break;
                     }
                 }
@@ -165,8 +173,6 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
         rearCameraCount=count;
         if(bestId!=null)return bestId;
-
-        // Absolute fallback if vendor reports no LENS_FACING metadata correctly.
         return ids[0];
     }
 
@@ -178,44 +184,39 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             float minF=focal[0];
             for(float f:focal)if(f>0&&f<minF)minF=f;
             return (float)Math.toDegrees(2.0*Math.atan(physical.getWidth()/(2.0*minF)));
-        }catch(Throwable t){
-            return 0f;
-        }
+        }catch(Throwable t){return 0f;}
     }
 
-    private Size choosePreviewSize(CameraCharacteristics ch,int vw,int vh){
+    private Size choosePreviewSize(CameraCharacteristics ch){
         try{
             StreamConfigurationMap map=ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             Size[] sizes=map==null?null:map.getOutputSizes(SurfaceTexture.class);
             if(sizes==null||sizes.length==0)return new Size(1280,720);
 
-            float targetRatio=vw>0&&vh>0?vw/(float)vh:16f/9f;
+            // Prefer a standard 16:9 camera stream. Never stretch the stream to the phone screen ratio.
+            for(Size s:sizes)if(s.getWidth()==1280&&s.getHeight()==720)return s;
+            for(Size s:sizes)if(s.getWidth()==1920&&s.getHeight()==1080)return s;
+
             Size best=null;
             double bestScore=Double.MAX_VALUE;
-
+            final float target=16f/9f;
             for(Size s:sizes){
                 int sw=s.getWidth(),sh=s.getHeight();
                 if(sw<640||sh<360)continue;
-                // Avoid giant 4K preview buffers in this diagnostic build.
                 if(sw>1920||sh>1080)continue;
                 float ratio=sw/(float)sh;
-                double ratioPenalty=Math.abs(ratio-targetRatio)*1600.0;
-                double sizePenalty=Math.abs(sw-1280)*0.15+Math.abs(sh-720)*0.15;
-                double score=ratioPenalty+sizePenalty;
+                double score=Math.abs(ratio-target)*4000.0+
+                        Math.abs(sw-1280)*0.12+Math.abs(sh-720)*0.12;
                 if(score<bestScore){bestScore=score;best=s;}
             }
-
             if(best!=null)return best;
 
-            // Fallback: smallest valid SurfaceTexture output.
             best=sizes[0];
             for(Size s:sizes){
                 if((long)s.getWidth()*s.getHeight()<(long)best.getWidth()*best.getHeight())best=s;
             }
             return best;
-        }catch(Throwable t){
-            return new Size(1280,720);
-        }
+        }catch(Throwable t){return new Size(1280,720);}
     }
 
     private int chooseRequestedFps(CameraCharacteristics ch){
@@ -297,13 +298,15 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             if(st==null){status="NO SURFACE";return;}
 
             st.setDefaultBufferSize(previewSize.getWidth(),previewSize.getHeight());
-            Surface preview=new Surface(st);
+            post(this::applyPreviewTransform);
 
+            Surface preview=new Surface(st);
             CaptureRequest.Builder b=camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             b.addTarget(preview);
             b.set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);
             try{b.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);}catch(Throwable ignored){}
             try{b.set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON);}catch(Throwable ignored){}
+
             Range<Integer> fps=chooseNormalRange(ch,requestedFps);
             if(fps!=null){
                 requestedFps=fps.getUpper();
@@ -337,8 +340,48 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                 }
             },bg);
 
+        }catch(Throwable t){fail("preview",t);}
+    }
+
+    private void applyPreviewTransform(){
+        try{
+            if(previewSize.getWidth()<=0||previewSize.getHeight()<=0||getWidth()<=0||getHeight()<=0)return;
+
+            int viewW=getWidth();
+            int viewH=getHeight();
+            int rotation=getDisplay()==null?Surface.ROTATION_0:getDisplay().getRotation();
+            displayRotation=rotation;
+
+            Matrix matrix=new Matrix();
+            RectF viewRect=new RectF(0,0,viewW,viewH);
+            float centerX=viewRect.centerX();
+            float centerY=viewRect.centerY();
+
+            // Standard Camera2 TextureView transform: rotate sensor preview, then center-crop.
+            if(rotation==Surface.ROTATION_90||rotation==Surface.ROTATION_270){
+                RectF bufferRect=new RectF(0,0,previewSize.getHeight(),previewSize.getWidth());
+                bufferRect.offset(centerX-bufferRect.centerX(),centerY-bufferRect.centerY());
+                matrix.setRectToRect(viewRect,bufferRect,Matrix.ScaleToFit.FILL);
+
+                float scale=Math.max(
+                        viewH/(float)previewSize.getHeight(),
+                        viewW/(float)previewSize.getWidth());
+                matrix.postScale(scale,scale,centerX,centerY);
+
+                float degrees=(rotation==Surface.ROTATION_90)?-90f:90f;
+                if(sensorOrientation==270)degrees=-degrees;
+                matrix.postRotate(degrees,centerX,centerY);
+            }else{
+                float srcW=previewSize.getWidth();
+                float srcH=previewSize.getHeight();
+                float scale=Math.max(viewW/srcW,viewH/srcH);
+                matrix.postScale(scale,scale,centerX,centerY);
+                if(rotation==Surface.ROTATION_180)matrix.postRotate(180f,centerX,centerY);
+            }
+
+            setTransform(matrix);
         }catch(Throwable t){
-            fail("preview",t);
+            lastError="transform: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
         }
     }
 
@@ -350,8 +393,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     @Override public void onSurfaceTextureAvailable(SurfaceTexture s,int w,int h){
         postDelayed(this::start,200);
     }
-    @Override public void onSurfaceTextureSizeChanged(SurfaceTexture s,int w,int h){}
+
+    @Override public void onSurfaceTextureSizeChanged(SurfaceTexture s,int w,int h){
+        applyPreviewTransform();
+    }
+
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture s){stop();return true;}
+
     @Override public void onSurfaceTextureUpdated(SurfaceTexture s){
         try{tracker.predictOnly();}catch(Throwable ignored){}
     }
