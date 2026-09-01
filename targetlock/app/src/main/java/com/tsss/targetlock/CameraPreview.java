@@ -500,11 +500,16 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
             try{
                 if(detectEnabled){
+                    long baseLatency=Math.max(35,Math.round(detector.latencyMs));
                     long yoloIntervalMs;
-                    if(tracker.reacquiring) yoloIntervalMs=120;
-                    else if(tracker.coasting) yoloIntervalMs=170;
-                    else if(tracker.locked) yoloIntervalMs=360;
-                    else yoloIntervalMs=210;
+                    if(tracker.reacquiring)
+                        yoloIntervalMs=Math.max(70,baseLatency+25);
+                    else if(tracker.coasting)
+                        yoloIntervalMs=Math.max(100,baseLatency+55);
+                    else if(tracker.locked)
+                        yoloIntervalMs=baseLatency<80?190:(baseLatency<140?260:380);
+                    else
+                        yoloIntervalMs=baseLatency<80?120:(baseLatency<140?180:240);
 
                     detector.maybeSubmit(trackerPixels,analysisW,analysisH,yoloIntervalMs);
 
