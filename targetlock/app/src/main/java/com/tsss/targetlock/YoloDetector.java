@@ -11,7 +11,6 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -19,9 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class YoloDetector {
     private static final int IN=640;
-    private static final int N=8400;
-    private static final int C=80;
-    private static final float CONF=.34f;
+    private static final float CONF=.28f;
     private static final float IOU=.45f;
 
     public volatile boolean ready=false;
@@ -31,6 +28,8 @@ public class YoloDetector {
     public volatile String backend="CPU";
     public volatile int detectionCount=0;
     public volatile long resultSerial=0;
+    public volatile String outputShapeText="?";
+    public volatile String decoderMode="?";
 
     private final Context context;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -38,7 +37,13 @@ public class YoloDetector {
 
     private Interpreter interpreter;
     private ByteBuffer input;
-    private final float[][][] output=new float[1][84][N];
+    private Object outputTensor;
+    private float[][][] outChannelsFirst;
+    private float[][][] outBoxesFirst;
+    private boolean channelsFirst=true;
+    private int channels=84;
+    private int boxes=8400;
+    private int classes=80;
     private long lastDoneNs=0;
 
     private volatile List<Detection> detections=Collections.emptyList();
@@ -67,6 +72,27 @@ public class YoloDetector {
                 Interpreter.Options o=new Interpreter.Options();
                 o.setNumThreads(Math.max(2,Math.min(4,Runtime.getRuntime().availableProcessors()-1)));
                 interpreter=new Interpreter(model,o);
+
+                int[] shape=interpreter.getOutputTensor(0).shape();
+                outputShapeText=shapeToString(shape);
+                if(shape.length!=3||shape[0]!=1)throw new IllegalStateException("Unexpected output "+outputShapeText);
+
+                // Supports both [1,84,8400] and [1,8400,84].
+                if(shape[1]<=256&&shape[2]>shape[1]){
+                    channelsFirst=true;
+                    channels=shape[1];
+                    boxes=shape[2];
+                    outChannelsFirst=new float[1][channels][boxes];
+                    outputTensor=outChannelsFirst;
+                }else{
+                    channelsFirst=false;
+                    boxes=shape[1];
+                    channels=shape[2];
+                    outBoxesFirst=new float[1][boxes][channels];
+                    outputTensor=outBoxesFirst;
+                }
+
+                classes=Math.min(NAMES.length,Math.max(1,channels-4));
                 input=ByteBuffer.allocateDirect(IN*IN*3*4).order(ByteOrder.nativeOrder());
                 ready=true;
                 error="";
@@ -78,12 +104,16 @@ public class YoloDetector {
     }
 
     public boolean isBusy(){return busy.get();}
-
     public List<Detection> getDetections(){return detections;}
+
+    public void clearDetections(){
+        detections=Collections.emptyList();
+        detectionCount=0;
+    }
 
     public void maybeSubmit(int[] pixels,int w,int h,long minIntervalMs){
         if(!started)start();
-        if(!ready||interpreter==null||pixels==null||busy.get())return;
+        if(!ready||interpreter==null||pixels==null||busy.get()||w<2||h<2)return;
 
         long now=System.nanoTime();
         if(lastDoneNs!=0&&(now-lastDoneNs)<minIntervalMs*1_000_000L)return;
@@ -94,11 +124,12 @@ public class YoloDetector {
         executor.execute(()->{
             long t0=System.nanoTime();
             try{
-                preprocess(copy,w,h);
-                interpreter.run(input,output);
-                detections=postprocess();
+                Letterbox lb=preprocess(copy,w,h);
+                interpreter.run(input,outputTensor);
+                detections=postprocess(lb);
                 detectionCount=detections.size();
                 resultSerial++;
+
                 long done=System.nanoTime();
                 latencyMs=(done-t0)/1_000_000f;
                 if(lastDoneNs!=0){
@@ -114,7 +145,7 @@ public class YoloDetector {
         });
     }
 
-    private void preprocess(int[] px,int w,int h){
+    private Letterbox preprocess(int[] px,int w,int h){
         input.rewind();
 
         float scale=Math.min(IN/(float)w,IN/(float)h);
@@ -122,15 +153,14 @@ public class YoloDetector {
         int nh=Math.max(1,Math.round(h*scale));
         int padX=(IN-nw)/2;
         int padY=(IN-nh)/2;
-
         final float pad=114f/255f;
 
         for(int y=0;y<IN;y++){
             for(int x=0;x<IN;x++){
                 int sx=x-padX,sy=y-padY;
                 if(sx>=0&&sy>=0&&sx<nw&&sy<nh){
-                    int ox=Math.min(w-1,(int)(sx/scale));
-                    int oy=Math.min(h-1,(int)(sy/scale));
+                    int ox=Math.min(w-1,Math.max(0,(int)(sx/scale)));
+                    int oy=Math.min(h-1,Math.max(0,(int)(sy/scale)));
                     int c=px[oy*w+ox];
                     input.putFloat(((c>>16)&255)/255f);
                     input.putFloat(((c>>8)&255)/255f);
@@ -141,36 +171,58 @@ public class YoloDetector {
             }
         }
         input.rewind();
+        return new Letterbox(w,h,nw,nh,padX,padY,scale);
     }
 
-    private List<Detection> postprocess(){
+    private List<Detection> postprocess(Letterbox lb){
         ArrayList<Detection> raw=new ArrayList<>();
 
-        for(int i=0;i<N;i++){
+        // Some LiteRT exports return xywh in pixels (0..640), others normalized (0..1).
+        // Detect the convention from candidate geometry rather than assuming one.
+        float geometryMax=0f;
+        int probe=Math.min(boxes,128);
+        for(int i=0;i<probe;i++){
+            geometryMax=Math.max(geometryMax,Math.abs(value(0,i)));
+            geometryMax=Math.max(geometryMax,Math.abs(value(1,i)));
+            geometryMax=Math.max(geometryMax,Math.abs(value(2,i)));
+            geometryMax=Math.max(geometryMax,Math.abs(value(3,i)));
+        }
+        boolean normalized=geometryMax<=2.5f;
+        decoderMode=normalized?"NORM":"PIXEL";
+
+        for(int i=0;i<boxes;i++){
             int bestClass=-1;
             float best=0f;
-            for(int c=0;c<C;c++){
-                float s=output[0][4+c][i];
+            for(int c=0;c<classes;c++){
+                float s=value(4+c,i);
                 if(s>best){best=s;bestClass=c;}
             }
             if(best<CONF||bestClass<0)continue;
 
-            float cx=output[0][0][i],cy=output[0][1][i];
-            float bw=output[0][2][i],bh=output[0][3][i];
+            float cx=value(0,i),cy=value(1,i);
+            float bw=value(2,i),bh=value(3,i);
 
-            // Model coordinates are in the letterboxed 640x640 space.
-            // Analysis bitmap is 16:9 (320x180): vertical pad = 140 px.
-            float nx=cx/IN;
-            float ny=(cy-140f)/360f;
-            float nw=bw/IN;
-            float nh=bh/360f;
+            if(normalized){
+                cx*=IN;cy*=IN;bw*=IN;bh*=IN;
+            }
 
-            if(nx<0||nx>1||ny<0||ny>1)continue;
-            float l=clamp(nx-nw*.5f),t=clamp(ny-nh*.5f);
-            float r=clamp(nx+nw*.5f),b=clamp(ny+nh*.5f);
-            if(r-l<.01f||b-t<.01f)continue;
+            float leftPx=cx-bw*.5f;
+            float topPx=cy-bh*.5f;
+            float rightPx=cx+bw*.5f;
+            float bottomPx=cy+bh*.5f;
 
-            raw.add(new Detection(l,t,r,b,best,bestClass,NAMES[bestClass]));
+            // Undo letterbox back to the exact bitmap coordinate system.
+            float l=(leftPx-lb.padX)/Math.max(1f,lb.nw);
+            float r=(rightPx-lb.padX)/Math.max(1f,lb.nw);
+            float t=(topPx-lb.padY)/Math.max(1f,lb.nh);
+            float b=(bottomPx-lb.padY)/Math.max(1f,lb.nh);
+
+            if(r<=0||l>=1||b<=0||t>=1)continue;
+            l=clamp(l);r=clamp(r);t=clamp(t);b=clamp(b);
+            if(r-l<.008f||b-t<.008f)continue;
+
+            String name=bestClass<NAMES.length?NAMES[bestClass]:"class"+bestClass;
+            raw.add(new Detection(l,t,r,b,best,bestClass,name));
         }
 
         raw.sort((a,b)->Float.compare(b.confidence,a.confidence));
@@ -182,10 +234,15 @@ public class YoloDetector {
             }
             if(!suppressed){
                 keep.add(d);
-                if(keep.size()>=12)break;
+                if(keep.size()>=20)break;
             }
         }
         return keep;
+    }
+
+    private float value(int channel,int box){
+        if(channel<0||channel>=channels||box<0||box>=boxes)return 0f;
+        return channelsFirst?outChannelsFirst[0][channel][box]:outBoxesFirst[0][box][channel];
     }
 
     public Detection pick(float nx,float ny){
@@ -197,10 +254,10 @@ public class YoloDetector {
             boolean inside=nx>=d.left-margin&&nx<=d.right+margin&&ny>=d.top-margin&&ny<=d.bottom+margin;
             float dx=nx-d.cx(),dy=ny-d.cy();
             float dist=dx*dx+dy*dy;
-            if(inside)dist*=.12f;
+            if(inside)dist*=.05f;
             if(dist<bestScore){bestScore=dist;best=d;}
         }
-        return bestScore<.12f?best:null;
+        return bestScore<.10f?best:null;
     }
 
     private MappedByteBuffer loadModel()throws Exception{
@@ -221,7 +278,24 @@ public class YoloDetector {
         return inter/Math.max(.00001f,ua+ub-inter);
     }
 
+    private static String shapeToString(int[] s){
+        StringBuilder b=new StringBuilder("[");
+        for(int i=0;i<s.length;i++){
+            if(i>0)b.append(',');
+            b.append(s[i]);
+        }
+        return b.append(']').toString();
+    }
+
     private static float clamp(float v){return Math.max(0f,Math.min(1f,v));}
+
+    private static final class Letterbox{
+        final int w,h,nw,nh,padX,padY;
+        final float scale;
+        Letterbox(int w,int h,int nw,int nh,int padX,int padY,float scale){
+            this.w=w;this.h=h;this.nw=nw;this.nh=nh;this.padX=padX;this.padY=padY;this.scale=scale;
+        }
+    }
 
     public static final class Detection{
         public final float left,top,right,bottom,confidence;
