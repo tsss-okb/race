@@ -1,0 +1,25 @@
+name: Reference Tracker Test
+
+on:
+  push:
+    branches: [targetlock-android-apk]
+    paths:
+      - 'reference_yolo_tracker/**'
+      - '.github/workflows/reference-tracker-test.yml'
+  workflow_dispatch:
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy opencv-python-headless
+      - name: Run reference tracker synthetic test
+        working-directory: reference_yolo_tracker
+        run: python synthetic_test.py
