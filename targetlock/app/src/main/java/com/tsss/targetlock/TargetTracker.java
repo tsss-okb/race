@@ -285,6 +285,7 @@ public class TargetTracker {
     }
 
     private static float clamp(float v){return Math.max(0,Math.min(1,v));}
+    private static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
     private static final class Match{
         final int x,y;final float score;
         Match(int x,int y,float s){this.x=x;this.y=y;this.score=s;}
