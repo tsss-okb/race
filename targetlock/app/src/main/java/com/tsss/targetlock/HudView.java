@@ -32,8 +32,9 @@ public class HudView extends View {
                 camera.cameraId,camera.rearCameraCount,camera.selectedHfovDeg,
                 camera.previewSize.getWidth(),camera.previewSize.getHeight(),
                 camera.highSpeed120Supported?"YES":"NO/API"),24,62,p);
+        c.drawText(String.format("ROT %d  PREVIEW 16:9 CENTER-CROP  •  NO STRETCH",camera.displayRotation),24,118,p);
         c.drawText(String.format("IMU %.0f Hz  %.1f deg/s  Kx %.2f Ky %.2f",imu.gyroHz,imu.angularSpeedDeg,imu.strengthX,imu.strengthY),24,90,p);
-        c.drawText("PREVIEW-ONLY DIAGNOSTIC  •  TRACK ANALYSIS OFF",24,118,p);
+        
         c.drawText(String.format("TARGET Q %.0f%%  lost %d  IMU/FLOW %.0f/%.0f%%",t.confidence*100,t.lostFrames,t.imuWeight*100,t.flowWeight*100),24,146,p);
 
         if(camera.lastError.length()>0){
