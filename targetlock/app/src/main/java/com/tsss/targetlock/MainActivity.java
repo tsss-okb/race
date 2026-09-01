@@ -2,7 +2,6 @@ package com.tsss.targetlock;
 
 import android.Manifest;
 import android.app.Activity;
-import android.os.Build;
 import android.os.Bundle;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -16,41 +15,37 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
-        configureWindow120Hz();
+        configureDisplay();
         root=new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
         setContentView(root);
 
         try{
             preview=new CameraPreview(this);
             root.addView(preview,new FrameLayout.LayoutParams(-1,-1));
-            root.addView(new HudView(this,preview,preview.getTracker(),preview.getDetector(),preview.getImu()),
+            root.addView(new HudView(this,preview,preview.getTracker(),preview.getImu()),
                     new FrameLayout.LayoutParams(-1,-1));
         }catch(Throwable t){
-            showFatal("STARTUP",t);
+            showFatal("UI INIT",t);
             return;
         }
 
         if(checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.CAMERA},10);
-        else preview.start();
+        else root.postDelayed(()->{if(preview!=null)preview.start();},250);
     }
 
-    private void configureWindow120Hz(){
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    private void configureDisplay(){
         try{
-            Display display=getWindowManager().getDefaultDisplay();
-            Display.Mode[] modes=display.getSupportedModes();
+            getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            Display d=getWindowManager().getDefaultDisplay();
             Display.Mode best=null;
-            for(Display.Mode m:modes){
-                float rr=m.getRefreshRate();
-                if(best==null)best=m;
-                if(rr>=119f&&rr<=121.5f){
-                    best=m;break;
-                }
-                if(rr>best.getRefreshRate()&&rr<=125f)best=m;
+            for(Display.Mode m:d.getSupportedModes()){
+                if(best==null||m.getRefreshRate()>best.getRefreshRate())best=m;
+                if(m.getRefreshRate()>=119&&m.getRefreshRate()<=121.5f){best=m;break;}
             }
             WindowManager.LayoutParams lp=getWindow().getAttributes();
             if(best!=null)lp.preferredDisplayModeId=best.getModeId();
@@ -61,24 +56,22 @@ public class MainActivity extends Activity {
 
     private void showFatal(String where,Throwable t){
         TextView tv=new TextView(this);
-        tv.setTextColor(Color.WHITE);
-        tv.setBackgroundColor(Color.rgb(20,20,20));
-        tv.setTextSize(18);
-        tv.setPadding(32,32,32,32);
-        tv.setText("Target Lock 120\nSAFE MODE\n\n"+where+"\n"+t.getClass().getSimpleName()+"\n"+String.valueOf(t.getMessage())+
-                "\n\nСделай скрин этого экрана — по нему видно точную причину.");
-        root.removeAllViews();
-        root.addView(tv,new FrameLayout.LayoutParams(-1,-1));
+        tv.setTextColor(Color.WHITE);tv.setBackgroundColor(Color.rgb(25,25,25));
+        tv.setTextSize(18);tv.setPadding(30,30,30,30);
+        tv.setText("Target Lock Core\nSAFE MODE\n\n"+where+"\n"+t.getClass().getSimpleName()+"\n"+String.valueOf(t.getMessage()));
+        root.removeAllViews();root.addView(tv,new FrameLayout.LayoutParams(-1,-1));
     }
 
     @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){
         super.onRequestPermissionsResult(r,p,g);
-        if(r==10&&g.length>0&&g[0]==PackageManager.PERMISSION_GRANTED&&preview!=null)preview.start();
+        if(r==10&&g.length>0&&g[0]==PackageManager.PERMISSION_GRANTED&&preview!=null)
+            root.postDelayed(preview::start,200);
     }
 
     @Override protected void onResume(){
         super.onResume();
-        if(preview!=null&&checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)preview.start();
+        if(preview!=null&&checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED)
+            root.postDelayed(preview::start,250);
     }
 
     @Override protected void onPause(){
