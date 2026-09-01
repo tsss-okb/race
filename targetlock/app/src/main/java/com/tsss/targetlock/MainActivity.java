@@ -18,7 +18,7 @@ public class MainActivity extends Activity {
         FrameLayout root=new FrameLayout(this);
         preview=new CameraPreview(this);
         root.addView(preview,new FrameLayout.LayoutParams(-1,-1));
-        root.addView(new HudView(this,preview.getTracker()),new FrameLayout.LayoutParams(-1,-1));
+        root.addView(new HudView(this,preview.getTracker(),preview.getDetector()),new FrameLayout.LayoutParams(-1,-1));
         setContentView(root);
         if(checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.CAMERA},10);
