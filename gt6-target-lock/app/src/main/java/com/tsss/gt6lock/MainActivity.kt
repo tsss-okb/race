@@ -304,6 +304,7 @@ class MainActivity : Activity(), SensorEventListener {
         previewHost.layoutParams = lp
         configurePreviewTransform(root.width, root.height)
         applySensorLevel()
+        syncOverlayCameraMapping(root.width, root.height)
     }
 
     override fun onRequestPermissionsResult(
@@ -328,6 +329,7 @@ class MainActivity : Activity(), SensorEventListener {
         override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
             configurePreviewTransform(w, h)
             applySensorLevel()
+            syncOverlayCameraMapping(w, h)
         }
 
         override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -438,7 +440,6 @@ class MainActivity : Activity(), SensorEventListener {
         overlay.imageW = analysisSize.width
         overlay.imageH = analysisSize.height
         relativeRotation = calculateRelativeRotation(cc)
-        overlay.rotationDegrees = relativeRotation
 
         val ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
         val maxFps = ranges.maxOfOrNull { it.upper } ?: 0
@@ -467,7 +468,7 @@ class MainActivity : Activity(), SensorEventListener {
             previewSize.width + "×" + previewSize.height +
             "  TRACK " + analysisSize.width + "×" + analysisSize.height +
             "  • AE MAX " + maxFps +
-            if (hs) "  HS " + highMax else "  HS —"
+            (if (hs) "  HS " + highMax else "  HS —") + "  • AXES=UNIFIED"
         overlay.invalidate()
 
         reader = ImageReader.newInstance(
@@ -535,12 +536,34 @@ class MainActivity : Activity(), SensorEventListener {
         return (sensor - displayDegrees + 360) % 360
     }
 
+    private fun syncOverlayCameraMapping(viewW: Int, viewH: Int) {
+        if (viewW <= 0 || viewH <= 0) return
+
+        // TextureView first stretches the camera texture into its view bounds and then
+        // applies getTransform(). Reuse that *exact* transform for tracker boxes/taps.
+        val textureTransform = Matrix()
+        texture.getTransform(textureTransform)
+
+        val displayedCorners = floatArrayOf(
+            0f, 0f,
+            viewW.toFloat(), 0f,
+            viewW.toFloat(), viewH.toFloat(),
+            0f, viewH.toFloat()
+        )
+        textureTransform.mapPoints(displayedCorners)
+
+        overlay.setCameraMapping(
+            analysisSize.width,
+            analysisSize.height,
+            displayedCorners
+        )
+    }
+
     private fun configurePreviewTransform(viewW: Int, viewH: Int) {
         if (viewW <= 0 || viewH <= 0) return
         val cc = cameraCharacteristics ?: return
 
         relativeRotation = calculateRelativeRotation(cc)
-        overlay.rotationDegrees = relativeRotation
 
         val matrix = Matrix()
         val cx = viewW / 2f
@@ -570,6 +593,7 @@ class MainActivity : Activity(), SensorEventListener {
 
         texture.setTransform(matrix)
         applySensorLevel()
+        syncOverlayCameraMapping(viewW, viewH)
         overlay.invalidate()
     }
 
