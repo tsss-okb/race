@@ -8,13 +8,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // Unique install id for the camera-fix build so it installs even if an older
-        // debug APK with another signing key is still on the phone.
-        applicationId = "com.tsss.gt6lock.v03"
+        applicationId = "com.tsss.gt6lock.v04"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         externalNativeBuild {
             cmake { cppFlags += listOf("-O3", "-ffast-math", "-fno-exceptions", "-fno-rtti") }
         }
