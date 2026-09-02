@@ -42,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.5 Strong Hold Soft Rescue:
+ * Fusion v3.6 Strong Hold Stable Box:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -324,21 +324,22 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     } ?: currentFlowScore * 0.92f
                 }
 
-                if (
-                    flow != null &&
-                    flow.targetConsistency >= 0.36f &&
-                    abs(flow.dxNorm) + abs(flow.dyNorm) < 0.16f
-                ) {
-                    val shifted = shiftDetection(
-                        target,
-                        flow.dxNorm,
-                        flow.dyNorm,
-                        (0.50f + 0.46f * flow.targetConsistency).coerceIn(0.50f, 0.96f),
-                        predicted = flow.targetConsistency < 0.60f
-                    )
-                    motionTracker.applyVisual(shifted, ts)
-                    gotMeasurement = true
-                }
+                var attemptedMeasurement = runFlow
+                val flowMeasurement =
+                    if (
+                        flow != null &&
+                        flow.targetConsistency >= 0.36f &&
+                        abs(flow.dxNorm) + abs(flow.dyNorm) < 0.16f
+                    ) {
+                        shiftDetection(
+                            target,
+                            flow.dxNorm,
+                            flow.dyNorm,
+                            (0.50f + 0.46f * flow.targetConsistency)
+                                .coerceIn(0.50f, 0.96f),
+                            predicted = flow.targetConsistency < 0.60f
+                        )
+                    } else null
 
                 target = motionTracker.locked ?: target
                 val strongHold =
@@ -360,15 +361,26 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     (!runFlow && (!strongHold || frameSerial % 6L == 1L)) ||
                     flowWeakThisFrame
 
+                val visualBase = flowMeasurement ?: target
                 val visual =
-                    if (runTemplate) visualTracker.track(gray, target, softRescue)
+                    if (runTemplate) visualTracker.track(gray, visualBase, softRescue)
                     else null
                 if (runTemplate) {
+                    attemptedMeasurement = true
                     currentVisualScore = visual?.score ?: visualTracker.score
                 }
 
-                if (visual != null && visual.score >= 0.52f) {
-                    motionTracker.applyVisual(visual.detection, ts)
+                // Never move the box twice in one camera frame.
+                // Prefer a confident NCC correction; otherwise use robust flow.
+                val chosenMeasurement = when {
+                    visual != null && visual.score >= 0.64f -> visual.detection
+                    flowMeasurement != null -> flowMeasurement
+                    visual != null && visual.score >= 0.52f -> visual.detection
+                    else -> null
+                }
+
+                if (chosenMeasurement != null) {
+                    motionTracker.applyVisual(chosenMeasurement, ts)
                     gotMeasurement = true
                 }
 
@@ -379,7 +391,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     } else {
                         strongLockStreak = 0
                     }
-                } else {
+                } else if (attemptedMeasurement) {
+                    // Only a real failed tracker attempt counts as a miss.
                     lightFailStreak = (lightFailStreak + 1).coerceAtMost(30)
                     strongLockStreak = 0
                     motionTracker.miss(ts)
