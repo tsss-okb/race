@@ -30,7 +30,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private long lastSensorTs=0;
     private int sensorOrientation=90;
 
-    private static final int ANALYSIS_H=288;
+    private static final int ANALYSIS_H=192;
     private final ExecutorService trackerExecutor=Executors.newSingleThreadExecutor();
     private final AtomicBoolean trackerBusy=new AtomicBoolean(false);
     private Bitmap trackerBitmap;
@@ -477,13 +477,13 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
         long now=System.nanoTime();
         // Keep visual analysis near 60 Hz max. IMU/HUD prediction remains 120 Hz.
-        if(now-lastTrackCaptureNs<16_000_000L)return;
+        if(now-lastTrackCaptureNs<33_000_000L)return;
         if(!trackerBusy.compareAndSet(false,true))return;
         lastTrackCaptureNs=now;
 
         try{
             float aspect=getHeight()>0?getWidth()/(float)getHeight():2.0f;
-            int desiredW=Math.max(320,Math.min(640,Math.round(ANALYSIS_H*aspect)));
+            int desiredW=Math.max(320,Math.min(480,Math.round(ANALYSIS_H*aspect)));
             desiredW=(desiredW/2)*2;
             analysisW=desiredW;
             analysisH=ANALYSIS_H;
@@ -518,12 +518,14 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                         intervalMs=0;
                         detector.setConfidenceThreshold(.18f);
                     }else if(tracker.locked){
-                        submit=(analysisFrameCounter%3)==0;
-                        intervalMs=0;
+                        // During a healthy lock, the lightweight tracker owns the fast loop.
+                        // YOLO is only a sparse verifier/corrector.
+                        submit=(analysisFrameCounter%8)==0;
+                        intervalMs=180;
                         detector.setConfidenceThreshold(.24f);
                     }else{
                         submit=true;
-                        intervalMs=80;
+                        intervalMs=120;
                         detector.setConfidenceThreshold(.28f);
                     }
 
