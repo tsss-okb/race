@@ -32,6 +32,6 @@ private:
     float cx_=0, cy_=0, bw_=0, bh_=0, vx_=0, vy_=0;
     float prevCx_=0, prevCy_=0;
     float jitterEma_=0;
-    int tplW_=48, tplH_=48;
+    int tplW_=24, tplH_=24;
     std::vector<uint8_t> tpl_;
 };
