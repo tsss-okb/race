@@ -30,7 +30,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private long lastSensorTs=0;
     private int sensorOrientation=90;
 
-    private static final int ANALYSIS_H=192;
+    private static final int ANALYSIS_H=288;
     private final ExecutorService trackerExecutor=Executors.newSingleThreadExecutor();
     private final AtomicBoolean trackerBusy=new AtomicBoolean(false);
     private Bitmap trackerBitmap;
@@ -516,12 +516,15 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
                     if(tracker.coasting||tracker.reacquiring){
                         submit=autoReacqEnabled;
                         intervalMs=0;
+                        detector.setConfidenceThreshold(.18f);
                     }else if(tracker.locked){
                         submit=(analysisFrameCounter%3)==0;
                         intervalMs=0;
+                        detector.setConfidenceThreshold(.24f);
                     }else{
                         submit=true;
                         intervalMs=80;
+                        detector.setConfidenceThreshold(.28f);
                     }
 
                     if(submit){
