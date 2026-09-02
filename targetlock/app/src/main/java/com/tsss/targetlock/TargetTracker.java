@@ -7,6 +7,8 @@ public class TargetTracker {
     public volatile boolean acquiring=false;
     public volatile boolean coasting=false;
     public volatile boolean reacquiring=false;
+    public volatile boolean lockConfirmed=false;
+    public volatile int stableFrames=0;
 
     public volatile float x=.5f,y=.5f,predX=.5f,predY=.5f;
     public volatile float renderX=.5f,renderY=.5f;
@@ -59,6 +61,7 @@ public class TargetTracker {
         pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
         pendingBox=-1f;pendingReseed=false;
         acquiring=true;locked=false;coasting=false;reacquiring=false;
+        lockConfirmed=false;stableFrames=0;
         confidence=.15f;lostFrames=0;vx=vy=0;hasTemplate=false;
         renderX=predX=pendingX;renderY=predY=pendingY;
         targetClass=-1;targetName="manual";tapCount++;acquireStatus="TAP";
@@ -73,6 +76,7 @@ public class TargetTracker {
         pendingBox=clamp(d.halfBox(),.025f,.28f);
         pendingReseed=false;
         acquiring=true;locked=false;coasting=false;reacquiring=false;
+        lockConfirmed=false;stableFrames=0;
         confidence=Math.max(.30f,d.confidence);
         lostFrames=0;vx=vy=0;hasTemplate=false;
         renderX=predX=nx;renderY=predY=ny;
@@ -106,6 +110,7 @@ public class TargetTracker {
         pendingX=pendingY=-1;pendingBox=-1;
         vx=vy=0;confidence=.90f;lostFrames=0;
         locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
+        lockConfirmed=false;stableFrames=0;
         lastNs=System.nanoTime();coastStartNs=0;
         acquireStatus="LOCKED";
         copyCurrentToPrev(w*h);
@@ -115,6 +120,7 @@ public class TargetTracker {
 
     public synchronized void clear(){
         locked=false;acquiring=false;coasting=false;reacquiring=false;hasTemplate=false;
+        lockConfirmed=false;stableFrames=0;
         confidence=0;lostFrames=0;vx=vy=0;acquireStatus="IDLE";
         pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
         targetClass=-1;targetName="manual";
@@ -210,14 +216,18 @@ public class TargetTracker {
                     updateMeasurement(best.x/(float)(w-1),best.y/(float)(h-1),best.quality);
                     lostFrames=0;
                     coasting=false;reacquiring=false;locked=true;
+                    stableFrames++;
+                    if(stableFrames>=3)lockConfirmed=true;
                     coastStartNs=0;
-                    acquireStatus="LOCKED";
+                    acquireStatus=lockConfirmed?"LOCKED":"ACQUIRE";
 
                     if(best.quality>.72f){
                         adaptTemplate(gray,w,h,best.x,best.y,.025f,templateSpan);
                     }
                 }else{
                     lostFrames++;
+                    stableFrames=0;
+                    lockConfirmed=false;
                     coast();
 
                     if(lostFrames>=3){
@@ -281,6 +291,8 @@ public class TargetTracker {
             pendingReseed=true;
             acquiring=true;
             reacquiring=true;
+            lockConfirmed=false;
+            stableFrames=0;
             acquireStatus="YOLO REACQ";
             confidence=Math.max(confidence,d.confidence*.80f);
             return;
