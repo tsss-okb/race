@@ -7,7 +7,6 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -33,11 +32,20 @@ class OverlayView(context: Context) : View(context) {
     var imageH = 180
     var rotationDegrees = 0
 
+    // Kept for compatibility; camera preview is never IMU-rotated in v0.8.
     var levelCorrectionDegrees = 0f
     var levelScale = 1f
-    var sensorRollDegrees = 0f
-    var autoLevelEnabled = true
 
+    var sensorRollDegrees = 0f
+    var sensorPitchDegrees = 0f
+    var sensorHeadingDegrees = 0f
+    var gyroPDeg = 0f
+    var gyroQDeg = 0f
+    var gyroRDeg = 0f
+    var gLoad = 1f
+    var avionicsHudEnabled = true
+
+    var cameraFps = 0f
     var cameraLabel = "CAMERA"
     var cameraHzLabel = "AUTO"
     var fpsModeLabel = "60"
@@ -52,7 +60,7 @@ class OverlayView(context: Context) : View(context) {
         strokeWidth = 4f
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 32f
+        textSize = 26f
         typeface = android.graphics.Typeface.MONOSPACE
     }
     private val shadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -67,52 +75,37 @@ class OverlayView(context: Context) : View(context) {
         style = Paint.Style.FILL
         color = 0xB52A4D3B.toInt()
     }
-    private val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2f
-        color = 0x88ffffff.toInt()
+        color = 0xAAffffff.toInt()
+    }
+    private val horizonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = 0xCCd8e1e5.toInt()
     }
 
     private fun cameraButton(): RectF = RectF(width - 440f, 16f, width - 300f, 72f)
-    private fun autoButton(): RectF = RectF(width - 290f, 16f, width - 150f, 72f)
+    private fun hudButton(): RectF = RectF(width - 290f, 16f, width - 150f, 72f)
     private fun fpsButton(): RectF = RectF(width - 140f, 16f, width - 16f, 72f)
 
-    private fun rotatedSize(): Pair<Float, Float> {
-        return if (rotationDegrees == 90 || rotationDegrees == 270) {
-            imageH.toFloat() to imageW.toFloat()
-        } else {
-            imageW.toFloat() to imageH.toFloat()
-        }
+    private fun rotatedSize(): Pair<Float, Float> =
+        if (rotationDegrees == 90 || rotationDegrees == 270) imageH.toFloat() to imageW.toFloat()
+        else imageW.toFloat() to imageH.toFloat()
+
+    private fun baseRotateImagePoint(x: Float, y: Float): Pair<Float, Float> = when (rotationDegrees) {
+        90 -> y to (imageW - x)
+        180 -> (imageW - x) to (imageH - y)
+        270 -> (imageH - y) to x
+        else -> x to y
     }
 
-    private fun baseRotateImagePoint(x: Float, y: Float): Pair<Float, Float> {
-        return when (rotationDegrees) {
-            90 -> y to (imageW - x)
-            180 -> (imageW - x) to (imageH - y)
-            270 -> (imageH - y) to x
-            else -> x to y
-        }
-    }
-
-    private fun inverseBaseRotatePoint(x: Float, y: Float): Pair<Float, Float> {
-        return when (rotationDegrees) {
-            90 -> (imageW - y) to x
-            180 -> (imageW - x) to (imageH - y)
-            270 -> y to (imageH - x)
-            else -> x to y
-        }
-    }
-
-    private fun rotateAround(x: Float, y: Float, degrees: Float): Pair<Float, Float> {
-        if (abs(degrees) < 0.001f) return x to y
-        val cx = width / 2f
-        val cy = height / 2f
-        val rad = Math.toRadians(degrees.toDouble())
-        val c = cos(rad).toFloat()
-        val s = sin(rad).toFloat()
-        val dx = x - cx
-        val dy = y - cy
-        return (cx + dx * c - dy * s) to (cy + dx * s + dy * c)
+    private fun inverseBaseRotatePoint(x: Float, y: Float): Pair<Float, Float> = when (rotationDegrees) {
+        90 -> (imageW - y) to x
+        180 -> (imageW - x) to (imageH - y)
+        270 -> y to (imageH - x)
+        else -> x to y
     }
 
     private fun imageToView(x: Float, y: Float): Pair<Float, Float> {
@@ -121,35 +114,17 @@ class OverlayView(context: Context) : View(context) {
         val scale = max(width.toFloat() / rs.first, height.toFloat() / rs.second)
         val ox = (width - rs.first * scale) / 2f
         val oy = (height - rs.second * scale) / 2f
-
-        var vx = ox + p.first * scale
-        var vy = oy + p.second * scale
-
-        val cx = width / 2f
-        val cy = height / 2f
-        vx = cx + (vx - cx) * levelScale
-        vy = cy + (vy - cy) * levelScale
-
-        return rotateAround(vx, vy, levelCorrectionDegrees)
+        return (ox + p.first * scale) to (oy + p.second * scale)
     }
 
     private fun viewToImage(x: Float, y: Float): Pair<Float, Float> {
-        var p = rotateAround(x, y, -levelCorrectionDegrees)
-
-        val cx = width / 2f
-        val cy = height / 2f
-        p = (cx + (p.first - cx) / levelScale) to
-            (cy + (p.second - cy) / levelScale)
-
         val rs = rotatedSize()
         val scale = max(width.toFloat() / rs.first, height.toFloat() / rs.second)
         val ox = (width - rs.first * scale) / 2f
         val oy = (height - rs.second * scale) / 2f
-
-        val rx = ((p.first - ox) / scale).coerceIn(0f, rs.first)
-        val ry = ((p.second - oy) / scale).coerceIn(0f, rs.second)
+        val rx = ((x - ox) / scale).coerceIn(0f, rs.first)
+        val ry = ((y - oy) / scale).coerceIn(0f, rs.second)
         val raw = inverseBaseRotatePoint(rx, ry)
-
         return raw.first.coerceIn(0f, imageW.toFloat() - 1f) to
             raw.second.coerceIn(0f, imageH.toFloat() - 1f)
     }
@@ -158,7 +133,6 @@ class OverlayView(context: Context) : View(context) {
         if (tr.state == 0 || tr.bw <= 0f || tr.bh <= 0f) return
 
         boxPaint.color = col
-
         val x0 = tr.cx - tr.bw / 2f
         val y0 = tr.cy - tr.bh / 2f
         val x1 = tr.cx + tr.bw / 2f
@@ -182,6 +156,46 @@ class OverlayView(context: Context) : View(context) {
         c.drawLine(pc.first, pc.second - 13f, pc.first, pc.second + 13f, boxPaint)
     }
 
+    private fun drawAvionics(c: Canvas) {
+        if (!avionicsHudEnabled) return
+
+        val cx = width / 2f
+        val cy = height / 2f
+        val pitchPx = sensorPitchDegrees.coerceIn(-25f, 25f) * 5f
+
+        c.save()
+        c.rotate(-sensorRollDegrees, cx, cy)
+        horizonPaint.color = 0xCCd8e1e5.toInt()
+        c.drawLine(cx - 210f, cy + pitchPx, cx - 38f, cy + pitchPx, horizonPaint)
+        c.drawLine(cx + 38f, cy + pitchPx, cx + 210f, cy + pitchPx, horizonPaint)
+
+        for (p in -20..20 step 5) {
+            if (p == 0) continue
+            val y = cy + pitchPx - p * 5f
+            val half = if (p % 10 == 0) 52f else 30f
+            c.drawLine(cx - half, y, cx + half, y, whitePaint)
+        }
+        c.restore()
+
+        // Fixed aircraft reference
+        c.drawLine(cx - 72f, cy, cx - 18f, cy, whitePaint)
+        c.drawLine(cx + 18f, cy, cx + 72f, cy, whitePaint)
+        c.drawLine(cx - 18f, cy, cx, cy + 12f, whitePaint)
+        c.drawLine(cx, cy + 12f, cx + 18f, cy, whitePaint)
+
+        // Roll scale
+        val radius = 118f
+        for (a in -45..45 step 15) {
+            val rad = Math.toRadians((a - 90).toDouble())
+            val r0 = radius - if (a % 30 == 0) 12f else 7f
+            val x0 = cx + cos(rad).toFloat() * r0
+            val y0 = cy + sin(rad).toFloat() * r0
+            val x1 = cx + cos(rad).toFloat() * radius
+            val y1 = cy + sin(rad).toFloat() * radius
+            c.drawLine(x0, y0, x1, y1, whitePaint)
+        }
+    }
+
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
 
@@ -197,47 +211,47 @@ class OverlayView(context: Context) : View(context) {
             else -> 0xffcbd5da.toInt()
         }
 
-        val vcx = width / 2f
-        val vcy = height / 2f
-        c.drawCircle(vcx, vcy, 18f, centerPaint)
-        c.drawLine(vcx - 34f, vcy, vcx - 10f, vcy, centerPaint)
-        c.drawLine(vcx + 10f, vcy, vcx + 34f, vcy, centerPaint)
-        c.drawLine(vcx, vcy - 34f, vcx, vcy - 10f, centerPaint)
-        c.drawLine(vcx, vcy + 10f, vcx, vcy + 34f, centerPaint)
-
+        drawAvionics(c)
         drawTrackedBox(c, tr, col)
 
-        c.drawRoundRect(RectF(16f, 14f, min(width - 460f, 820f), 105f), 12f, 12f, shadePaint)
+        c.drawRoundRect(RectF(16f, 14f, min(width - 460f, 940f), 128f), 12f, 12f, shadePaint)
+
         textPaint.color = col
-        textPaint.textSize = 30f
-        c.drawText(stateText + "  " + (tr.conf * 100).toInt() + "%", 30f, 48f, textPaint)
+        textPaint.textSize = 28f
+        c.drawText(stateText + "  " + (tr.conf * 100).toInt() + "%", 30f, 43f, textPaint)
 
-        textPaint.textSize = 20f
-        val perf = "TRACK " + "%.1f".format(tr.fps) + " FPS" +
-            "   LAT " + "%.1f".format(tr.latency) + "ms" +
-            "   JITTER " + "%.1f".format(tr.jitter) + "px"
-        c.drawText(perf, 30f, 78f, textPaint)
-
-        textPaint.textSize = 17f
-        val imu = "IMU ROLL " + "%.1f".format(sensorRollDegrees) + "°" +
-            "   LEVEL " + if (autoLevelEnabled) "AUTO" else "OFF" +
-            "   CAMERA " + cameraHzLabel
-        c.drawText(imu, 30f, 99f, textPaint)
+        textPaint.color = 0xffe7eef1.toInt()
+        textPaint.textSize = 18f
+        c.drawText(
+            "CAM " + "%.1f".format(cameraFps) + " FPS   TRACK " + "%.1f".format(tr.fps) +
+                " FPS   LAT " + "%.1f".format(tr.latency) + "ms   JIT " + "%.1f".format(tr.jitter) + "px",
+            30f, 70f, textPaint
+        )
+        c.drawText(
+            "ROLL " + "%+.1f".format(sensorRollDegrees) + "°   PITCH " + "%+.1f".format(sensorPitchDegrees) +
+                "°   HDG " + "%03d".format(sensorHeadingDegrees.toInt()) + "°   G " + "%.2f".format(gLoad),
+            30f, 96f, textPaint
+        )
+        c.drawText(
+            "P " + "%+.1f".format(gyroPDeg) + "°/s   Q " + "%+.1f".format(gyroQDeg) +
+                "°/s   R " + "%+.1f".format(gyroRDeg) + "°/s   CAMERA HAL " + cameraHzLabel,
+            30f, 119f, textPaint
+        )
 
         c.drawRoundRect(cameraButton(), 12f, 12f, buttonPaint)
-        c.drawRoundRect(autoButton(), 12f, 12f, if (autoLevelEnabled) activeButtonPaint else buttonPaint)
+        c.drawRoundRect(hudButton(), 12f, 12f, if (avionicsHudEnabled) activeButtonPaint else buttonPaint)
         c.drawRoundRect(fpsButton(), 12f, 12f, buttonPaint)
 
         textPaint.color = 0xffe7eef1.toInt()
         textPaint.textSize = 18f
         c.drawText("CAMERA", width - 420f, 51f, textPaint)
-        c.drawText(if (autoLevelEnabled) "AUTO✓" else "AUTO", width - 265f, 51f, textPaint)
+        c.drawText(if (avionicsHudEnabled) "HUD✓" else "HUD", width - 255f, 51f, textPaint)
         c.drawText(fpsModeLabel + " FPS", width - 126f, 51f, textPaint)
 
-        val labelW = min(width - 32f, 1160f)
+        val labelW = min(width - 32f, 1220f)
         c.drawRoundRect(RectF(16f, height - 67f, 16f + labelW, height - 14f), 12f, 12f, shadePaint)
         textPaint.color = 0xffd8e1e5.toInt()
-        textPaint.textSize = 16f
+        textPaint.textSize = 15f
         c.drawText(cameraLabel, 30f, height - 42f, textPaint)
         c.drawText("ТАП = LOCK   •   ДВОЙНОЙ ТАП = RESET", 30f, height - 20f, textPaint)
     }
@@ -248,7 +262,7 @@ class OverlayView(context: Context) : View(context) {
                 onCameraCycle?.invoke()
                 return true
             }
-            if (autoButton().contains(e.x, e.y)) {
+            if (hudButton().contains(e.x, e.y)) {
                 onAutoLevelToggle?.invoke()
                 return true
             }
