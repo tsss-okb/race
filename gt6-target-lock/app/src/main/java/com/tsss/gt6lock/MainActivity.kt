@@ -281,10 +281,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     currentVisualScore >= 0.72f &&
                     lightFailStreak == 0
 
+                val flowWeakThisFrame =
+                    runFlow && (flow == null || flow.targetConsistency < 0.50f)
                 val runTemplate =
                     (!runFlow && (!strongHold || frameSerial % 6L == 1L)) ||
-                    flow == null ||
-                    (flow?.targetConsistency ?: 0f) < 0.50f
+                    flowWeakThisFrame
 
                 val visual = if (runTemplate) visualTracker.track(gray, target) else null
                 if (runTemplate) {
