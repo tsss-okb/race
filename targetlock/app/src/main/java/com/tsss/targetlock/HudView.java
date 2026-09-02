@@ -87,6 +87,8 @@ public class HudView extends View {
         final int cyan=Color.rgb(96,225,255);
         final int amber=Color.rgb(255,205,86);
         final int red=Color.rgb(255,92,92);
+        final int orange=Color.rgb(255,145,55);
+        final int magenta=Color.rgb(255,70,210);
         final int white=Color.rgb(224,240,226);
         final int dim=Color.rgb(115,145,120);
         final int panel=Color.argb(170,0,10,4);
@@ -98,16 +100,16 @@ public class HudView extends View {
         String state;
         int stateColor;
 
-        if(t.locked){
+        if(t.lockConfirmed){
             state="LOCK";
             stateColor=green;
         }else if(t.reacquiring){
             state="REACQUIRE";
-            stateColor=amber;
+            stateColor=magenta;
         }else if(t.coasting){
             state="COAST";
-            stateColor=amber;
-        }else if(t.acquiring){
+            stateColor=orange;
+        }else if(t.locked||t.acquiring){
             state="ACQUIRE";
             stateColor=amber;
         }else{
@@ -143,13 +145,13 @@ public class HudView extends View {
         p.setColor(white);
         c.drawText(String.format("CAM  %.0f",camera.cameraFps),statsL+18,37,p);
         c.drawText(String.format("YOLO %.1f",yolo.detectorFps),statsL+125,37,p);
-        c.drawText(String.format("KCF  %.0f",t.trackerFps),statsL+230,37,p);
+        c.drawText(String.format("TRK  %.0f",t.trackerFps),statsL+230,37,p);
 
         p.setColor(yolo.ready?green:amber);
         c.drawText("YOLO "+(yolo.ready?"OK":"..."),statsL+18,68,p);
 
-        p.setColor(t.kcfReady?green:red);
-        c.drawText("KCF "+(t.kcfReady?"OK":"ERR"),statsL+125,68,p);
+        p.setColor(t.lockConfirmed?green:(active?amber:dim));
+        c.drawText("HOLD "+(t.lockConfirmed?"OK":(active?"...":"IDLE")),statsL+125,68,p);
 
         p.setColor(active?stateColor:dim);
         c.drawText("Q "+Math.round(t.confidence*100)+"%",statsL+230,68,p);
@@ -200,7 +202,7 @@ public class HudView extends View {
             float b=cy+halfH;
 
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(t.locked?3.8f:3.2f);
+            p.setStrokeWidth(t.lockConfirmed?4.4f:3.2f);
             p.setColor(stateColor);
             drawCorners(c,l,top,r,b,18,p);
 
@@ -214,7 +216,7 @@ public class HudView extends View {
             c.drawLine(w/2f,h/2f,cx,cy,p);
 
             // Selected target label only.
-            String tag=state+" • "+t.targetName+" • "+Math.round(t.confidence*100)+"%";
+            String tag=state+" • "+t.targetName+" • Q "+Math.round(t.confidence*100)+"%";
             p.setStyle(Paint.Style.FILL);
             p.setTextSize(16);
             float tw=p.measureText(tag);
@@ -259,9 +261,9 @@ public class HudView extends View {
                 yolo.modelMode,yolo.tensorTypes,yolo.detectorFps,yolo.latencyMs,yolo.detectionCount),
                 26,top+24,p);
 
-        p.setColor(t.kcfReady?green:red);
-        c.drawText(String.format("KCF upd %d  drift %d  miss %d  prior %.1fpx",
-                t.kcfUpdates,t.driftRejects,t.verifyMisses,t.filterInnovation),
+        p.setColor(green);
+        c.drawText(String.format("TRK %.1f FPS / %.1f ms  FLOW Q %.0f%%  miss %d",
+                t.trackerFps,t.latencyMs,t.flowQuality*100f,t.verifyMisses),
                 26,top+48,p);
 
         p.setColor(white);
@@ -274,10 +276,7 @@ public class HudView extends View {
                 camera.analysisGrabFps,t.latencyMs),
                 26,top+96,p);
 
-        if(!t.kcfReady&&t.kcfError.length()>0){
-            p.setColor(red);
-            c.drawText("KCF ERR "+shortText(t.kcfError,70),26,top+120,p);
-        }else if(yolo.error.length()>0){
+        if(yolo.error.length()>0){
             p.setColor(red);
             c.drawText("YOLO ERR "+shortText(yolo.error,70),26,top+120,p);
         }
