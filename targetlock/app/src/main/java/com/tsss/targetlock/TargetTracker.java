@@ -29,7 +29,7 @@ public class TargetTracker {
 
     public volatile float x=.5f,y=.5f,predX=.5f,predY=.5f;
     public volatile float renderX=.5f,renderY=.5f;
-    public volatile float vx=0f,vy=0f,box=.075f,confidence=0f;
+    public volatile float vx=0f,vy=0f,box=.075f,boxW=.15f,boxH=.15f,confidence=0f;
 
     public volatile float trackerFps=0f,latencyMs=0f,yoloConfidence=0f;
     public volatile float flowDx=0f,flowDy=0f,flowQuality=0f,flowFps=0f;
@@ -169,6 +169,7 @@ public class TargetTracker {
         x=y=predX=predY=renderX=renderY=.5f;
         vx=vy=0f;
         box=.075f;
+        boxW=.15f;boxH=.15f;
         confidence=0f;
 
         targetClass=-1;
@@ -285,7 +286,9 @@ public class TargetTracker {
                             kcfUpdates++;
                             x=predX=renderX=clamp(kx);
                             y=predY=renderY=clamp(ky);
-                            box=clamp(Math.max(kw,kh)*.5f,.012f,.42f);
+                            boxW=clamp(kw,.02f,.85f);
+                            boxH=clamp(kh,.02f,.85f);
+                            box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
                             confidence=Math.max(.30f,confidence*.997f);
                             acquireStatus="KCF HOLD";
                             updateErrors();
@@ -308,7 +311,9 @@ public class TargetTracker {
                         predX=renderX=clamp(mp[0]);
                         predY=renderY=clamp(mp[1]);
                         x=predX;y=predY;
-                        box=clamp(Math.max(motionW,motionH)*.5f,.012f,.42f);
+                        boxW=clamp(motionW,.02f,.85f);
+                        boxH=clamp(motionH,.02f,.85f);
+                        box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
                     }
 
                     confidence*=.985f;
@@ -451,7 +456,9 @@ public class TargetTracker {
             y=predY=renderY=(rect.y()+rect.height()*.5f)/Math.max(1f,frameH);
             float nw=rect.width()/Math.max(1f,frameW);
             float nh=rect.height()/Math.max(1f,frameH);
-            box=clamp(Math.max(nw,nh)*.5f,.012f,.42f);
+            boxW=clamp(nw,.02f,.85f);
+            boxH=clamp(nh,.02f,.85f);
+            box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
             updateErrors();
             return true;
         }catch(Throwable err){
