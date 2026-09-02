@@ -313,8 +313,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val interval = when {
             manualSearchRequested -> 0L
             !tracking -> 950L
-            stateLabel == "REACQUIRE" -> 420L
-            stateLabel == "PREDICT" -> 700L
+            stateLabel == "REACQUIRE" -> 300L
+            stateLabel == "PREDICT" -> 520L
             else -> Long.MAX_VALUE
         }
         if (interval == Long.MAX_VALUE || now - lastYoloRunMs < interval) {
@@ -396,8 +396,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun initFromDetection(gray: FastLumaExtractor.GrayFrame, d: Detection) {
         val cx = d.cx * gray.width
         val cy = d.cy * gray.height
-        val bw = (d.width * gray.width).coerceAtLeast(28f)
-        val bh = (d.height * gray.height).coerceAtLeast(24f)
+        // Track the object's visual core, not the whole detector box.
+        // This rejects background and makes the visible LOCK box much tighter.
+        val bw = (d.width * gray.width * 0.68f).coerceIn(14f, gray.width * 0.28f)
+        val bh = (d.height * gray.height * 0.68f).coerceIn(14f, gray.height * 0.34f)
         tracking = nativeTracker.nativeInit(gray.pixels, gray.width, gray.height, cx, cy, bw, bh)
         if (tracking) {
             lastTrackDetection = d
@@ -409,18 +411,19 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     private fun initAtTap(gray: FastLumaExtractor.GrayFrame, nx: Float, ny: Float) {
-        val box = min(gray.width, gray.height) * 0.18f
+        // Small manual ROI: about 8% of the short side instead of 18%.
+        val box = (min(gray.width, gray.height) * 0.08f).coerceIn(14f, 26f)
         tracking = nativeTracker.nativeInit(
             gray.pixels,
             gray.width,
             gray.height,
             nx * gray.width,
             ny * gray.height,
-            box * 1.25f,
+            box * 1.12f,
             box
         )
         if (tracking) {
-            val w = box * 1.25f / gray.width
+            val w = box * 1.12f / gray.width
             val h = box / gray.height
             val d = Detection(
                 (nx - w * 0.5f).coerceIn(0f, 1f),
