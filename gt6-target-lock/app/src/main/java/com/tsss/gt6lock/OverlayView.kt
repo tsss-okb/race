@@ -35,6 +35,7 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var gLoad: Float = 1f
     @Volatile var bodyCalibrated: Boolean = false
     @Volatile var showAvionics: Boolean = true
+    @Volatile var jumpRescue: Boolean = false
 
     var onTapNormalized: ((Float, Float) -> Unit)? = null
     var onReset: (() -> Unit)? = null
@@ -142,7 +143,11 @@ class OverlayView(context: Context) : View(context) {
             "REACQUIRE" -> 0xffff9b49.toInt()
             else -> 0xffd8e1e5.toInt()
         }
-        c.drawText(stateLabel + "  " + (trackConf * 100).toInt() + "%", 28f, 44f, text)
+        c.drawText(
+            stateLabel + (if (jumpRescue) " • JR" else "") +
+                "  " + (trackConf * 100).toInt() + "%",
+            28f, 44f, text
+        )
 
         text.color = Color.WHITE
         text.textSize = 18f
