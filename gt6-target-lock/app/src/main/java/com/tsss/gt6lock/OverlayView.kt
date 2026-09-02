@@ -37,6 +37,14 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var showAvionics: Boolean = true
     @Volatile var softRescue: Boolean = false
 
+    @Volatile var mavConnected: Boolean = false
+    @Volatile var mavRollDeg: Float = 0f
+    @Volatile var mavPitchDeg: Float = 0f
+    @Volatile var mavHeadingDeg: Float = 0f
+    @Volatile var mavLine1: String = "MAV --"
+    @Volatile var mavLine2: String = ""
+    @Volatile var mavLine3: String = ""
+
     var onTapNormalized: ((Float, Float) -> Unit)? = null
     var onReset: (() -> Unit)? = null
     var onSearch: (() -> Unit)? = null
@@ -67,6 +75,16 @@ class OverlayView(context: Context) : View(context) {
     private val buttonActive = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = 0xB52A5034.toInt()
+    }
+    private val horizon = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = 0x8897E7A5.toInt()
+    }
+    private val horizonStrong = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = 0xCCB7F8C5.toInt()
     }
 
     private fun videoRect(): RectF {
@@ -102,6 +120,37 @@ class OverlayView(context: Context) : View(context) {
         c.drawLine(cx, cy - 38f, cx, cy - 10f, center)
         c.drawLine(cx, cy + 10f, cx, cy + 38f, center)
 
+        if (showAvionics && mavConnected) {
+            // Very cheap Canvas-only artificial horizon. No bitmap/shader allocation.
+            val hcX = vr.centerX()
+            val hcY = vr.centerY()
+            val pitchPx = mavPitchDeg.coerceIn(-30f, 30f) * 5.2f
+            c.save()
+            c.clipRect(vr)
+            c.rotate(-mavRollDeg.coerceIn(-85f, 85f), hcX, hcY)
+
+            val hy = hcY + pitchPx
+            c.drawLine(hcX - 190f, hy, hcX - 30f, hy, horizonStrong)
+            c.drawLine(hcX + 30f, hy, hcX + 190f, hy, horizonStrong)
+
+            var mark = -20
+            while (mark <= 20) {
+                if (mark != 0) {
+                    val y = hy - mark * 5.2f
+                    val half = if (mark % 10 == 0) 48f else 28f
+                    c.drawLine(hcX - half, y, hcX + half, y, horizon)
+                }
+                mark += 5
+            }
+            c.restore()
+
+            // Fixed aircraft symbol stays screen-aligned.
+            c.drawLine(hcX - 72f, hcY, hcX - 18f, hcY, horizonStrong)
+            c.drawLine(hcX + 18f, hcY, hcX + 72f, hcY, horizonStrong)
+            c.drawLine(hcX - 18f, hcY, hcX, hcY + 10f, horizonStrong)
+            c.drawLine(hcX + 18f, hcY, hcX, hcY + 10f, horizonStrong)
+        }
+
         box.color = 0x8877d98a.toInt()
         box.strokeWidth = 2f
         for (d in detections.take(20)) {
@@ -135,7 +184,8 @@ class OverlayView(context: Context) : View(context) {
         }
 
         // Minimal top-left telemetry.
-        c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 990f), 126f), 12f, 12f, shade)
+        val panelBottom = if (showAvionics && mavConnected) 174f else 126f
+        c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 1040f), panelBottom), 12f, 12f, shade)
         text.textSize = 28f
         text.color = when (stateLabel) {
             "LOCK" -> 0xff71ef8d.toInt()
@@ -162,12 +212,20 @@ class OverlayView(context: Context) : View(context) {
             28f, 97f, text
         )
         if (showAvionics) {
-            c.drawText(
-                "R " + "%+.1f".format(rollDeg) + "  P " + "%+.1f".format(pitchDeg) +
-                    "  HDG " + "%03d".format(headingDeg.toInt()) + "  G " + "%.2f".format(gLoad) +
-                    "  rates " + "%+.0f/%+.0f/%+.0f".format(pDeg, qDeg, rDeg),
-                28f, 121f, text
-            )
+            if (mavConnected) {
+                text.color = 0xff8ff0a4.toInt()
+                c.drawText(mavLine1, 28f, 121f, text)
+                text.color = Color.WHITE
+                c.drawText(mavLine2, 28f, 145f, text)
+                c.drawText(mavLine3, 28f, 169f, text)
+            } else {
+                c.drawText(
+                    "PHONE IMU  R " + "%+.1f".format(rollDeg) + "  P " + "%+.1f".format(pitchDeg) +
+                        "  HDG " + "%03d".format(headingDeg.toInt()) + "  G " + "%.2f".format(gLoad) +
+                        "  rates " + "%+.0f/%+.0f/%+.0f".format(pDeg, qDeg, rDeg),
+                    28f, 121f, text
+                )
+            }
         }
 
         c.drawRoundRect(searchButton(), 10f, 10f, button)
