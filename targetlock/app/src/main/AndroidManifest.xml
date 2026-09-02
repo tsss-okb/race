@@ -2,7 +2,7 @@
  <uses-permission android:name="android.permission.CAMERA"/>
  <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
  <uses-feature android:name="android.hardware.camera.any" android:required="true"/>
- <application android:theme="@style/Theme.TargetLock" android:label="Target Lock Super Hold 1.8" android:hardwareAccelerated="true">
+ <application android:theme="@style/Theme.TargetLock" android:label="Target Lock Stable 1.9" android:hardwareAccelerated="true">
   <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
   </activity>
