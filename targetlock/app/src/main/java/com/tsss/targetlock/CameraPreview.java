@@ -483,7 +483,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
         try{
             float aspect=getHeight()>0?getWidth()/(float)getHeight():2.0f;
-            int desiredW=Math.max(320,Math.min(480,Math.round(ANALYSIS_H*aspect)));
+            int desiredW=Math.max(320,Math.min(640,Math.round(ANALYSIS_H*aspect)));
             desiredW=(desiredW/2)*2;
             analysisW=desiredW;
             analysisH=ANALYSIS_H;
