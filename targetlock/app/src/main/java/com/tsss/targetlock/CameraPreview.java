@@ -40,7 +40,6 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private long lastTrackCaptureNs=0;
     private long lastTrackDoneNs=0;
     private long lastAppliedYoloSerial=0;
-    private long analysisFrameCounter=0;
 
     public volatile String status="INIT";
     public volatile String lastError="";
@@ -55,8 +54,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     public volatile float analysisGrabFps=0f;
     public volatile boolean detectEnabled=true;
     public volatile boolean trackEnabled=true;
-    public volatile boolean imuEnabled=false;
-    public volatile boolean flowEnabled=false;
+    public volatile boolean imuEnabled=true;
+    public volatile boolean flowEnabled=true;
     public volatile boolean autoReacqEnabled=true;
 
     private final TargetTracker tracker;
@@ -98,15 +97,15 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         imu=new ImuCompensator(c);
         tracker.setImu(imu);
         detector=new YoloDetector(c);
-        tracker.setUseImu(false);
-        tracker.setUseFlow(false);
+        tracker.setUseImu(true);
+        tracker.setUseFlow(true);
         tracker.setAutoReacq(true);
         setSurfaceTextureListener(this);
     }
 
     public void start(){
         try{
-            if(imuEnabled&&!imu.active)imu.start();
+            if(!imu.active)imu.start();
             if(isAvailable())open();
             else status="WAIT SURFACE";
         }catch(Throwable t){fail("start",t);}
@@ -120,8 +119,6 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         lastSensorTs=0;cameraFps=0;
         trackerBusy.set(false);
         lastTrackCaptureNs=0;lastTrackDoneNs=0;
-        analysisFrameCounter=0;
-        lastAppliedYoloSerial=0;
         try{tracker.clear();}catch(Throwable ignored){}
         if(thread!=null){
             try{thread.quitSafely();}catch(Throwable ignored){}
@@ -477,7 +474,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
 
         long now=System.nanoTime();
         // Keep visual analysis near 60 Hz max. IMU/HUD prediction remains 120 Hz.
-        if(now-lastTrackCaptureNs<33_000_000L)return;
+        if(now-lastTrackCaptureNs<16_000_000L)return;
         if(!trackerBusy.compareAndSet(false,true))return;
         lastTrackCaptureNs=now;
 
@@ -502,62 +499,37 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             out.getPixels(trackerPixels,0,analysisW,0,0,analysisW,analysisH);
 
             try{
-                analysisFrameCounter++;
-
                 if(detectEnabled){
-                    // KCF Hybrid:
-                    // - SEARCH: detector cadence is relaxed.
-                    // - LOCK: verify roughly every third analysis frame.
-                    // - COAST/REACQUIRE: detector runs as soon as it becomes free.
-                    boolean tracking=tracker.locked||tracker.coasting||tracker.reacquiring;
-                    boolean submit;
-                    long intervalMs;
+                    long baseLatency=Math.max(35,Math.round(detector.latencyMs));
+                    long yoloIntervalMs;
+                    if(tracker.reacquiring)
+                        yoloIntervalMs=Math.max(70,baseLatency+25);
+                    else if(tracker.coasting)
+                        yoloIntervalMs=Math.max(100,baseLatency+55);
+                    else if(tracker.locked)
+                        yoloIntervalMs=baseLatency<80?190:(baseLatency<140?260:380);
+                    else
+                        yoloIntervalMs=baseLatency<80?120:(baseLatency<140?180:240);
 
-                    if(tracker.coasting||tracker.reacquiring){
-                        submit=autoReacqEnabled;
-                        intervalMs=0;
-                        detector.setConfidenceThreshold(.18f);
-                    }else if(tracker.locked){
-                        // During a healthy lock, the lightweight tracker owns the fast loop.
-                        // YOLO is only a sparse verifier/corrector.
-                        submit=(analysisFrameCounter%8)==0;
-                        intervalMs=180;
-                        detector.setConfidenceThreshold(.24f);
-                    }else{
-                        submit=true;
-                        intervalMs=120;
-                        detector.setConfidenceThreshold(.28f);
-                    }
-
-                    if(submit){
-                        detector.maybeSubmit(trackerPixels,analysisW,analysisH,intervalMs);
-                    }
+                    detector.maybeSubmit(trackerPixels,analysisW,analysisH,yoloIntervalMs);
 
                     long serial=detector.resultSerial;
-                    boolean canAssociate=tracker.locked||
-                            (autoReacqEnabled&&(tracker.coasting||tracker.reacquiring));
-
-                    if(canAssociate&&serial!=0&&serial!=lastAppliedYoloSerial){
+                    if(autoReacqEnabled&&(tracker.locked||tracker.coasting||tracker.reacquiring)&&
+                            serial!=0&&serial!=lastAppliedYoloSerial){
                         YoloDetector.Detection best=null;
                         float bestScore=Float.MAX_VALUE;
-
                         for(YoloDetector.Detection d:detector.getDetections()){
                             float s=tracker.associationScore(d);
                             if(s<bestScore){bestScore=s;best=d;}
                         }
-
-                        if(best!=null&&bestScore<Float.MAX_VALUE){
-                            tracker.onYoloDetection(best);
-                        }else{
-                            tracker.onYoloMiss();
-                        }
+                        if(best!=null&&bestScore<Float.MAX_VALUE)tracker.onYoloDetection(best);
                         lastAppliedYoloSerial=serial;
                     }
                 }else{
                     detector.clearDetections();
                 }
             }catch(Throwable t){
-                lastError="yolo submit: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
+                lastError="yolo submit: "+t.getClass().getSimpleName();
             }
 
             trackerExecutor.execute(()->{
