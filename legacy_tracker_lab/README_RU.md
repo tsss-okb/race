@@ -120,3 +120,38 @@ CSV пишется автоматически:
 
 Этот стенд пассивный: он только детектирует и удерживает объект в кадре.
 MAVLink/ArduPilot команды здесь отсутствуют.
+
+
+## Автоматический A/B всех 4 режимов
+
+Один ролик автоматически прогоняется через Kalman, CSRT, KCF и MOSSE:
+
+```bash
+python benchmark_all.py \
+  --video test.mp4 \
+  --model yolo26n.pt \
+  --class-id 4 \
+  --out-dir benchmark_out
+```
+
+Скрипт создаст:
+
+- `benchmark_out/kalman_overlay.mp4`
+- `benchmark_out/csrt_overlay.mp4`
+- `benchmark_out/kcf_overlay.mp4`
+- `benchmark_out/mosse_overlay.mp4`
+- отдельные CSV по каждому режиму
+- `benchmark_out/tracker_summary.csv`
+
+Итоговая таблица сравнивает:
+
+- hold ratio;
+- average YOLO inference latency;
+- detector FPS;
+- tracker FPS;
+- mean jitter;
+- p95 jitter;
+- peak lost frames;
+- reacquire count.
+
+Победитель печатается строкой `WINNER: ...`.
