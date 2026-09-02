@@ -42,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.3 Strong Hold 120Hz Display Request:
+ * Fusion v3.4 Strong Hold Jump Rescue:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -105,6 +105,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var gyroP = 0f
     private var gyroQ = 0f
     private var gyroR = 0f
+    @Volatile private var jumpBoostUntilNs = 0L
+    private var lastRawGyroMag = 0f
 
     private val predictionFrameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -314,6 +316,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             if (target != null) {
                 // Flow is the cheap high-rate measurement. NCC is adaptive:
                 // normal lock -> every other frame; strong lock -> about 10 Hz.
+                val jumpBoost =
+                    System.nanoTime() < jumpBoostUntilNs ||
+                    lightFailStreak in 1..3
+                overlay.jumpRescue = jumpBoost
+
                 val runFlow = (frameSerial and 1L) == 0L
                 val flow = if (runFlow) sparseFlow.track(gray, target) else null
 
@@ -350,10 +357,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val flowWeakThisFrame =
                     runFlow && (flow == null || flow.targetConsistency < 0.50f)
                 val runTemplate =
+                    jumpBoost ||
                     (!runFlow && (!strongHold || frameSerial % 6L == 1L)) ||
                     flowWeakThisFrame
 
-                val visual = if (runTemplate) visualTracker.track(gray, target) else null
+                val visual =
+                    if (runTemplate) visualTracker.track(gray, target, jumpBoost)
+                    else null
                 if (runTemplate) {
                     currentVisualScore = visual?.score ?: visualTracker.score
                 }
@@ -391,9 +401,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                     val bothLightTrackersWeak =
                         currentFlowScore < 0.34f && currentVisualScore < 0.52f
+                    val reacquireAfter = if (jumpBoost) 7 else 4
 
                     stateLabel = when {
-                        lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
+                        lightFailStreak >= reacquireAfter && bothLightTrackersWeak -> "REACQUIRE"
                         lightFailStreak >= 2 ||
                             (projected.predicted && strongLockStreak == 0) -> "PREDICT"
                         strongLockStreak >= 2 || gotMeasurement -> "LOCK"
@@ -411,6 +422,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
             } else {
                 stateLabel = "SEARCH"
+                overlay.jumpRescue = false
             }
 
             maybeRunYolo(image)
@@ -611,6 +623,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             latestDetections = emptyList()
             currentFlowScore = 0f
             currentVisualScore = 0f
+            jumpBoostUntilNs = 0L
+            overlay.jumpRescue = false
             outputFps = 0f
             overlay.outputFps = 0f
             lightFailStreak = 0
@@ -679,6 +693,16 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val gx = event.values[0] * k
                 val gy = event.values[1] * k
                 val gz = event.values[2] * k
+
+                val rawMag = sqrt(gx * gx + gy * gy + gz * gz)
+                val angularStep = abs(rawMag - lastRawGyroMag)
+                if (rawMag >= 85f || (rawMag >= 35f && angularStep >= 45f)) {
+                    // Short rescue window only. Normal tracking cost is unchanged.
+                    jumpBoostUntilNs =
+                        maxOf(jumpBoostUntilNs, System.nanoTime() + 190_000_000L)
+                }
+                lastRawGyroMag = rawMag
+
                 gyroP = 0.84f * gyroP + 0.16f * gz
                 gyroQ = 0.84f * gyroQ + 0.16f * gx
                 gyroR = 0.84f * gyroR - 0.16f * gy
