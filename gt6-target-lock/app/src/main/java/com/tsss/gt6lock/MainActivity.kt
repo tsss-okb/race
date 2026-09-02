@@ -138,11 +138,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
 
-        val axisPrefs = getSharedPreferences("camera_axes", Context.MODE_PRIVATE)
-        overlay.axisMode = axisPrefs.getInt("axis_mode", 1)
-        overlay.onAxisModeChanged = { mode ->
-            axisPrefs.edit().putInt("axis_mode", mode).apply()
-        }
+        overlay.axisMode = 0
 
         overlay.onCalibrate = {
             runOnUiThread { calibrateBodyFrame() }
@@ -474,7 +470,7 @@ class MainActivity : Activity(), SensorEventListener {
             previewSize.width + "×" + previewSize.height +
             "  TRACK " + analysisSize.width + "×" + analysisSize.height +
             "  • AE MAX " + maxFps +
-            (if (hs) "  HS " + highMax else "  HS —") + "  • AXES=GT6_XY_FIX"
+            (if (hs) "  HS " + highMax else "  HS —") + "  • VIDEO=-90° FIXED"
         overlay.invalidate()
 
         reader = ImageReader.newInstance(
@@ -569,37 +565,39 @@ class MainActivity : Activity(), SensorEventListener {
         if (viewW <= 0 || viewH <= 0) return
         val cc = cameraCharacteristics ?: return
 
+        // Keep the hardware orientation only for diagnostics.
         relativeRotation = calculateRelativeRotation(cc)
 
+        // User-requested deterministic mode:
+        // rotate the camera video stream LEFT by exactly 90 degrees.
+        // This is the only video rotation in the app.
         val matrix = Matrix()
         val cx = viewW / 2f
         val cy = viewH / 2f
         val viewRect = RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
 
-        if (relativeRotation == 90 || relativeRotation == 270) {
-            val bufferRect = RectF(0f, 0f, previewSize.height.toFloat(), previewSize.width.toFloat())
-            bufferRect.offset(cx - bufferRect.centerX(), cy - bufferRect.centerY())
-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-            val scale = maxOf(
-                viewH.toFloat() / previewSize.height.toFloat(),
-                viewW.toFloat() / previewSize.width.toFloat()
-            )
-            matrix.postScale(scale, scale, cx, cy)
-            matrix.postRotate(if (relativeRotation == 90) -90f else 90f, cx, cy)
-        } else {
-            val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
-            val viewAspect = viewW.toFloat() / viewH.toFloat()
-            if (viewAspect > bufferAspect) {
-                matrix.postScale(1f, viewAspect / bufferAspect, cx, cy)
-            } else if (viewAspect < bufferAspect) {
-                matrix.postScale(bufferAspect / viewAspect, 1f, cx, cy)
-            }
-            if (relativeRotation == 180) matrix.postRotate(180f, cx, cy)
-        }
+        // After a 90° rotation width/height are swapped.
+        val rotatedBuffer = RectF(
+            0f,
+            0f,
+            previewSize.height.toFloat(),
+            previewSize.width.toFloat()
+        )
+        rotatedBuffer.offset(cx - rotatedBuffer.centerX(), cy - rotatedBuffer.centerY())
+
+        // Fill the screen while preserving the rotated camera geometry.
+        matrix.setRectToRect(viewRect, rotatedBuffer, Matrix.ScaleToFit.FILL)
+        val scale = maxOf(
+            viewW.toFloat() / previewSize.height.toFloat(),
+            viewH.toFloat() / previewSize.width.toFloat()
+        )
+        matrix.postScale(scale, scale, cx, cy)
+        matrix.postRotate(-90f, cx, cy)
 
         texture.setTransform(matrix)
         applySensorLevel()
         syncOverlayCameraMapping(viewW, viewH)
+        overlay.mappingLabel = "VIDEO L90"
         overlay.invalidate()
     }
 
