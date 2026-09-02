@@ -1,0 +1,25 @@
+name: Fetch YOLO26n ONNX
+
+on:
+  push:
+    branches: [targetlock-android-apk]
+    paths:
+      - '.github/workflows/fetch-yolo26-onnx.yml'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official YOLO26n ONNX
+        run: |
+          curl -L --fail --retry 4 --retry-delay 2             https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx             -o yolo26n.onnx
+          ls -lh yolo26n.onnx
+          sha256sum yolo26n.onnx
+      - name: Upload model
+        uses: actions/upload-artifact@v4
+        with:
+          name: yolo26n-onnx
+          path: yolo26n.onnx
+          if-no-files-found: error
