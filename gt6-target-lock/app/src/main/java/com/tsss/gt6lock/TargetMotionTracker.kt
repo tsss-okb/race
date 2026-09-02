@@ -12,19 +12,21 @@ class TargetMotionTracker(
     private var ax = 0f
     private var ay = 0f
     private var lastNs = 0L
+    private var lastSystemNs = 0L
 
     val locked: Detection? @Synchronized get() = target
     val misses: Int @Synchronized get() = lostFrames
 
     @Synchronized fun clear() {
         target = null; lostFrames = 0
-        vx = 0f; vy = 0f; ax = 0f; ay = 0f; lastNs = 0L
+        vx = 0f; vy = 0f; ax = 0f; ay = 0f; lastNs = 0L; lastSystemNs = 0L
     }
 
     @Synchronized
     fun forceLock(d: Detection, nowNs: Long): Detection {
         target = d; lostFrames = 0
         vx = 0f; vy = 0f; ax = 0f; ay = 0f; lastNs = nowNs
+        lastSystemNs = System.nanoTime()
         return d
     }
 
@@ -53,7 +55,7 @@ class TargetMotionTracker(
             mix(prev.y2,measured.y2).coerceIn(0f,1f),
             measured.confidence, measured.classId, measured.label, measured.predicted
         )
-        lostFrames=0; lastNs=nowNs
+        lostFrames=0; lastNs=nowNs; lastSystemNs=System.nanoTime()
         return target!!
     }
 
@@ -68,6 +70,23 @@ class TargetMotionTracker(
     }
 
     @Synchronized
+    fun predictRealtime(nowSystemNs: Long): Detection? {
+        val base = target ?: return null
+        if (lastSystemNs == 0L) return base
+
+        // Inter-frame extrapolation only. Keep it short to reduce latency
+        // without allowing the box to run away from the latest measurement.
+        val dt = ((nowSystemNs - lastSystemNs) / 1e9)
+            .toFloat()
+            .coerceIn(0f, 0.028f)
+        val dx = vx * dt + 0.5f * ax * dt * dt
+        val dy = vy * dt + 0.5f * ay * dt * dt
+        return shift(base, dx, dy).copy(
+            predicted = base.predicted || dt > 0.010f
+        )
+    }
+
+    @Synchronized
     fun miss(nowNs: Long): Detection? {
         val prev=target ?: return null
         lostFrames++
@@ -76,7 +95,8 @@ class TargetMotionTracker(
         val pred=shift(prev, vx*dt+0.5f*ax*dt*dt, vy*dt+0.5f*ay*dt*dt)
             .copy(confidence=(prev.confidence*(1f-lostFrames*0.06f)).coerceAtLeast(0.18f), predicted=true)
         target=pred
-        vx*=0.94f; vy*=0.94f; ax*=0.82f; ay*=0.82f; lastNs=nowNs
+        vx*=0.94f; vy*=0.94f; ax*=0.82f; ay*=0.82f
+        lastNs=nowNs; lastSystemNs=System.nanoTime()
         return pred
     }
 
