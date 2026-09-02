@@ -43,36 +43,70 @@ class TargetMotionTracker(
         val dt = if (lastNs == 0L) 1f/60f
             else ((nowNs-lastNs)/1e9).toFloat().coerceIn(1f/240f, 0.12f)
 
-        // About 0.6 px at 640x360. Ignore sub-pixel disagreement between
-        // flow/NCC so the box does not buzz while the target is steady.
-        val rawDx = measured.cx - prev.cx
-        val rawDy = measured.cy - prev.cy
-        val dx = if (abs(rawDx) < 0.00095f) 0f else rawDx
-        val dy = if (abs(rawDy) < 0.00165f) 0f else rawDy
+        val trust = measured.confidence.coerceIn(0.30f, 0.95f)
+        var rawDx = measured.cx - prev.cx
+        var rawDy = measured.cy - prev.cy
+
+        // Velocity innovation gate: compare the new measurement with the
+        // displacement already predicted by velocity/acceleration. A single
+        // wild flow/NCC point is clipped instead of throwing the box across
+        // the screen; persistent real motion passes through on following frames.
+        val expectedDx = vx * dt + 0.5f * ax * dt * dt
+        val expectedDy = vy * dt + 0.5f * ay * dt * dt
+        val innovXpx = (rawDx - expectedDx) * 640f
+        val innovYpx = (rawDy - expectedDy) * 360f
+        val innovationPx = hypot(innovXpx.toDouble(), innovYpx.toDouble()).toFloat()
+        val expectedStepPx = hypot(
+            (expectedDx * 640f).toDouble(),
+            (expectedDy * 360f).toDouble()
+        ).toFloat()
+        val gatePx = (6.0f + 1.7f * expectedStepPx + 2.0f * trust)
+            .coerceIn(7.0f, 22.0f)
+
+        if (innovationPx > gatePx && innovationPx > 0.001f) {
+            val k = gatePx / innovationPx
+            rawDx = expectedDx + (rawDx - expectedDx) * k
+            rawDy = expectedDy + (rawDy - expectedDy) * k
+        }
+
+        val stepPx = hypot(
+            (rawDx * 640f).toDouble(),
+            (rawDy * 360f).toDouble()
+        ).toFloat()
+
+        // Adaptive deadband: steadier at rest, almost disappears at speed.
+        val motion01 = ((stepPx - 0.7f) / 8.0f).coerceIn(0f, 1f)
+        val deadbandX = (0.00110f - 0.00055f * motion01).coerceAtLeast(0.00050f)
+        val deadbandY = (0.00185f - 0.00090f * motion01).coerceAtLeast(0.00080f)
+        val dx = if (abs(rawDx) < deadbandX) 0f else rawDx
+        val dy = if (abs(rawDy) < deadbandY) 0f else rawDy
+
         val measuredCx = prev.cx + dx
         val measuredCy = prev.cy + dy
-
         val mvx = (dx / dt).coerceIn(-3.2f, 3.2f)
         val mvy = (dy / dt).coerceIn(-3.2f, 3.2f)
+
         val maxA = 14f
         val maxAx = ((mvx-vx)/dt).coerceIn(-maxA,maxA)
         val maxAy = ((mvy-vy)/dt).coerceIn(-maxA,maxA)
-        val trust = measured.confidence.coerceIn(0.30f,0.95f)
-        val va = (0.28f + 0.27f*trust).coerceIn(0.26f,0.55f)
-        val aa = (0.08f + 0.14f*trust).coerceIn(0.08f,0.22f)
+
+        // Calm target -> more smoothing. Fast target -> quicker response.
+        val va = (0.18f + 0.42f * motion01 + 0.06f * trust)
+            .coerceIn(0.18f, 0.64f)
+        val aa = (0.06f + 0.16f * motion01 + 0.03f * trust)
+            .coerceIn(0.06f, 0.25f)
         vx = va*mvx + (1f-va)*vx
         vy = va*mvy + (1f-va)*vy
         ax = aa*maxAx + (1f-aa)*ax
         ay = aa*maxAy + (1f-aa)*ay
 
-        // Center follows quickly enough for dynamics; size remains the one
-        // captured at LOCK/reacquire and cannot collapse over time.
-        val alpha = (0.54f + 0.20f*trust).coerceIn(0.54f,0.74f)
+        val alpha = (0.34f + 0.44f * motion01 + 0.05f * trust)
+            .coerceIn(0.34f, 0.83f)
         val cx = prev.cx + alpha * (measuredCx - prev.cx)
         val cy = prev.cy + alpha * (measuredCy - prev.cy)
+
         val w = if (lockW > 0f) lockW else measured.width
         val h = if (lockH > 0f) lockH else measured.height
-
         target = centeredBox(
             cx, cy, w, h,
             measured.confidence, measured.classId, measured.label, measured.predicted
@@ -101,6 +135,12 @@ class TargetMotionTracker(
         val dt = ((nowSystemNs - lastSystemNs) / 1e9)
             .toFloat()
             .coerceIn(0f, 0.028f)
+        val speedPxSec = hypot(
+            (vx * 640f).toDouble(),
+            (vy * 360f).toDouble()
+        ).toFloat()
+        if (speedPxSec < 14f) return base
+
         val dx = vx * dt + 0.5f * ax * dt * dt
         val dy = vy * dt + 0.5f * ay * dt * dt
         return shift(base, dx, dy).copy(
