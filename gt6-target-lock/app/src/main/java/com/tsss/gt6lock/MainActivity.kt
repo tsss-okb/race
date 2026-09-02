@@ -10,6 +10,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
@@ -18,6 +19,7 @@ import android.util.Size
 import android.view.Choreographer
 import android.view.Surface
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -40,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.2 Strong Hold 120Hz Output:
+ * Fusion v3.3 Strong Hold 120Hz Display Request:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -119,6 +121,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         outputCounter = 0
                         outputWindowStart = now
                         overlay.outputFps = outputFps
+                        updateDisplayTelemetry()
                     }
                     overlay.postInvalidateOnAnimation()
                 }
@@ -166,7 +169,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         root.addView(previewView, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         root.addView(overlay, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         setContentView(root)
-        prefer120HzDisplay()
+        request120HzDisplay()
+        root.postDelayed({ request120HzDisplay() }, 600L)
 
         overlay.onTapNormalized = { x, y ->
             val now = SystemClock.uptimeMillis()
@@ -198,15 +202,36 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         ) startCamera() else cameraPermission.launch(Manifest.permission.CAMERA)
     }
 
-    private fun prefer120HzDisplay() {
-        val d = display ?: return
-        val best = d.supportedModes
-            .filter { it.refreshRate <= 120.5f }
-            .maxByOrNull { it.refreshRate }
-            ?: return
+    private fun request120HzDisplay() {
+        // Request refresh only. Android recommends preferredRefreshRate over
+        // preferredDisplayModeId when resolution must stay unchanged.
         val attrs = window.attributes
-        attrs.preferredDisplayModeId = best.modeId
+        attrs.preferredDisplayModeId = 0
+        attrs.preferredRefreshRate = 120f
         window.attributes = attrs
+
+        if (Build.VERSION.SDK_INT >= 35) {
+            requestFrameRateRecursive(window.decorView, 120f)
+        }
+        updateDisplayTelemetry()
+    }
+
+    private fun requestFrameRateRecursive(view: View, rate: Float) {
+        if (Build.VERSION.SDK_INT >= 35) {
+            view.setRequestedFrameRate(rate)
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                requestFrameRateRecursive(view.getChildAt(i), rate)
+            }
+        }
+    }
+
+    private fun updateDisplayTelemetry() {
+        val d = display ?: return
+        overlay.displayFps = d.refreshRate
+        overlay.maxDisplayFps =
+            d.supportedModes.maxOfOrNull { it.refreshRate } ?: d.refreshRate
     }
 
     private fun startCamera() {
@@ -605,6 +630,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        request120HzDisplay()
+        window.decorView.postDelayed({ request120HzDisplay() }, 400L)
         if (!predictionLoopRunning) {
             predictionLoopRunning = true
             outputCounter = 0
