@@ -23,11 +23,14 @@ class OverlayView(context: Context) : View(context) {
     )
 
     @Volatile var track = UiTrack()
-    var imageW = 1280
-    var imageH = 720
+    var imageW = 640
+    var imageH = 360
     var rotationDegrees = 0
-    var cameraLabel = "MAIN CAMERA"
+    var cameraLabel = "CAMERA"
+    var fpsModeLabel = "30 FPS"
     var onTapImage: ((Float, Float) -> Unit)? = null
+    var onCameraCycle: (() -> Unit)? = null
+    var onFpsToggle: (() -> Unit)? = null
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -40,6 +43,10 @@ class OverlayView(context: Context) : View(context) {
     private val shadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = 0x72000000
+    }
+    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xA5192328.toInt()
     }
     private val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -60,6 +67,9 @@ class OverlayView(context: Context) : View(context) {
             else -> x to y
         }
     }
+
+    private fun cameraButton(): RectF = RectF(width - 330f, 16f, width - 180f, 72f)
+    private fun fpsButton(): RectF = RectF(width - 166f, 16f, width - 16f, 72f)
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
@@ -117,7 +127,7 @@ class OverlayView(context: Context) : View(context) {
             c.drawLine(bx, by - 14f, bx, by + 14f, boxPaint)
         }
 
-        c.drawRoundRect(RectF(16f, 14f, min(width - 16f, 690f), 100f), 12f, 12f, shadePaint)
+        c.drawRoundRect(RectF(16f, 14f, min(width - 350f, 670f), 100f), 12f, 12f, shadePaint)
         textPaint.textSize = 30f
         c.drawText(stateText + "  " + (tr.conf * 100).toInt() + "%", 30f, 48f, textPaint)
 
@@ -127,7 +137,14 @@ class OverlayView(context: Context) : View(context) {
             "   JITTER " + "%.1f".format(tr.jitter) + " px"
         c.drawText(perf, 30f, 79f, textPaint)
 
-        val labelW = min(width - 32f, 690f)
+        c.drawRoundRect(cameraButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(fpsButton(), 12f, 12f, buttonPaint)
+        textPaint.color = 0xffe7eef1.toInt()
+        textPaint.textSize = 20f
+        c.drawText("CAMERA", width - 310f, 51f, textPaint)
+        c.drawText(fpsModeLabel, width - 150f, 51f, textPaint)
+
+        val labelW = min(width - 32f, 820f)
         c.drawRoundRect(RectF(16f, height - 70f, 16f + labelW, height - 14f), 12f, 12f, shadePaint)
         textPaint.color = 0xffd8e1e5.toInt()
         textPaint.textSize = 18f
@@ -137,6 +154,15 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.action == MotionEvent.ACTION_UP) {
+            if (cameraButton().contains(e.x, e.y)) {
+                onCameraCycle?.invoke()
+                return true
+            }
+            if (fpsButton().contains(e.x, e.y)) {
+                onFpsToggle?.invoke()
+                return true
+            }
+
             val s = min(width.toFloat() / imageW, height.toFloat() / imageH)
             val ox = (width - imageW * s) / 2f
             val oy = (height - imageH * s) / 2f
