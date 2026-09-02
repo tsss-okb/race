@@ -2,13 +2,13 @@ package com.tsss.gt6lock
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -30,9 +30,8 @@ class OverlayView(context: Context) : View(context) {
 
     var imageW = 320
     var imageH = 180
-    var rotationDegrees = 0
+    var rotationDegrees = 0 // diagnostic only; mapping is matrix-driven in v1.0
 
-    // Kept for compatibility; camera preview is never IMU-rotated in v0.8.
     var levelCorrectionDegrees = 0f
     var levelScale = 1f
 
@@ -50,12 +49,59 @@ class OverlayView(context: Context) : View(context) {
     var cameraLabel = "CAMERA"
     var cameraHzLabel = "AUTO"
     var fpsModeLabel = "60"
+    var mappingLabel = "MAP WAIT"
 
     var onTapImage: ((Float, Float) -> Unit)? = null
     var onCameraCycle: (() -> Unit)? = null
     var onFpsToggle: (() -> Unit)? = null
     var onAutoLevelToggle: (() -> Unit)? = null
     var onCalibrate: (() -> Unit)? = null
+
+    private val bufferToView = Matrix()
+    private val viewToBuffer = Matrix()
+    @Volatile private var mappingReady = false
+
+    fun setCameraMapping(bufferW: Int, bufferH: Int, displayedCorners: FloatArray) {
+        if (displayedCorners.size < 8 || bufferW <= 0 || bufferH <= 0) return
+
+        imageW = bufferW
+        imageH = bufferH
+
+        val src = floatArrayOf(
+            0f, 0f,
+            bufferW.toFloat(), 0f,
+            bufferW.toFloat(), bufferH.toFloat(),
+            0f, bufferH.toFloat()
+        )
+
+        val m = Matrix()
+        val ok = m.setPolyToPoly(src, 0, displayedCorners, 0, 4)
+        if (!ok) {
+            mappingReady = false
+            mappingLabel = "MAP ERROR"
+            invalidate()
+            return
+        }
+
+        val inv = Matrix()
+        if (!m.invert(inv)) {
+            mappingReady = false
+            mappingLabel = "MAP SINGULAR"
+            invalidate()
+            return
+        }
+
+        bufferToView.set(m)
+        viewToBuffer.set(inv)
+        mappingReady = true
+
+        val values = FloatArray(9)
+        m.getValues(values)
+        val det = values[Matrix.MSCALE_X] * values[Matrix.MSCALE_Y] -
+            values[Matrix.MSKEW_X] * values[Matrix.MSKEW_Y]
+        mappingLabel = if (det < 0f) "MAP MIRROR" else "MAP NORMAL"
+        invalidate()
+    }
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -93,47 +139,27 @@ class OverlayView(context: Context) : View(context) {
     private fun hudButton(): RectF = RectF(width - 300f, 16f, width - 160f, 72f)
     private fun fpsButton(): RectF = RectF(width - 150f, 16f, width - 16f, 72f)
 
-    private fun rotatedSize(): Pair<Float, Float> =
-        if (rotationDegrees == 90 || rotationDegrees == 270) imageH.toFloat() to imageW.toFloat()
-        else imageW.toFloat() to imageH.toFloat()
-
-    private fun baseRotateImagePoint(x: Float, y: Float): Pair<Float, Float> = when (rotationDegrees) {
-        90 -> y to (imageW - x)
-        180 -> (imageW - x) to (imageH - y)
-        270 -> (imageH - y) to x
-        else -> x to y
-    }
-
-    private fun inverseBaseRotatePoint(x: Float, y: Float): Pair<Float, Float> = when (rotationDegrees) {
-        90 -> (imageW - y) to x
-        180 -> (imageW - x) to (imageH - y)
-        270 -> y to (imageH - x)
-        else -> x to y
-    }
-
     private fun imageToView(x: Float, y: Float): Pair<Float, Float> {
-        val p = baseRotateImagePoint(x, y)
-        val rs = rotatedSize()
-        val scale = max(width.toFloat() / rs.first, height.toFloat() / rs.second)
-        val ox = (width - rs.first * scale) / 2f
-        val oy = (height - rs.second * scale) / 2f
-        return (ox + p.first * scale) to (oy + p.second * scale)
+        if (!mappingReady) return x to y
+        val pts = floatArrayOf(x, y)
+        bufferToView.mapPoints(pts)
+        return pts[0] to pts[1]
     }
 
     private fun viewToImage(x: Float, y: Float): Pair<Float, Float> {
-        val rs = rotatedSize()
-        val scale = max(width.toFloat() / rs.first, height.toFloat() / rs.second)
-        val ox = (width - rs.first * scale) / 2f
-        val oy = (height - rs.second * scale) / 2f
-        val rx = ((x - ox) / scale).coerceIn(0f, rs.first)
-        val ry = ((y - oy) / scale).coerceIn(0f, rs.second)
-        val raw = inverseBaseRotatePoint(rx, ry)
-        return raw.first.coerceIn(0f, imageW.toFloat() - 1f) to
-            raw.second.coerceIn(0f, imageH.toFloat() - 1f)
+        if (!mappingReady) {
+            return x.coerceIn(0f, imageW.toFloat() - 1f) to
+                y.coerceIn(0f, imageH.toFloat() - 1f)
+        }
+
+        val pts = floatArrayOf(x, y)
+        viewToBuffer.mapPoints(pts)
+        return pts[0].coerceIn(0f, imageW.toFloat() - 1f) to
+            pts[1].coerceIn(0f, imageH.toFloat() - 1f)
     }
 
     private fun drawTrackedBox(c: Canvas, tr: UiTrack, col: Int) {
-        if (tr.state == 0 || tr.bw <= 0f || tr.bh <= 0f) return
+        if (tr.state == 0 || tr.bw <= 0f || tr.bh <= 0f || !mappingReady) return
 
         boxPaint.color = col
         val x0 = tr.cx - tr.bw / 2f
@@ -168,7 +194,6 @@ class OverlayView(context: Context) : View(context) {
 
         c.save()
         c.rotate(-sensorRollDegrees, cx, cy)
-        horizonPaint.color = 0xCCd8e1e5.toInt()
         c.drawLine(cx - 210f, cy + pitchPx, cx - 38f, cy + pitchPx, horizonPaint)
         c.drawLine(cx + 38f, cy + pitchPx, cx + 210f, cy + pitchPx, horizonPaint)
 
@@ -180,13 +205,11 @@ class OverlayView(context: Context) : View(context) {
         }
         c.restore()
 
-        // Fixed aircraft reference
         c.drawLine(cx - 72f, cy, cx - 18f, cy, whitePaint)
         c.drawLine(cx + 18f, cy, cx + 72f, cy, whitePaint)
         c.drawLine(cx - 18f, cy, cx, cy + 12f, whitePaint)
         c.drawLine(cx, cy + 12f, cx + 18f, cy, whitePaint)
 
-        // Roll scale
         val radius = 118f
         for (a in -45..45 step 15) {
             val rad = Math.toRadians((a - 90).toDouble())
@@ -217,7 +240,7 @@ class OverlayView(context: Context) : View(context) {
         drawAvionics(c)
         drawTrackedBox(c, tr, col)
 
-        c.drawRoundRect(RectF(16f, 14f, min(width - 460f, 940f), 128f), 12f, 12f, shadePaint)
+        c.drawRoundRect(RectF(16f, 14f, min(width - 580f, 1040f), 128f), 12f, 12f, shadePaint)
 
         textPaint.color = col
         textPaint.textSize = 28f
@@ -237,7 +260,7 @@ class OverlayView(context: Context) : View(context) {
         )
         c.drawText(
             "P " + "%+.1f".format(gyroPDeg) + "°/s   Q " + "%+.1f".format(gyroQDeg) +
-                "°/s   R " + "%+.1f".format(gyroRDeg) + "°/s   CAMERA HAL " + cameraHzLabel,
+                "°/s   R " + "%+.1f".format(gyroRDeg) + "°/s   HAL " + cameraHzLabel + "   " + mappingLabel,
             30f, 119f, textPaint
         )
 
@@ -253,12 +276,12 @@ class OverlayView(context: Context) : View(context) {
         c.drawText(if (avionicsHudEnabled) "HUD✓" else "HUD", width - 268f, 51f, textPaint)
         c.drawText(fpsModeLabel + " FPS", width - 136f, 51f, textPaint)
 
-        val labelW = min(width - 32f, 1220f)
+        val labelW = min(width - 32f, 1320f)
         c.drawRoundRect(RectF(16f, height - 67f, 16f + labelW, height - 14f), 12f, 12f, shadePaint)
         textPaint.color = 0xffd8e1e5.toInt()
         textPaint.textSize = 15f
         c.drawText(cameraLabel, 30f, height - 42f, textPaint)
-        c.drawText("ТАП = LOCK   •   ДВОЙНОЙ ТАП = RESET", 30f, height - 20f, textPaint)
+        c.drawText("ТАП = LOCK   •   ДВОЙНОЙ ТАП = RESET   •   ONE MATRIX", 30f, height - 20f, textPaint)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
