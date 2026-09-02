@@ -1,0 +1,28 @@
+name: Fetch OpenCV Contrib Wheel
+
+on:
+  push:
+    branches: [targetlock-android-apk]
+    paths:
+      - '.github/workflows/fetch-opencv-contrib-wheel.yml'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download OpenCV contrib wheel
+        run: |
+          mkdir -p wheels
+          python -m pip download --only-binary=:all: --no-deps -d wheels opencv-contrib-python==4.13.0.92
+          ls -lh wheels
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-contrib-py313-wheel
+          path: wheels/*
+          if-no-files-found: error
