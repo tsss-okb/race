@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.max
 import kotlin.math.min
 
 class OverlayView(context: Context) : View(context) {
@@ -74,7 +75,8 @@ class OverlayView(context: Context) : View(context) {
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
 
-        val s = min(width.toFloat() / imageW, height.toFloat() / imageH)
+        // Same center-crop as the TextureView: overlay and tap coordinates stay aligned.
+        val s = max(width.toFloat() / imageW, height.toFloat() / imageH)
         val ox = (width - imageW * s) / 2f
         val oy = (height - imageH * s) / 2f
         val tr = track
@@ -163,7 +165,7 @@ class OverlayView(context: Context) : View(context) {
                 return true
             }
 
-            val s = min(width.toFloat() / imageW, height.toFloat() / imageH)
+            val s = max(width.toFloat() / imageW, height.toFloat() / imageH)
             val ox = (width - imageW * s) / 2f
             val oy = (height - imageH * s) / 2f
 
