@@ -37,12 +37,13 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.8 Strong Hold Native Flow:
+ * Fusion v3.9 Strong Hold + ArduPilot Avionics:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val sparseFlow = NativeSparseFlowGmcTracker()
     private val visualTracker = SmartVisualTracker()
     private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
+    private val mavlink = MavlinkTelemetry(port = 14550)
 
     private val inferenceBusy = AtomicBoolean(false)
     private val prioritySet = AtomicBoolean(false)
@@ -81,6 +83,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var outputWindowStart = SystemClock.elapsedRealtime()
     private var outputFps = 0f
     private var predictionLoopRunning = false
+    private var lastMavHudMs = 0L
     private var lastYoloRunMs = 0L
     private var lastUiMs = 0L
     private var lastTapMs = 0L
@@ -110,11 +113,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         override fun doFrame(frameTimeNanos: Long) {
             if (!predictionLoopRunning) return
 
+            val now = SystemClock.elapsedRealtime()
+            val mavFresh = updateMavlinkHud(now)
+
+            var needDraw = mavFresh
             if (stateLabel != "SEARCH") {
                 motionTracker.predictRealtime(System.nanoTime())?.let { predicted ->
                     overlay.locked = predicted
                     outputCounter++
-                    val now = SystemClock.elapsedRealtime()
                     if (now - outputWindowStart >= 1000L) {
                         outputFps = outputCounter * 1000f /
                             (now - outputWindowStart).coerceAtLeast(1L)
@@ -123,10 +129,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         overlay.outputFps = outputFps
                         updateDisplayTelemetry()
                     }
-                    overlay.postInvalidateOnAnimation()
+                    needDraw = true
                 }
             }
 
+            if (needDraw) overlay.postInvalidateOnAnimation()
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -200,6 +207,65 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         ) startCamera() else cameraPermission.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun updateMavlinkHud(now: Long): Boolean {
+        val age = mavlink.ageMs(now)
+        val fresh = age <= 1200L
+        overlay.mavConnected = fresh
+        if (!fresh) return false
+
+        // Attitude is copied directly from the latest MAVLink sample.
+        // No queue/interpolation allocation: newest packet always wins.
+        overlay.mavRollDeg = mavlink.rollDeg
+        overlay.mavPitchDeg = mavlink.pitchDeg
+        overlay.mavHeadingDeg = mavlink.yawDeg
+        overlay.rollDeg = mavlink.rollDeg
+        overlay.pitchDeg = mavlink.pitchDeg
+        overlay.headingDeg = mavlink.yawDeg
+        overlay.pDeg = mavlink.rollRateDeg
+        overlay.qDeg = mavlink.pitchRateDeg
+        overlay.rDeg = mavlink.yawRateDeg
+
+        // Text is refreshed at 20 Hz; the moving horizon still redraws at VSync.
+        if (now - lastMavHudMs >= 50L) {
+            lastMavHudMs = now
+            val state = if (mavlink.armed) "ARMED" else "SAFE"
+            val gps = gpsFixName(mavlink.gpsFix)
+            val batPct = if (mavlink.batteryPct >= 0)
+                "${mavlink.batteryPct}%"
+            else "--"
+
+            overlay.mavLine1 = String.format(
+                Locale.US,
+                "MAV %.0fHz  %dms  %s  %s  SYS %d:%d",
+                mavlink.rxHz, age, state, mavlink.modeName(),
+                mavlink.sysId, mavlink.compId
+            )
+            overlay.mavLine2 = String.format(
+                Locale.US,
+                "R %+.1f  P %+.1f  HDG %03.0f  AS %.1f  GS %.1f  ALT %.1fm",
+                mavlink.rollDeg, mavlink.pitchDeg, mavlink.yawDeg,
+                mavlink.airspeed, mavlink.groundSpeed, mavlink.altitudeM
+            )
+            overlay.mavLine3 = String.format(
+                Locale.US,
+                "CLB %+.1f  THR %d%%  GPS %s/%d  BAT %.2fV %.1fA %s",
+                mavlink.climbMs, mavlink.throttlePct,
+                gps, mavlink.satellites,
+                mavlink.batteryV, mavlink.batteryA, batPct
+            )
+        }
+        return true
+    }
+
+    private fun gpsFixName(fix: Int): String = when (fix) {
+        2 -> "2D"
+        3 -> "3D"
+        4 -> "DGPS"
+        5 -> "RTK-F"
+        6 -> "RTK"
+        else -> if (fix > 0) "F$fix" else "--"
     }
 
     private fun request120HzDisplay() {
@@ -661,6 +727,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        mavlink.start()
         request120HzDisplay()
         window.decorView.postDelayed({ request120HzDisplay() }, 400L)
         if (!predictionLoopRunning) {
@@ -676,6 +743,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onPause() {
         predictionLoopRunning = false
+        mavlink.stop()
+        overlay.mavConnected = false
         sensorManager.unregisterListener(this)
         super.onPause()
     }
@@ -701,9 +770,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 rawPitch = Math.toDegrees(o[1].toDouble()).toFloat()
                 rawRoll = Math.toDegrees(o[2].toDouble()).toFloat()
 
-                overlay.rollDeg = wrap180(rawRoll - zeroRoll)
-                overlay.pitchDeg = wrap180(rawPitch - zeroPitch)
-                overlay.headingDeg = ((rawHeading - zeroHeading + 360f) % 360f)
+                if (mavlink.ageMs() > 1200L) {
+                    overlay.rollDeg = wrap180(rawRoll - zeroRoll)
+                    overlay.pitchDeg = wrap180(rawPitch - zeroPitch)
+                    overlay.headingDeg = ((rawHeading - zeroHeading + 360f) % 360f)
+                }
             }
             Sensor.TYPE_GYROSCOPE -> {
                 val k = (180.0 / Math.PI).toFloat()
@@ -713,9 +784,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 gyroP = 0.84f * gyroP + 0.16f * gz
                 gyroQ = 0.84f * gyroQ + 0.16f * gx
                 gyroR = 0.84f * gyroR - 0.16f * gy
-                overlay.pDeg = if (abs(gyroP) < 0.25f) 0f else gyroP
-                overlay.qDeg = if (abs(gyroQ) < 0.25f) 0f else gyroQ
-                overlay.rDeg = if (abs(gyroR) < 0.25f) 0f else gyroR
+                if (mavlink.ageMs() > 1200L) {
+                    overlay.pDeg = if (abs(gyroP) < 0.25f) 0f else gyroP
+                    overlay.qDeg = if (abs(gyroQ) < 0.25f) 0f else gyroQ
+                    overlay.rDeg = if (abs(gyroR) < 0.25f) 0f else gyroR
+                }
             }
             Sensor.TYPE_ACCELEROMETER -> {
                 val x = event.values[0]
@@ -736,6 +809,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDestroy() {
+        mavlink.stop()
         runCatching { detector?.close() }
         cameraExecutor.shutdown()
         detectorExecutor.shutdown()
