@@ -207,11 +207,10 @@ class SmartVisualTracker {
             else -> State.ACQUIRE
         }
 
-        val scaleBlend = 0.18f
-        val newW = (base.width * (1f - scaleBlend) + base.width * bestScale * scaleBlend)
-            .coerceIn(0.010f, 0.60f)
-        val newH = (base.height * (1f - scaleBlend) + base.height * bestScale * scaleBlend)
-            .coerceIn(0.010f, 0.60f)
+        // Stable Box: scale is used only to FIND the target, not to resize the
+        // HUD box every frame. This prevents cumulative shrink/grow feedback.
+        val newW = anchor.widthNorm
+        val newH = anchor.heightNorm
 
         val result = makeBox(
             bestX.toFloat() / frame.width,
