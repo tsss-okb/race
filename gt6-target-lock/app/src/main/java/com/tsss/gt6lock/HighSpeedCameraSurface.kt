@@ -91,7 +91,14 @@ class HighSpeedCameraSurface(
         }
     }
 
-    private val rendererImpl = CameraRenderer(profile, onGrayFrame, onRenderedFps)
+    private val displayDegrees = when ((context as? android.app.Activity)?.windowManager?.defaultDisplay?.rotation) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
+    }
+    private val relativeRotation = ((profile.sensorOrientation - displayDegrees) % 360 + 360) % 360
+    private val rendererImpl = CameraRenderer(profile, onGrayFrame, onRenderedFps, relativeRotation)
     private val cameraThread = HandlerThread("GT6-HS-Camera").apply { start() }
     private val cameraHandler = Handler(cameraThread.looper)
     private var camera: CameraDevice? = null
@@ -199,7 +206,8 @@ class HighSpeedCameraSurface(
     private class CameraRenderer(
         private val profile: Profile,
         private val onGrayFrame: (FastLumaExtractor.GrayFrame) -> Unit,
-        private val onRenderedFps: (Float) -> Unit
+        private val onRenderedFps: (Float) -> Unit,
+        private val relativeRotation: Int
     ) : Renderer, SurfaceTexture.OnFrameAvailableListener {
 
         var onSurfaceTextureReady: ((SurfaceTexture) -> Unit)? = null
@@ -236,7 +244,7 @@ class HighSpeedCameraSurface(
         private val posBuffer: FloatBuffer = floatBuffer(
             floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
         )
-        private val texBuffer: FloatBuffer = floatBuffer(textureCoordsForRotation(0))
+        private val texBuffer: FloatBuffer = floatBuffer(textureCoordsForRotation(relativeRotation))
 
         private var lastFrameTimestamp = 0L
         private var fpsEma = 0f
