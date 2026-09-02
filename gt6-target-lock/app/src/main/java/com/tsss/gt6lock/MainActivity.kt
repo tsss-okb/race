@@ -36,15 +36,15 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * Fusion v2:
- * - PlaneAimPhone CameraX/60fps/Y-plane architecture
- * - C++/NDK hot-path tracker
- * - YOLO26 only in SEARCH/REACQUIRE
- * - IMU is avionics/prediction data only and never rotates the video.
+ * Fusion v3:
+ * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
+ * - alternating sparse target/background flow (GMC) and NCC appearance tracker
+ * - constant-acceleration image-space motion filter
+ * - YOLO26 only for SEARCH / prolonged REACQUIRE
+ * - IMU is HUD-only and never rotates the video.
  */
 class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var previewView: PreviewView
@@ -52,31 +52,36 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var detectorExecutor: ExecutorService
 
-    private val nativeTracker = NativeTracker()
-    private val luma = FastLumaExtractor(maxOutputWidth = 320, ringSize = 3)
+    private val luma = FastLumaExtractor(maxOutputWidth = 640, ringSize = 4)
+    private val sparseFlow = SparseFlowGmcTracker()
+    private val visualTracker = SmartVisualTracker()
+    private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
+
     private val inferenceBusy = AtomicBoolean(false)
     private val prioritySet = AtomicBoolean(false)
 
     @Volatile private var detector: Yolo26OnnxDetector? = null
     @Volatile private var boundCamera: Camera? = null
-    @Volatile private var tracking = false
     @Volatile private var latestDetections: List<Detection> = emptyList()
     @Volatile private var pendingTap: Pair<Float, Float>? = null
     @Volatile private var pendingReacquire: Detection? = null
     @Volatile private var manualSearchRequested = false
-    @Volatile private var lastTrackDetection: Detection? = null
     @Volatile private var stateLabel = "SEARCH"
 
-    private var lastFrameTs = 0L
     private var lastCameraTs = 0L
     private var cameraFpsEma = 0f
+    private var frameSerial = 0L
     private var trackCounter = 0
     private var trackWindowStart = SystemClock.elapsedRealtime()
     private var trackFps = 0f
-    private var frameSerial = 0L
     private var lastYoloRunMs = 0L
     private var lastUiMs = 0L
     private var lastTapMs = 0L
+    private var currentFlowScore = 0f
+    private var currentVisualScore = 0f
+    private var jitterEma = 0f
+    private var lastCenterX = Float.NaN
+    private var lastCenterY = Float.NaN
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -88,11 +93,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var zeroRoll = 0f
     private var zeroPitch = 0f
     private var zeroHeading = 0f
-    private var calibrated = false
     private var gyroP = 0f
     private var gyroQ = 0f
     private var gyroR = 0f
-    private var gLoad = 1f
 
     private val cameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -109,7 +112,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
 
         cameraExecutor = Executors.newSingleThreadExecutor { r ->
-            Thread(r, "GT6-NDK-Track").apply { priority = Thread.MAX_PRIORITY }
+            Thread(r, "GT6-Track-640").apply { priority = Thread.MAX_PRIORITY }
         }
         detectorExecutor = Executors.newSingleThreadExecutor { r ->
             Thread(r, "GT6-YOLO-OnDemand").apply { priority = Thread.NORM_PRIORITY }
@@ -135,11 +138,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         overlay.onTapNormalized = { x, y ->
             val now = SystemClock.uptimeMillis()
-            if (now - lastTapMs < 280L) {
-                resetTracker()
-            } else {
-                pendingTap = x to y
-            }
+            if (now - lastTapMs < 280L) resetTracker()
+            else pendingTap = x to y
             lastTapMs = now
         }
         overlay.onReset = { resetTracker() }
@@ -153,7 +153,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             zeroRoll = rawRoll
             zeroPitch = rawPitch
             zeroHeading = rawHeading
-            calibrated = true
             overlay.bodyCalibrated = true
             overlay.invalidate()
         }
@@ -164,20 +163,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
-        } else {
-            cameraPermission.launch(Manifest.permission.CAMERA)
-        }
+        ) startCamera() else cameraPermission.launch(Manifest.permission.CAMERA)
     }
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             val provider = future.get()
-            if (!tryBind(provider, request60 = true)) {
-                tryBind(provider, request60 = false)
-            }
+            if (!tryBind(provider, true)) tryBind(provider, false)
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -193,11 +186,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
 
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(320, 180))
+                .setTargetResolution(Size(640, 360))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build()
-
             analysis.setAnalyzer(cameraExecutor) { image -> analyzeImage(image) }
 
             boundCamera = if (request60) {
@@ -210,12 +202,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             }
 
-            overlay.yoloMode = if (request60) "IDLE / CAM60" else "IDLE / MAX"
+            overlay.yoloMode = if (request60) "IDLE / CAM60 / TRACK640" else "IDLE / MAX / TRACK640"
             overlay.invalidate()
             true
-        }.getOrElse {
-            false
-        }
+        }.getOrElse { false }
     }
 
     private fun analyzeImage(image: ImageProxy) {
@@ -229,7 +219,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val dt = (ts - lastCameraTs) / 1e9
                 if (dt in 0.004..0.1) {
                     val f = (1.0 / dt).toFloat()
-                    cameraFpsEma = if (cameraFpsEma == 0f) f else cameraFpsEma * 0.90f + f * 0.10f
+                    cameraFpsEma = if (cameraFpsEma == 0f) f else 0.90f * cameraFpsEma + 0.10f * f
                 }
             }
             lastCameraTs = ts
@@ -238,8 +228,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             frameSerial++
             overlay.sourceAspectRatio = gray.width.toFloat() / gray.height.toFloat()
 
-            pendingReacquire?.let { d ->
-                initFromDetection(gray, d)
+            pendingReacquire?.let {
+                initFromDetection(gray, it)
                 pendingReacquire = null
             }
 
@@ -250,44 +240,77 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 pendingTap = null
             }
 
-            var trackerConf = 0f
-            var jitter = 0f
+            var gotMeasurement = false
+            var target = motionTracker.locked
 
-            if (tracking) {
-                val dt = if (lastFrameTs == 0L) 1.0 / 60.0
-                else ((gray.timestampNs - lastFrameTs) / 1e9).coerceIn(1.0 / 180.0, 0.10)
-                lastFrameTs = gray.timestampNs
+            if (target != null) {
+                // Alternate the two expensive measurements: flow one frame, NCC the next.
+                // This matches the old PHONE AIM fast path and keeps 60 Hz headroom.
+                val runFlow = (frameSerial and 1L) == 0L
+                val flow = if (runFlow) sparseFlow.track(gray, target) else null
 
-                val out = nativeTracker.nativeProcess(gray.pixels, gray.width, gray.height, dt)
-                val state = out[0].toInt()
-                trackerConf = out[5]
-                jitter = out[6]
-                val misses = out[8].toInt()
-
-                val det = nativeResultToDetection(out, gray.width, gray.height)
-                lastTrackDetection = det
-                overlay.locked = det
-
-                stateLabel = when {
-                    state == 2 -> "REACQUIRE"
-                    trackerConf >= 0.60f && misses == 0 -> "LOCK"
-                    else -> "PREDICT"
+                if (runFlow) {
+                    currentFlowScore = flow?.let {
+                        (0.68f * it.targetConsistency + 0.32f * it.globalConsistency).coerceIn(0f, 1f)
+                    } ?: currentFlowScore * 0.94f
                 }
 
-                if (misses > 18) {
-                    resetTrackerInternal(clearDetections = false)
+                if (flow != null &&
+                    flow.targetConsistency >= 0.40f &&
+                    abs(flow.dxNorm) + abs(flow.dyNorm) < 0.18f
+                ) {
+                    val shifted = shiftDetection(
+                        target,
+                        flow.dxNorm,
+                        flow.dyNorm,
+                        (0.48f + 0.48f * flow.targetConsistency).coerceIn(0.48f, 0.95f),
+                        predicted = flow.targetConsistency < 0.62f
+                    )
+                    motionTracker.applyVisual(shifted, ts)
+                    gotMeasurement = true
                 }
 
-                trackCounter++
-                val nowTrack = SystemClock.elapsedRealtime()
-                if (nowTrack - trackWindowStart >= 1000L) {
-                    trackFps = trackCounter * 1000f / (nowTrack - trackWindowStart).coerceAtLeast(1L)
-                    trackCounter = 0
-                    trackWindowStart = nowTrack
+                target = motionTracker.locked ?: target
+                val runTemplate = !runFlow || flow == null || flow.targetConsistency < 0.56f
+                val visual = if (runTemplate) visualTracker.track(gray, target) else null
+                if (visual != null) {
+                    currentVisualScore = visual.score
+                    if (visual.score >= 0.50f) {
+                        motionTracker.applyVisual(visual.detection, ts)
+                        gotMeasurement = true
+                    }
+                }
+
+                if (!gotMeasurement) motionTracker.miss(ts)
+
+                val current = motionTracker.locked
+                if (current == null) {
+                    visualTracker.clear()
+                    sparseFlow.clear()
+                    stateLabel = "SEARCH"
+                    overlay.locked = null
+                } else {
+                    val projected = motionTracker.predict(ts) ?: current
+                    overlay.locked = projected
+                    updateJitter(projected, gray.width, gray.height)
+
+                    stateLabel = when {
+                        visualTracker.state == SmartVisualTracker.State.REACQUIRE || motionTracker.misses >= 3 -> "REACQUIRE"
+                        projected.predicted || visualTracker.state == SmartVisualTracker.State.PREDICT -> "PREDICT"
+                        else -> "LOCK"
+                    }
+
+                    trackCounter++
+                    val nowTrack = SystemClock.elapsedRealtime()
+                    if (nowTrack - trackWindowStart >= 1000L) {
+                        trackFps = trackCounter * 1000f /
+                            (nowTrack - trackWindowStart).coerceAtLeast(1L)
+                        trackCounter = 0
+                        trackWindowStart = nowTrack
+                    }
                 }
             } else {
                 stateLabel = "SEARCH"
-                lastFrameTs = gray.timestampNs
             }
 
             maybeRunYolo(image)
@@ -295,12 +318,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val now = SystemClock.elapsedRealtime()
             if (now - lastUiMs >= 65L) {
                 lastUiMs = now
+                val fused = (
+                    0.58f * currentVisualScore +
+                        0.32f * currentFlowScore +
+                        0.10f * if (stateLabel == "LOCK") 1f else 0.35f
+                    ).coerceIn(0f, 1f)
                 overlay.stateLabel = stateLabel
                 overlay.cameraFps = cameraFpsEma
                 overlay.trackFps = trackFps
-                overlay.trackConf = trackerConf
-                overlay.jitterPx = jitter
-                overlay.detections = if (tracking && stateLabel == "LOCK") emptyList() else latestDetections
+                overlay.trackConf = fused
+                overlay.jitterPx = jitterEma
+                overlay.detections = if (stateLabel == "LOCK") emptyList() else latestDetections
                 overlay.invalidate()
             }
         } finally {
@@ -310,13 +338,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     private fun maybeRunYolo(image: ImageProxy) {
         val now = SystemClock.elapsedRealtime()
+        val hasLock = motionTracker.locked != null
         val interval = when {
             manualSearchRequested -> 0L
-            !tracking -> 950L
-            stateLabel == "REACQUIRE" -> 300L
-            stateLabel == "PREDICT" -> 520L
+            !hasLock -> 900L
+            stateLabel == "REACQUIRE" -> 360L
+            stateLabel == "PREDICT" -> 650L
             else -> Long.MAX_VALUE
         }
+
         if (interval == Long.MAX_VALUE || now - lastYoloRunMs < interval) {
             if (stateLabel == "LOCK") {
                 overlay.yoloMode = "IDLE"
@@ -341,7 +371,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         lastYoloRunMs = now
         manualSearchRequested = false
-        overlay.yoloMode = if (tracking) "REACQUIRE" else "SEARCH"
+        overlay.yoloMode = if (hasLock) "REACQUIRE" else "SEARCH"
 
         detectorExecutor.execute {
             try {
@@ -351,26 +381,23 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.yoloBackend = net.backendName
                 overlay.yoloMs = net.lastInferenceMs
 
-                if (tracking && stateLabel != "LOCK" && found.isNotEmpty()) {
-                    val p = lastTrackDetection
-                    val best = if (p != null) {
-                        found.minByOrNull { d ->
-                            hypot((d.cx - p.cx).toDouble(), (d.cy - p.cy).toDouble())
-                        }
-                    } else found.maxByOrNull { it.confidence }
-
+                val base = motionTracker.locked
+                if (base != null && stateLabel != "LOCK" && found.isNotEmpty()) {
+                    val best = found.minByOrNull { d ->
+                        val dist = hypot((d.cx - base.cx).toDouble(), (d.cy - base.cy).toDouble())
+                        val size = abs(d.width - base.width) + abs(d.height - base.height)
+                        dist + 0.35 * size
+                    }
                     if (best != null) {
-                        val dist = p?.let {
-                            hypot((best.cx - it.cx).toDouble(), (best.cy - it.cy).toDouble())
-                        } ?: 0.0
-                        if (p == null || dist < 0.32) pendingReacquire = best
+                        val dist = hypot((best.cx - base.cx).toDouble(), (best.cy - base.cy).toDouble())
+                        if (dist < 0.30) pendingReacquire = best
                     }
                 }
 
                 runOnUiThread {
                     overlay.detections = found
-                    overlay.yoloMode = if (tracking && stateLabel == "LOCK") "IDLE" else
-                        if (tracking) "REACQUIRE" else "SEARCH"
+                    overlay.yoloMode = if (motionTracker.locked == null) "SEARCH"
+                        else if (stateLabel == "LOCK") "IDLE" else "REACQUIRE"
                     overlay.invalidate()
                 }
             } finally {
@@ -385,7 +412,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             .filter { nx in it.x1..it.x2 && ny in it.y1..it.y2 }
             .maxByOrNull { it.confidence }
         if (inside != null) return inside
-
         return latestDetections.minByOrNull {
             hypot((it.cx - nx).toDouble(), (it.cy - ny).toDouble())
         }?.takeIf {
@@ -393,88 +419,100 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         }
     }
 
-    private fun initFromDetection(gray: FastLumaExtractor.GrayFrame, d: Detection) {
-        val cx = d.cx * gray.width
-        val cy = d.cy * gray.height
-        // Track the object's visual core, not the whole detector box.
-        // This rejects background and makes the visible LOCK box much tighter.
-        val bw = (d.width * gray.width * 0.68f).coerceIn(14f, gray.width * 0.28f)
-        val bh = (d.height * gray.height * 0.68f).coerceIn(14f, gray.height * 0.34f)
-        tracking = nativeTracker.nativeInit(gray.pixels, gray.width, gray.height, cx, cy, bw, bh)
-        if (tracking) {
-            lastTrackDetection = d
+    private fun initFromDetection(gray: FastLumaExtractor.GrayFrame, d0: Detection) {
+        // Use a tighter core for the lock so the box doesn't swallow background.
+        val w = (d0.width * 0.72f).coerceIn(0.018f, 0.28f)
+        val h = (d0.height * 0.72f).coerceIn(0.018f, 0.34f)
+        val d = boxAt(d0.cx, d0.cy, w, h, d0.confidence, d0.classId, d0.label)
+
+        if (visualTracker.refreshTemplate(gray, d)) {
+            motionTracker.forceLock(d, gray.timestampNs)
+            sparseFlow.seed(gray, d)
             overlay.locked = d
             stateLabel = "LOCK"
+            currentVisualScore = 1f
+            currentFlowScore = 0.7f
             latestDetections = emptyList()
-            lastFrameTs = gray.timestampNs
         }
     }
 
     private fun initAtTap(gray: FastLumaExtractor.GrayFrame, nx: Float, ny: Float) {
-        // Small manual ROI: about 8% of the short side instead of 18%.
-        val box = (min(gray.width, gray.height) * 0.08f).coerceIn(14f, 26f)
-        tracking = nativeTracker.nativeInit(
-            gray.pixels,
-            gray.width,
-            gray.height,
-            nx * gray.width,
-            ny * gray.height,
-            box * 1.12f,
-            box
-        )
-        if (tracking) {
-            val w = box * 1.12f / gray.width
-            val h = box / gray.height
-            val d = Detection(
-                (nx - w * 0.5f).coerceIn(0f, 1f),
-                (ny - h * 0.5f).coerceIn(0f, 1f),
-                (nx + w * 0.5f).coerceIn(0f, 1f),
-                (ny + h * 0.5f).coerceIn(0f, 1f),
-                0.6f, -1, "SMART"
-            )
-            lastTrackDetection = d
-            overlay.locked = d
-            stateLabel = "LOCK"
-            lastFrameTs = gray.timestampNs
-        }
+        val d = visualTracker.seedAt(gray, nx, ny) ?: return
+        motionTracker.forceLock(d, gray.timestampNs)
+        sparseFlow.seed(gray, d)
+        overlay.locked = d
+        stateLabel = "LOCK"
+        currentVisualScore = 1f
+        currentFlowScore = 0.7f
     }
 
-    private fun nativeResultToDetection(out: FloatArray, w: Int, h: Int): Detection {
-        val cx = out[1] / w
-        val cy = out[2] / h
-        val bw = out[3] / w
-        val bh = out[4] / h
-        return Detection(
-            (cx - bw * 0.5f).coerceIn(0f, 1f),
-            (cy - bh * 0.5f).coerceIn(0f, 1f),
-            (cx + bw * 0.5f).coerceIn(0f, 1f),
-            (cy + bh * 0.5f).coerceIn(0f, 1f),
-            out[5].coerceIn(0f, 1f),
-            -1,
-            "LOCK",
-            predicted = out[0].toInt() == 2 || out[8] > 0f
+    private fun shiftDetection(
+        d: Detection,
+        dx: Float,
+        dy: Float,
+        confidence: Float,
+        predicted: Boolean
+    ): Detection {
+        return boxAt(
+            (d.cx + dx).coerceIn(0f, 1f),
+            (d.cy + dy).coerceIn(0f, 1f),
+            d.width, d.height,
+            confidence, d.classId, d.label,
+            predicted
         )
+    }
+
+    private fun boxAt(
+        cx: Float, cy: Float, w: Float, h: Float,
+        confidence: Float, classId: Int, label: String,
+        predicted: Boolean = false
+    ): Detection {
+        var x1 = cx - w * 0.5f
+        var x2 = cx + w * 0.5f
+        var y1 = cy - h * 0.5f
+        var y2 = cy + h * 0.5f
+        if (x1 < 0f) { x2 -= x1; x1 = 0f }
+        if (x2 > 1f) { x1 -= x2 - 1f; x2 = 1f }
+        if (y1 < 0f) { y2 -= y1; y1 = 0f }
+        if (y2 > 1f) { y1 -= y2 - 1f; y2 = 1f }
+        return Detection(
+            x1.coerceIn(0f,1f), y1.coerceIn(0f,1f),
+            x2.coerceIn(0f,1f), y2.coerceIn(0f,1f),
+            confidence, classId, label, predicted
+        )
+    }
+
+    private fun updateJitter(d: Detection, w: Int, h: Int) {
+        val x = d.cx * w
+        val y = d.cy * h
+        if (!lastCenterX.isNaN() && !lastCenterY.isNaN()) {
+            val delta = hypot((x - lastCenterX).toDouble(), (y - lastCenterY).toDouble()).toFloat()
+            jitterEma = 0.90f * jitterEma + 0.10f * delta
+        }
+        lastCenterX = x
+        lastCenterY = y
     }
 
     private fun resetTracker() {
-        cameraExecutor.execute { resetTrackerInternal(clearDetections = true) }
-    }
-
-    private fun resetTrackerInternal(clearDetections: Boolean) {
-        nativeTracker.nativeReset()
-        tracking = false
-        pendingTap = null
-        pendingReacquire = null
-        lastTrackDetection = null
-        lastFrameTs = 0L
-        stateLabel = "SEARCH"
-        overlay.locked = null
-        if (clearDetections) latestDetections = emptyList()
-        runOnUiThread {
-            overlay.stateLabel = "SEARCH"
-            overlay.locked = null
-            if (clearDetections) overlay.detections = emptyList()
-            overlay.invalidate()
+        cameraExecutor.execute {
+            motionTracker.clear()
+            visualTracker.clear()
+            sparseFlow.clear()
+            pendingTap = null
+            pendingReacquire = null
+            latestDetections = emptyList()
+            currentFlowScore = 0f
+            currentVisualScore = 0f
+            jitterEma = 0f
+            lastCenterX = Float.NaN
+            lastCenterY = Float.NaN
+            stateLabel = "SEARCH"
+            runOnUiThread {
+                overlay.locked = null
+                overlay.detections = emptyList()
+                overlay.stateLabel = "SEARCH"
+                overlay.invalidate()
+            }
         }
     }
 
@@ -531,8 +569,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val x = event.values[0]
                 val y = event.values[1]
                 val z = event.values[2]
-                gLoad = sqrt(x * x + y * y + z * z) / 9.80665f
-                overlay.gLoad = gLoad
+                overlay.gLoad = sqrt(x*x + y*y + z*z) / 9.80665f
             }
         }
     }
@@ -547,7 +584,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDestroy() {
-        runCatching { nativeTracker.nativeReset() }
         runCatching { detector?.close() }
         cameraExecutor.shutdown()
         detectorExecutor.shutdown()
