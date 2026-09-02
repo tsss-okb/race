@@ -42,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.7 Strong Hold Adaptive Hold:
+ * Fusion v3.8 Strong Hold Native Flow:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var detectorExecutor: ExecutorService
 
     private val luma = FastLumaExtractor(maxOutputWidth = 640, ringSize = 4)
-    private val sparseFlow = SparseFlowGmcTracker()
+    private val sparseFlow = NativeSparseFlowGmcTracker()
     private val visualTracker = SmartVisualTracker()
     private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
 
@@ -270,7 +270,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             }
 
-            overlay.yoloMode = if (request60) "IDLE / CAM60 / STRONG640" else "IDLE / MAX / STRONG640"
+            overlay.yoloMode = if (request60)
+                "IDLE / CAM60 / NATIVE-FLOW"
+            else
+                "IDLE / MAX / NATIVE-FLOW"
             overlay.invalidate()
             true
         }.getOrElse { false }
@@ -312,10 +315,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var target = motionTracker.locked
 
             if (target != null) {
-                // Flow is the cheap high-rate measurement. NCC is adaptive:
-                // normal lock -> every other frame; strong lock -> about 10 Hz.
-                val runFlow = (frameSerial and 1L) == 0L
-                val flow = if (runFlow) sparseFlow.track(gray, target) else null
+                // v3.8: native sparse flow/GMC runs on every camera frame.
+                // NCC cadence stays equivalent to v3.7.
+                val runFlow = true
+                val flow = sparseFlow.track(gray, target)
 
                 if (runFlow) {
                     currentFlowScore = flow?.let {
@@ -358,8 +361,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                 val runTemplate =
                     softRescue ||
-                    (!runFlow && (!strongHold || frameSerial % 6L == 1L)) ||
-                    flowWeakThisFrame
+                    flowWeakThisFrame ||
+                    if (strongHold) {
+                        frameSerial % 6L == 1L
+                    } else {
+                        frameSerial % 2L == 1L
+                    }
 
                 val visualBase = flowMeasurement ?: target
                 val visual =
