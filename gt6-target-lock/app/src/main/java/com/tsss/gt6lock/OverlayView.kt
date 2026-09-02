@@ -44,6 +44,7 @@ class OverlayView(context: Context) : View(context) {
     var gyroRDeg = 0f
     var gLoad = 1f
     var avionicsHudEnabled = true
+    var bodyCalibrated = false
 
     var cameraFps = 0f
     var cameraLabel = "CAMERA"
@@ -54,6 +55,7 @@ class OverlayView(context: Context) : View(context) {
     var onCameraCycle: (() -> Unit)? = null
     var onFpsToggle: (() -> Unit)? = null
     var onAutoLevelToggle: (() -> Unit)? = null
+    var onCalibrate: (() -> Unit)? = null
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -86,9 +88,10 @@ class OverlayView(context: Context) : View(context) {
         color = 0xCCd8e1e5.toInt()
     }
 
-    private fun cameraButton(): RectF = RectF(width - 440f, 16f, width - 300f, 72f)
-    private fun hudButton(): RectF = RectF(width - 290f, 16f, width - 150f, 72f)
-    private fun fpsButton(): RectF = RectF(width - 140f, 16f, width - 16f, 72f)
+    private fun cameraButton(): RectF = RectF(width - 560f, 16f, width - 430f, 72f)
+    private fun calButton(): RectF = RectF(width - 420f, 16f, width - 310f, 72f)
+    private fun hudButton(): RectF = RectF(width - 300f, 16f, width - 160f, 72f)
+    private fun fpsButton(): RectF = RectF(width - 150f, 16f, width - 16f, 72f)
 
     private fun rotatedSize(): Pair<Float, Float> =
         if (rotationDegrees == 90 || rotationDegrees == 270) imageH.toFloat() to imageW.toFloat()
@@ -239,14 +242,16 @@ class OverlayView(context: Context) : View(context) {
         )
 
         c.drawRoundRect(cameraButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(calButton(), 12f, 12f, if (bodyCalibrated) activeButtonPaint else buttonPaint)
         c.drawRoundRect(hudButton(), 12f, 12f, if (avionicsHudEnabled) activeButtonPaint else buttonPaint)
         c.drawRoundRect(fpsButton(), 12f, 12f, buttonPaint)
 
         textPaint.color = 0xffe7eef1.toInt()
         textPaint.textSize = 18f
-        c.drawText("CAMERA", width - 420f, 51f, textPaint)
-        c.drawText(if (avionicsHudEnabled) "HUD✓" else "HUD", width - 255f, 51f, textPaint)
-        c.drawText(fpsModeLabel + " FPS", width - 126f, 51f, textPaint)
+        c.drawText("CAMERA", width - 545f, 51f, textPaint)
+        c.drawText(if (bodyCalibrated) "CAL✓" else "CAL", width - 396f, 51f, textPaint)
+        c.drawText(if (avionicsHudEnabled) "HUD✓" else "HUD", width - 268f, 51f, textPaint)
+        c.drawText(fpsModeLabel + " FPS", width - 136f, 51f, textPaint)
 
         val labelW = min(width - 32f, 1220f)
         c.drawRoundRect(RectF(16f, height - 67f, 16f + labelW, height - 14f), 12f, 12f, shadePaint)
@@ -260,6 +265,10 @@ class OverlayView(context: Context) : View(context) {
         if (e.action == MotionEvent.ACTION_UP) {
             if (cameraButton().contains(e.x, e.y)) {
                 onCameraCycle?.invoke()
+                return true
+            }
+            if (calButton().contains(e.x, e.y)) {
+                onCalibrate?.invoke()
                 return true
             }
             if (hudButton().contains(e.x, e.y)) {
