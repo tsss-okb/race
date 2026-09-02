@@ -35,9 +35,17 @@ class MainActivity : Activity(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
-    private var autoLevel = true
+    private var gyroSensor: Sensor? = null
+    private var accelSensor: Sensor? = null
+    private var avionicsHud = true
+
     private var sensorRollDeg = 0f
-    private var filteredRollDeg = 0f
+    private var sensorPitchDeg = 0f
+    private var sensorHeadingDeg = 0f
+    private var gyroPDeg = 0f
+    private var gyroQDeg = 0f
+    private var gyroRDeg = 0f
+    private var gLoad = 1f
 
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
@@ -59,6 +67,9 @@ class MainActivity : Activity(), SensorEventListener {
     @Volatile private var pendingTap: Pair<Float, Float>? = null
     private var lastTs = 0L
     private var fpsEma = 0f
+    private var lastCameraTs = 0L
+    private var cameraFpsEma = 0f
+    private var cameraFrameCounter = 0
     private val requestCode = 42
     private var lastTapMs = 0L
 
@@ -74,6 +85,8 @@ class MainActivity : Activity(), SensorEventListener {
         rotationSensor =
             sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewHost = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -115,8 +128,9 @@ class MainActivity : Activity(), SensorEventListener {
 
         overlay.onAutoLevelToggle = {
             runOnUiThread {
-                autoLevel = !autoLevel
-                applySensorLevel()
+                avionicsHud = !avionicsHud
+                overlay.avionicsHudEnabled = avionicsHud
+                overlay.invalidate()
             }
         }
 
@@ -137,6 +151,12 @@ class MainActivity : Activity(), SensorEventListener {
         rotationSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
+        gyroSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+        accelSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
     }
 
     override fun onPause() {
@@ -145,55 +165,66 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR &&
-            event.sensor.type != Sensor.TYPE_GAME_ROTATION_VECTOR
-        ) return
+        when (event.sensor.type) {
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
+                val r = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(r, event.values)
 
-        val r = FloatArray(9)
-        SensorManager.getRotationMatrixFromVector(r, event.values)
+                val remapped = FloatArray(9)
+                val rot = display?.rotation ?: Surface.ROTATION_0
+                when (rot) {
+                    Surface.ROTATION_90 ->
+                        SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remapped)
+                    Surface.ROTATION_270 ->
+                        SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X, remapped)
+                    Surface.ROTATION_180 ->
+                        SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, remapped)
+                    else -> System.arraycopy(r, 0, remapped, 0, 9)
+                }
 
-        val remapped = FloatArray(9)
-        val rot = display?.rotation ?: Surface.ROTATION_0
-        when (rot) {
-            Surface.ROTATION_90 ->
-                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remapped)
-            Surface.ROTATION_270 ->
-                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X, remapped)
-            Surface.ROTATION_180 ->
-                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, remapped)
-            else -> System.arraycopy(r, 0, remapped, 0, 9)
+                val orientation = FloatArray(3)
+                SensorManager.getOrientation(remapped, orientation)
+                sensorHeadingDeg = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
+                sensorPitchDeg = Math.toDegrees(orientation[1].toDouble()).toFloat()
+                sensorRollDeg = Math.toDegrees(orientation[2].toDouble()).toFloat()
+            }
+
+            Sensor.TYPE_GYROSCOPE -> {
+                val k = (180.0 / Math.PI).toFloat()
+                gyroPDeg = event.values[0] * k
+                gyroQDeg = event.values[1] * k
+                gyroRDeg = event.values[2] * k
+            }
+
+            Sensor.TYPE_ACCELEROMETER -> {
+                val ax = event.values[0]
+                val ay = event.values[1]
+                val az = event.values[2]
+                gLoad = (kotlin.math.sqrt(ax * ax + ay * ay + az * az) / 9.80665f)
+            }
         }
 
-        val orientation = FloatArray(3)
-        SensorManager.getOrientation(remapped, orientation)
-        sensorRollDeg = Math.toDegrees(orientation[2].toDouble()).toFloat()
-
-        filteredRollDeg = if (abs(filteredRollDeg) < 0.01f) {
-            sensorRollDeg
-        } else {
-            filteredRollDeg * 0.90f + sensorRollDeg * 0.10f
-        }
-
-        runOnUiThread { applySensorLevel() }
+        overlay.sensorRollDegrees = sensorRollDeg
+        overlay.sensorPitchDegrees = sensorPitchDeg
+        overlay.sensorHeadingDegrees = sensorHeadingDeg
+        overlay.gyroPDeg = gyroPDeg
+        overlay.gyroQDeg = gyroQDeg
+        overlay.gyroRDeg = gyroRDeg
+        overlay.gLoad = gLoad
+        overlay.avionicsHudEnabled = avionicsHud
+        overlay.invalidate()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    // IMU is avionics data only. It must never rotate/mirror the camera frame.
     private fun applySensorLevel() {
-        val correction = if (autoLevel) (-filteredRollDeg).coerceIn(-50f, 50f) else 0f
-
-        texture.pivotX = texture.width / 2f
-        texture.pivotY = texture.height / 2f
-        texture.rotation = correction
-
-        val extra = if (autoLevel) (1f + min(abs(correction) / 50f * 0.36f, 0.36f)) else 1f
-        texture.scaleX = extra
-        texture.scaleY = extra
-
-        overlay.levelCorrectionDegrees = correction
-        overlay.levelScale = extra
-        overlay.sensorRollDegrees = filteredRollDeg
-        overlay.autoLevelEnabled = autoLevel
+        texture.rotation = 0f
+        texture.scaleX = 1f
+        texture.scaleY = 1f
+        overlay.levelCorrectionDegrees = 0f
+        overlay.levelScale = 1f
+        overlay.avionicsHudEnabled = avionicsHud
         overlay.invalidate()
     }
 
@@ -288,6 +319,9 @@ class MainActivity : Activity(), SensorEventListener {
         pendingTap = null
         lastTs = 0L
         fpsEma = 0f
+        lastCameraTs = 0L
+        cameraFpsEma = 0f
+        cameraFrameCounter = 0
         closeCamera()
         cameraHandler.postDelayed({ openCamera() }, 220)
     }
@@ -538,9 +572,7 @@ class MainActivity : Activity(), SensorEventListener {
         if (want60) {
             val sixty = rs.filter { it.upper >= 60 }
             if (sixty.isNotEmpty()) {
-                return sixty.minByOrNull {
-                    abs(it.upper - 60) * 10 + abs(it.lower - 60)
-                }
+                return sixty.maxByOrNull { it.lower * 1000 - abs(it.upper - 60) }
             }
         }
 
@@ -576,6 +608,22 @@ class MainActivity : Activity(), SensorEventListener {
         }
 
         val ts = img.timestamp
+        if (lastCameraTs != 0L) {
+            val dtCam = (ts - lastCameraTs) / 1e9
+            if (dtCam > 0.001 && dtCam < 0.2) {
+                val inst = (1.0 / dtCam).toFloat()
+                cameraFpsEma = if (cameraFpsEma == 0f) inst else 0.90f * cameraFpsEma + 0.10f * inst
+            }
+        }
+        lastCameraTs = ts
+        cameraFrameCounter++
+        if (cameraFrameCounter % 4 == 0) {
+            overlay.post {
+                overlay.cameraFps = cameraFpsEma
+                overlay.invalidate()
+            }
+        }
+
         trackerHandler.removeCallbacksAndMessages(null)
         trackerHandler.post { runTracker(y, w, h, ts) }
     }
