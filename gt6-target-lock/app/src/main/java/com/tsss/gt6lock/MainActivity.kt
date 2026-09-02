@@ -138,6 +138,12 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
 
+        val axisPrefs = getSharedPreferences("camera_axes", Context.MODE_PRIVATE)
+        overlay.axisMode = axisPrefs.getInt("axis_mode", 1)
+        overlay.onAxisModeChanged = { mode ->
+            axisPrefs.edit().putInt("axis_mode", mode).apply()
+        }
+
         overlay.onCalibrate = {
             runOnUiThread { calibrateBodyFrame() }
         }
@@ -468,7 +474,7 @@ class MainActivity : Activity(), SensorEventListener {
             previewSize.width + "×" + previewSize.height +
             "  TRACK " + analysisSize.width + "×" + analysisSize.height +
             "  • AE MAX " + maxFps +
-            (if (hs) "  HS " + highMax else "  HS —") + "  • AXES=UNIFIED"
+            (if (hs) "  HS " + highMax else "  HS —") + "  • AXES=GT6_XY_FIX"
         overlay.invalidate()
 
         reader = ImageReader.newInstance(
