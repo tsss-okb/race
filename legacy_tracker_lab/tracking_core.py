@@ -143,3 +143,118 @@ def nearest_same_class(detections, predicted_bbox, class_id, gate_px):
             best = d
 
     return best
+
+
+class MotionPredictor2D:
+    """Small motion prior for passive visual reacquisition.
+
+    Keeps only the last detector-confirmed center, bbox size and an EMA velocity.
+    It is intentionally simpler than a full second tracker.
+    """
+
+    def __init__(self, velocity_alpha=0.35, decay=0.985):
+        self.velocity_alpha = float(velocity_alpha)
+        self.decay = float(decay)
+        self.center = None
+        self.velocity = np.zeros(2, dtype=np.float32)
+        self.bbox = None
+        self.frame_index = 0
+
+    @property
+    def active(self):
+        return self.center is not None and self.bbox is not None
+
+    def reset(self, bbox=None, frame_index=0):
+        self.center = None
+        self.velocity[:] = 0
+        self.bbox = None
+        self.frame_index = int(frame_index)
+        if bbox is not None:
+            self.initialize(bbox, frame_index)
+
+    def initialize(self, bbox, frame_index=0):
+        self.bbox = tuple(float(v) for v in bbox)
+        self.center = np.asarray(bbox_center(self.bbox), dtype=np.float32)
+        self.velocity[:] = 0
+        self.frame_index = int(frame_index)
+
+    def update(self, bbox, frame_index):
+        bbox = tuple(float(v) for v in bbox)
+        c = np.asarray(bbox_center(bbox), dtype=np.float32)
+        fi = int(frame_index)
+
+        if self.center is None:
+            self.initialize(bbox, fi)
+            return
+
+        dt = max(1, fi - self.frame_index)
+        measured_v = (c - self.center) / float(dt)
+        a = self.velocity_alpha
+        self.velocity = (1.0 - a) * self.velocity + a * measured_v
+        self.center = c
+        self.bbox = bbox
+        self.frame_index = fi
+
+    def predict_center(self, frame_index):
+        if self.center is None:
+            return None
+        dt = max(0, int(frame_index) - self.frame_index)
+        decay = self.decay ** max(0, dt - 1)
+        return self.center + self.velocity * float(dt) * decay
+
+    def predict_bbox(self, frame_index):
+        pc = self.predict_center(frame_index)
+        if pc is None or self.bbox is None:
+            return None
+        _, _, w, h = self.bbox
+        return (float(pc[0] - w / 2), float(pc[1] - h / 2), float(w), float(h))
+
+
+def nearest_same_class_to_point(
+    detections,
+    predicted_center,
+    class_id,
+    gate_px,
+    reference_bbox=None,
+    max_scale_ratio=3.0,
+):
+    """Associate a detector result with a predicted center and previous target size."""
+    if predicted_center is None:
+        return None
+
+    px, py = float(predicted_center[0]), float(predicted_center[1])
+    best = None
+    best_score = float("inf")
+
+    ref_w = ref_h = None
+    if reference_bbox is not None:
+        _, _, ref_w, ref_h = reference_bbox
+        ref_w = max(1.0, float(ref_w))
+        ref_h = max(1.0, float(ref_h))
+
+    for d in detections:
+        if class_id is not None and d["class_id"] != class_id:
+            continue
+
+        x, y, w, h = d["bbox"]
+        w, h = max(1.0, float(w)), max(1.0, float(h))
+
+        if ref_w is not None:
+            ratio = max(w / ref_w, ref_w / w, h / ref_h, ref_h / h)
+            if ratio > max_scale_ratio:
+                continue
+        else:
+            ratio = 1.0
+
+        cx, cy = bbox_center(d["bbox"])
+        dist = math.hypot(cx - px, cy - py)
+        if dist > gate_px:
+            continue
+
+        # Position dominates. Confidence and scale consistency break ties.
+        score = dist + 5.0 * abs(math.log(max(1e-6, ratio))) - 4.0 * d["confidence"]
+        if score < best_score:
+            best_score = score
+            best = d
+
+    return best
