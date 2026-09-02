@@ -9,9 +9,11 @@ from ultralytics import YOLO
 
 from tracking_core import (
     KalmanBBoxTracker,
+    MotionPredictor2D,
     bbox_center,
     create_opencv_tracker,
     nearest_same_class,
+    nearest_same_class_to_point,
 )
 
 
@@ -26,13 +28,13 @@ def parse_args():
     p = argparse.ArgumentParser(description="Legacy passive YOLO tracker lab")
     p.add_argument("--source", default="0", help="USB camera index or video path")
     p.add_argument("--model", default="yolo26n.pt")
-    p.add_argument("--mode", choices=["kalman", "csrt", "kcf", "mosse"], default="kalman")
+    p.add_argument("--mode", choices=["kcf-hybrid", "kalman", "csrt", "kcf", "mosse"], default="kcf-hybrid")
     p.add_argument("--class-id", type=int, default=None)
     p.add_argument("--conf-search", type=float, default=0.20)
     p.add_argument("--conf-track", type=float, default=0.15)
     p.add_argument("--iou", type=float, default=0.40)
     p.add_argument("--imgsz", type=int, default=640)
-    p.add_argument("--verify-every", type=int, default=30)
+    p.add_argument("--verify-every", type=int, default=3)
     p.add_argument("--metrics", default="legacy_metrics.csv")
     p.add_argument("--record", default="")
     p.add_argument("--headless", action="store_true")
@@ -98,6 +100,10 @@ class App:
         self.reacquires = 0
         self.lost_frames = 0
 
+        self.motion = MotionPredictor2D(velocity_alpha=0.35, decay=0.985)
+        self.hybrid_state = "SEARCH"
+        self.hybrid_drift_rejects = 0
+
         self.last_detections = []
         self.last_infer_ms = 0.0
         self.detector_fps = 0.0
@@ -141,6 +147,9 @@ class App:
         self.track_frame = 0
         self.reacquires = 0
         self.lost_frames = 0
+        self.motion.reset()
+        self.hybrid_state = "SEARCH"
+        self.hybrid_drift_rejects = 0
         self.prev_center = None
 
     def switch_mode(self, mode):
@@ -177,14 +186,20 @@ class App:
         if self.mode == "kalman":
             self.kalman.init(bbox)
         else:
-            self.cv_tracker = create_opencv_tracker(self.mode)
-            ok = self.cv_tracker.init(frame, tuple(float(v) for v in bbox))
+            tracker_name = "kcf" if self.mode == "kcf-hybrid" else self.mode
+            self.cv_tracker = create_opencv_tracker(tracker_name)
+            init_bbox = tuple(int(round(v)) for v in bbox)
+            ok = self.cv_tracker.init(frame, init_bbox)
             if ok is False:
                 self.cv_tracker = None
                 self.selected = False
                 return
-            self.cv_bbox = bbox
+            self.cv_bbox = tuple(float(v) for v in init_bbox)
             self.track_frame = 0
+            if self.mode == "kcf-hybrid":
+                self.motion.initialize(self.cv_bbox, self.frame_idx)
+                self.hybrid_state = "LOCK"
+                self.lost_frames = 0
 
     def kalman_step(self, frame):
         detections, infer_ms = yolo_detect(
@@ -256,8 +271,9 @@ class App:
                 )
                 if match is not None:
                     self.cv_tracker = create_opencv_tracker(self.mode)
-                    self.cv_tracker.init(frame, tuple(float(v) for v in match["bbox"]))
-                    self.cv_bbox = match["bbox"]
+                    init_bbox = tuple(int(round(v)) for v in match["bbox"])
+                    self.cv_tracker.init(frame, init_bbox)
+                    self.cv_bbox = tuple(float(v) for v in init_bbox)
                     self.reacquires += 1
 
         if self.cv_tracker is not None:
@@ -270,6 +286,153 @@ class App:
                 self.lost_frames += 1
                 self.cv_tracker = None
                 self.cv_bbox = None
+
+    def _hybrid_detect(self, frame, tracking=True):
+        detections, infer_ms = yolo_detect(
+            self.model,
+            frame,
+            self.args.conf_track if tracking else self.args.conf_search,
+            self.args.iou,
+            self.args.imgsz,
+            self.selected_class if tracking else self.args.class_id,
+        )
+        self.update_detector_stats(infer_ms)
+        self.last_detections = detections
+        return detections
+
+    def _hybrid_match(self, detections, gate_px):
+        predicted = self.motion.predict_center(self.frame_idx)
+        return nearest_same_class_to_point(
+            detections,
+            predicted,
+            self.selected_class,
+            gate_px,
+            reference_bbox=self.motion.bbox,
+            max_scale_ratio=3.0,
+        )
+
+    def _hybrid_reinitialize(self, frame, det, reacquire=False):
+        bbox = tuple(int(round(v)) for v in det["bbox"])
+        self.cv_tracker = create_opencv_tracker("kcf")
+        ok = self.cv_tracker.init(frame, bbox)
+        if ok is False:
+            return False
+
+        self.cv_bbox = tuple(float(v) for v in bbox)
+        self.motion.update(det["bbox"], self.frame_idx)
+        self.hybrid_state = "LOCK"
+        self.lost_frames = 0
+        if reacquire:
+            self.reacquires += 1
+        return True
+
+    def kcf_hybrid_step(self, frame):
+        # SEARCH: run YOLO until a box is selected.
+        if not self.selected:
+            detections = self._hybrid_detect(frame, tracking=False)
+            clicked = self.pick_clicked_detection()
+            if clicked is None and self.args.auto_select and detections:
+                clicked = max(detections, key=lambda d: d["confidence"])
+            if clicked is not None:
+                self.start_from_detection(frame, clicked)
+            return
+
+        predicted_center = self.motion.predict_center(self.frame_idx)
+        predicted_bbox = self.motion.predict_bbox(self.frame_idx)
+
+        if self.hybrid_state == "LOCK":
+            ok = False
+            bbox = None
+            if self.cv_tracker is not None:
+                ok, bbox = self.cv_tracker.update(frame)
+
+            self.track_frame += 1
+
+            if ok:
+                self.cv_bbox = tuple(float(v) for v in bbox)
+
+            verify = (
+                not ok
+                or self.track_frame % max(1, self.args.verify_every) == 0
+            )
+
+            if verify:
+                detections = self._hybrid_detect(frame, tracking=True)
+                base_gate = max(20.0, min(self.w, self.h) * 0.12)
+                match = self._hybrid_match(detections, base_gate)
+
+                if match is not None:
+                    old_center = (
+                        np.asarray(bbox_center(self.cv_bbox), dtype=np.float32)
+                        if self.cv_bbox is not None else predicted_center
+                    )
+                    new_center = np.asarray(bbox_center(match["bbox"]), dtype=np.float32)
+                    correction = (
+                        float(np.linalg.norm(old_center - new_center))
+                        if old_center is not None else 0.0
+                    )
+                    self._hybrid_reinitialize(
+                        frame,
+                        match,
+                        reacquire=correction > 3.0,
+                    )
+                    return
+
+                drift_gate = max(22.0, min(self.w, self.h) * 0.14)
+                drift = float("inf")
+                if ok and predicted_center is not None and self.cv_bbox is not None:
+                    drift = float(
+                        np.linalg.norm(
+                            np.asarray(bbox_center(self.cv_bbox), dtype=np.float32)
+                            - predicted_center
+                        )
+                    )
+
+                # Reject a tracker that has failed OR has wandered away from
+                # the detector-confirmed motion prior.
+                if (not ok) or drift > drift_gate:
+                    self.hybrid_state = "COAST"
+                    self.hybrid_drift_rejects += 1
+                    self.lost_frames = 1
+                    self.cv_tracker = None
+                    self.cv_bbox = predicted_bbox
+                    return
+
+            if ok:
+                self.hybrid_state = "LOCK"
+                self.lost_frames = 0
+                return
+
+            self.hybrid_state = "COAST"
+            self.lost_frames = 1
+            self.cv_tracker = None
+            self.cv_bbox = predicted_bbox
+            return
+
+        # COAST / REACQUIRE: YOLO every frame. Search window expands with time.
+        self.hybrid_state = "COAST"
+        self.lost_frames += 1
+        detections = self._hybrid_detect(frame, tracking=True)
+
+        base_gate = max(18.0, min(self.w, self.h) * 0.10)
+        gate = min(
+            max(self.w, self.h) * 0.45,
+            base_gate + 1.5 * self.lost_frames,
+        )
+        match = self._hybrid_match(detections, gate)
+
+        # After a longer loss, allow a broad same-class/size search. The
+        # motion/scale cost still prevents a blind max-confidence jump.
+        if match is None and self.lost_frames >= 6:
+            gate = max(self.w, self.h) * 0.45
+            match = self._hybrid_match(detections, gate)
+
+        if match is not None:
+            if self._hybrid_reinitialize(frame, match, reacquire=True):
+                self.hybrid_state = "REACQUIRED"
+                return
+
+        self.cv_bbox = self.motion.predict_bbox(self.frame_idx)
 
     def update_detector_stats(self, infer_ms):
         now = time.perf_counter()
@@ -309,9 +472,10 @@ class App:
         cv2.rectangle(frame, (8, 8), (760, 126), (0, 20, 0), -1)
         cv2.putText(frame, f"MODE {self.mode.upper()}  YOLO {self.detector_fps:.1f} FPS / {self.last_infer_ms:.0f} ms",
                     (18, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0,255,0), 2)
-        cv2.putText(frame, f"TRACK {tracker_fps:.1f} FPS  class={self.selected_class}  lost={self.lost_frames}  reacq={self.reacquires}",
+        state = self.hybrid_state if self.mode == "kcf-hybrid" else "TRACK"
+        cv2.putText(frame, f"TRACK {tracker_fps:.1f} FPS  {state}  class={self.selected_class}  lost={self.lost_frames}  reacq={self.reacquires}",
                     (18, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0,255,0), 2)
-        cv2.putText(frame, "Click bbox to select | 1 Kalman  2 CSRT  3 KCF  4 MOSSE | R reset | Q exit",
+        cv2.putText(frame, "Click bbox | 0 KCF-HYB  1 Kalman  2 CSRT  3 KCF  4 MOSSE | R reset | Q exit",
                     (18, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0,255,0), 1)
 
     def log(self, tracker_fps):
@@ -347,7 +511,9 @@ class App:
                 tracker_fps = 1.0 / max(1e-6, now - self.last_frame_ts)
                 self.last_frame_ts = now
 
-                if self.mode == "kalman":
+                if self.mode == "kcf-hybrid":
+                    self.kcf_hybrid_step(frame)
+                elif self.mode == "kalman":
                     self.kalman_step(frame)
                 else:
                     self.opencv_step(frame)
@@ -365,6 +531,8 @@ class App:
                         break
                     elif key == ord("r"):
                         self.reset()
+                    elif key == ord("0"):
+                        self.switch_mode("kcf-hybrid")
                     elif key == ord("1"):
                         self.switch_mode("kalman")
                     elif key == ord("2"):
