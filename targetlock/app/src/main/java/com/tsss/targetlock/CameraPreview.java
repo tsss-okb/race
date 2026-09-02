@@ -40,6 +40,7 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
     private long lastTrackCaptureNs=0;
     private long lastTrackDoneNs=0;
     private long lastAppliedYoloSerial=0;
+    private long analysisFrameCounter=0;
 
     public volatile String status="INIT";
     public volatile String lastError="";
@@ -119,6 +120,8 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
         lastSensorTs=0;cameraFps=0;
         trackerBusy.set(false);
         lastTrackCaptureNs=0;lastTrackDoneNs=0;
+        analysisFrameCounter=0;
+        lastAppliedYoloSerial=0;
         try{tracker.clear();}catch(Throwable ignored){}
         if(thread!=null){
             try{thread.quitSafely();}catch(Throwable ignored){}
@@ -499,32 +502,57 @@ public class CameraPreview extends TextureView implements TextureView.SurfaceTex
             out.getPixels(trackerPixels,0,analysisW,0,0,analysisW,analysisH);
 
             try{
-                if(detectEnabled){
-                    // Reference behavior: while a target is selected, run the
-                    // detector again as soon as the previous inference completes.
-                    long yoloIntervalMs=(tracker.locked||tracker.coasting||tracker.reacquiring)
-                            ?0
-                            :80;
+                analysisFrameCounter++;
 
-                    detector.maybeSubmit(trackerPixels,analysisW,analysisH,yoloIntervalMs);
+                if(detectEnabled){
+                    // KCF Hybrid:
+                    // - SEARCH: detector cadence is relaxed.
+                    // - LOCK: verify roughly every third analysis frame.
+                    // - COAST/REACQUIRE: detector runs as soon as it becomes free.
+                    boolean tracking=tracker.locked||tracker.coasting||tracker.reacquiring;
+                    boolean submit;
+                    long intervalMs;
+
+                    if(tracker.coasting||tracker.reacquiring){
+                        submit=autoReacqEnabled;
+                        intervalMs=0;
+                    }else if(tracker.locked){
+                        submit=(analysisFrameCounter%3)==0;
+                        intervalMs=0;
+                    }else{
+                        submit=true;
+                        intervalMs=80;
+                    }
+
+                    if(submit){
+                        detector.maybeSubmit(trackerPixels,analysisW,analysisH,intervalMs);
+                    }
 
                     long serial=detector.resultSerial;
-                    if(autoReacqEnabled&&(tracker.locked||tracker.coasting||tracker.reacquiring)&&
-                            serial!=0&&serial!=lastAppliedYoloSerial){
+                    boolean canAssociate=tracker.locked||
+                            (autoReacqEnabled&&(tracker.coasting||tracker.reacquiring));
+
+                    if(canAssociate&&serial!=0&&serial!=lastAppliedYoloSerial){
                         YoloDetector.Detection best=null;
                         float bestScore=Float.MAX_VALUE;
+
                         for(YoloDetector.Detection d:detector.getDetections()){
                             float s=tracker.associationScore(d);
                             if(s<bestScore){bestScore=s;best=d;}
                         }
-                        if(best!=null&&bestScore<Float.MAX_VALUE)tracker.onYoloDetection(best);
+
+                        if(best!=null&&bestScore<Float.MAX_VALUE){
+                            tracker.onYoloDetection(best);
+                        }else{
+                            tracker.onYoloMiss();
+                        }
                         lastAppliedYoloSerial=serial;
                     }
                 }else{
                     detector.clearDetections();
                 }
             }catch(Throwable t){
-                lastError="yolo submit: "+t.getClass().getSimpleName();
+                lastError="yolo submit: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
             }
 
             trackerExecutor.execute(()->{
