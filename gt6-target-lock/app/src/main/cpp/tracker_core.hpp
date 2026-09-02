@@ -23,6 +23,10 @@ private:
     Candidate search(const uint8_t* gray, int width, int height, float predX, float predY, float radius, bool wide);
     float patchCost(const uint8_t* gray, int width, int height, float cx, float cy, float bw, float bh) const;
     void captureTemplate(const uint8_t* gray, int width, int height, float cx, float cy, float bw, float bh, bool blend);
+    bool estimateOpticalFlow(const uint8_t* gray, int width, int height,
+                             float cx, float cy, float bw, float bh,
+                             float& dx, float& dy, float& strength) const;
+    void updatePrevFrame(const uint8_t* gray, int width, int height);
     static float clampf(float v, float lo, float hi);
 
     bool hasTarget_ = false;
@@ -34,4 +38,7 @@ private:
     float jitterEma_=0;
     int tplW_=24, tplH_=24;
     std::vector<uint8_t> tpl_;
+    std::vector<uint8_t> prevFrame_;
+    int prevW_=0, prevH_=0;
+    float flowDxEma_=0, flowDyEma_=0, flowStrengthEma_=0;
 };
