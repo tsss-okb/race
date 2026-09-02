@@ -8,11 +8,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.tsss.gt6lock.v37"
+        applicationId = "com.tsss.gt6lock.v38"
         minSdk = 29
         targetSdk = 35
-        versionCode = 37
-        versionName = "3.7.0"
+        versionCode = 38
+        versionName = "3.8.0"
         externalNativeBuild {
             cmake { cppFlags += listOf("-O3", "-ffast-math", "-fno-exceptions", "-fno-rtti") }
         }
