@@ -8,6 +8,10 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.*
 import android.media.Image
 import android.media.ImageReader
@@ -17,8 +21,9 @@ import android.util.Size
 import android.view.*
 import android.widget.FrameLayout
 import kotlin.math.abs
+import kotlin.math.min
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), SensorEventListener {
     private lateinit var root: FrameLayout
     private lateinit var previewHost: FrameLayout
     private lateinit var texture: TextureView
@@ -28,23 +33,26 @@ class MainActivity : Activity() {
     private lateinit var trackerThread: HandlerThread
     private lateinit var trackerHandler: Handler
 
+    private lateinit var sensorManager: SensorManager
+    private var rotationSensor: Sensor? = null
+    private var autoLevel = true
+    private var sensorRollDeg = 0f
+    private var filteredRollDeg = 0f
+
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
     private var cameraCharacteristics: CameraCharacteristics? = null
+    private var currentCameraId = "?"
     private var previewSize = Size(1280, 720)
-    private var analysisSize = Size(640, 360)
+    private var analysisSize = Size(320, 180)
     private var relativeRotation = 0
     private var openingCamera = false
 
     private var backCameraIds: List<String> = emptyList()
     private var cameraIndex = 0
-    private var fps60 = false
+    private var fps60 = true
     private var selectedFpsRange: Range<Int>? = null
-
-    // User-reported GT6 correction preset. Can be adjusted live from the HUD.
-    private var manualRotationDegrees = -45f
-    private var mirrorPreview = true
 
     private val tracker = NativeTracker()
     @Volatile private var tracking = false
@@ -61,6 +69,11 @@ class MainActivity : Activity() {
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or
             View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        rotationSensor =
+            sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewHost = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -86,47 +99,26 @@ class MainActivity : Activity() {
             lastTapMs = now
         }
 
-        overlay.onCameraCycle = {
-            runOnUiThread { switchCamera() }
-        }
+        overlay.onCameraCycle = { runOnUiThread { switchCamera() } }
 
         overlay.onFpsToggle = {
             runOnUiThread {
                 val cc = cameraCharacteristics
                 val can60 = cc?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                    ?.any { it.lower <= 60 && it.upper >= 60 } == true
+                    ?.any { it.upper >= 60 } == true
                 fps60 = if (can60) !fps60 else false
-                overlay.fpsModeLabel = if (fps60) "60 FPS" else if (can60) "30 FPS" else "MAX 30"
+                overlay.fpsModeLabel = if (fps60) "60" else if (can60) "30" else "MAX"
                 overlay.invalidate()
                 restartCamera()
             }
         }
 
-        overlay.onRotateLeft = {
+        overlay.onAutoLevelToggle = {
             runOnUiThread {
-                manualRotationDegrees -= 45f
-                if (manualRotationDegrees <= -180f) manualRotationDegrees += 360f
-                applyManualTransform()
+                autoLevel = !autoLevel
+                applySensorLevel()
             }
         }
-
-        overlay.onRotateRight = {
-            runOnUiThread {
-                manualRotationDegrees += 45f
-                if (manualRotationDegrees > 180f) manualRotationDegrees -= 360f
-                applyManualTransform()
-            }
-        }
-
-        overlay.onMirrorToggle = {
-            runOnUiThread {
-                mirrorPreview = !mirrorPreview
-                applyManualTransform()
-            }
-        }
-
-        overlay.manualRotationDegrees = manualRotationDegrees
-        overlay.mirrorX = mirrorPreview
 
         cameraThread = HandlerThread("camera").also { it.start() }
         cameraHandler = Handler(cameraThread.looper)
@@ -134,9 +126,74 @@ class MainActivity : Activity() {
         trackerHandler = Handler(trackerThread.looper)
 
         texture.surfaceTextureListener = surfaceListener
+
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), requestCode)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        rotationSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+    }
+
+    override fun onPause() {
+        sensorManager.unregisterListener(this)
+        super.onPause()
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR &&
+            event.sensor.type != Sensor.TYPE_GAME_ROTATION_VECTOR
+        ) return
+
+        val r = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(r, event.values)
+
+        val remapped = FloatArray(9)
+        val rot = display?.rotation ?: Surface.ROTATION_0
+        when (rot) {
+            Surface.ROTATION_90 ->
+                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remapped)
+            Surface.ROTATION_270 ->
+                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X, remapped)
+            Surface.ROTATION_180 ->
+                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, remapped)
+            else -> System.arraycopy(r, 0, remapped, 0, 9)
+        }
+
+        val orientation = FloatArray(3)
+        SensorManager.getOrientation(remapped, orientation)
+        sensorRollDeg = Math.toDegrees(orientation[2].toDouble()).toFloat()
+
+        filteredRollDeg = if (abs(filteredRollDeg) < 0.01f) {
+            sensorRollDeg
+        } else {
+            filteredRollDeg * 0.90f + sensorRollDeg * 0.10f
+        }
+
+        runOnUiThread { applySensorLevel() }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private fun applySensorLevel() {
+        val correction = if (autoLevel) (-filteredRollDeg).coerceIn(-50f, 50f) else 0f
+
+        texture.pivotX = texture.width / 2f
+        texture.pivotY = texture.height / 2f
+        texture.rotation = correction
+
+        val extra = if (autoLevel) (1f + min(abs(correction) / 50f * 0.36f, 0.36f)) else 1f
+        texture.scaleX = extra
+        texture.scaleY = extra
+
+        overlay.levelCorrectionDegrees = correction
+        overlay.sensorRollDegrees = filteredRollDeg
+        overlay.autoLevelEnabled = autoLevel
+        overlay.invalidate()
     }
 
     private fun fitPreviewHost() {
@@ -148,7 +205,7 @@ class MainActivity : Activity() {
         lp.gravity = Gravity.CENTER
         previewHost.layoutParams = lp
         configurePreviewTransform(root.width, root.height)
-        applyManualTransform()
+        applySensorLevel()
     }
 
     override fun onRequestPermissionsResult(
@@ -172,6 +229,7 @@ class MainActivity : Activity() {
 
         override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
             configurePreviewTransform(w, h)
+            applySensorLevel()
         }
 
         override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -194,15 +252,16 @@ class MainActivity : Activity() {
             val focal = focals.firstOrNull() ?: 0f
             val physical = cc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
             val area = if (physical != null) physical.width * physical.height else 0f
+            val ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+            val has60 = ranges.any { it.upper >= 60 }
 
-            // Main wide camera wins: reject ultrawide (<3 mm), avoid long tele (>9 mm),
-            // then prefer the larger sensor. Camera ID 0 gets only a small tie-break.
             val focalClass = when {
-                focal in 3.0f..8.5f -> 100000.0
-                focal in 2.5f..9.5f -> 50000.0
+                focal in 3.0f..8.5f -> 200000.0
+                focal in 2.5f..9.5f -> 80000.0
                 else -> 0.0
             }
-            return focalClass + area * 1000.0 + if (id == "0") 100.0 else 0.0
+            val fpsClass = if (has60) 1000000.0 else 0.0
+            return fpsClass + focalClass + area * 1000.0 + if (id == "0") 100.0 else 0.0
         }
 
         backCameraIds = ids.sortedByDescending { score(it) }
@@ -214,7 +273,7 @@ class MainActivity : Activity() {
         val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         refreshCameraList(cm)
         if (backCameraIds.size <= 1) {
-            overlay.cameraLabel = "Только одна задняя камера доступна через Camera2"
+            overlay.cameraLabel = "Одна задняя камера доступна через Camera2"
             overlay.invalidate()
             return
         }
@@ -229,7 +288,7 @@ class MainActivity : Activity() {
         lastTs = 0L
         fpsEma = 0f
         closeCamera()
-        cameraHandler.postDelayed({ openCamera() }, 250)
+        cameraHandler.postDelayed({ openCamera() }, 220)
     }
 
     private fun closeCamera() {
@@ -254,11 +313,12 @@ class MainActivity : Activity() {
         }
 
         val id = backCameraIds[cameraIndex]
+        currentCameraId = id
         val cc = cm.getCameraCharacteristics(id)
         cameraCharacteristics = cc
         val map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         if (map == null) {
-            overlay.cameraLabel = "CAM " + id + ": нет StreamConfigurationMap"
+            overlay.cameraLabel = "CAM $id: нет StreamConfigurationMap"
             overlay.invalidate()
             return
         }
@@ -266,29 +326,40 @@ class MainActivity : Activity() {
         val yuv = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
         val previews = map.getOutputSizes(SurfaceTexture::class.java)
         if (yuv == null || previews == null) {
-            overlay.cameraLabel = "CAM " + id + ": нет совместимого видеорежима"
+            overlay.cameraLabel = "CAM $id: нет совместимого видеорежима"
             overlay.invalidate()
             return
         }
 
-        analysisSize = choose16x9Near(yuv, 640, 360)
+        analysisSize = choose16x9Near(yuv, 320, 180)
         previewSize = choose16x9Near(previews, 1280, 720)
 
         overlay.imageW = analysisSize.width
         overlay.imageH = analysisSize.height
         relativeRotation = calculateRelativeRotation(cc)
         overlay.rotationDegrees = relativeRotation
-        val has60 = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?.any { it.lower <= 60 && it.upper >= 60 } == true
-        if (!has60) fps60 = false
-        overlay.fpsModeLabel = if (fps60) "60 FPS" else if (has60) "30 FPS" else "MAX 30"
+
+        val ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+        val maxFps = ranges.maxOfOrNull { it.upper } ?: 0
+        val has60 = maxFps >= 60
+        fps60 = has60
+        overlay.fpsModeLabel = if (has60) "60" else "MAX$maxFps"
+
+        val caps = cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+        val hs = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO)
+        val highRanges = try { map.highSpeedVideoFpsRanges } catch (_: Exception) { emptyArray() }
+        val highMax = highRanges.maxOfOrNull { it.upper } ?: 0
 
         val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
         val focalText = focals?.joinToString("/") { "%.1f".format(it) } ?: "?"
+        val sensorOrientation = cc.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: -1
+
         overlay.cameraLabel =
-            "CAM " + id + "  focal " + focalText + " mm  •  VIEW " +
-                previewSize.width + "×" + previewSize.height + "  •  TRACK " +
-                analysisSize.width + "×" + analysisSize.height
+            "CAM $id  " + focalText + "mm  SENSOR " + sensorOrientation + "°  • VIEW " +
+            previewSize.width + "×" + previewSize.height +
+            "  TRACK " + analysisSize.width + "×" + analysisSize.height +
+            "  • AE MAX " + maxFps +
+            if (hs) "  HS " + highMax else "  HS —"
         overlay.invalidate()
 
         reader = ImageReader.newInstance(
@@ -310,6 +381,7 @@ class MainActivity : Activity() {
                     openingCamera = false
                     camera = c
                     configurePreviewTransform(texture.width, texture.height)
+                    applySensorLevel()
                     startSession(cc)
                 }
 
@@ -324,14 +396,14 @@ class MainActivity : Activity() {
                     c.close()
                     if (camera === c) camera = null
                     overlay.post {
-                        overlay.cameraLabel = "CAM " + id + " ERROR " + error + " — нажми CAMERA"
+                        overlay.cameraLabel = "CAM $id ERROR $error"
                         overlay.invalidate()
                     }
                 }
             }, cameraHandler)
         } catch (e: Exception) {
             openingCamera = false
-            overlay.cameraLabel = "CAM " + id + " open: " + e.javaClass.simpleName
+            overlay.cameraLabel = "CAM $id open: " + e.javaClass.simpleName
             overlay.invalidate()
         }
     }
@@ -365,66 +437,31 @@ class MainActivity : Activity() {
         val matrix = Matrix()
         val cx = viewW / 2f
         val cy = viewH / 2f
+        val viewRect = RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
 
-        when (relativeRotation) {
-            0 -> {
-                val viewAspect = viewW.toFloat() / viewH.toFloat()
-                val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
-                if (viewAspect > bufferAspect) {
-                    val sy = viewAspect / bufferAspect
-                    matrix.postScale(1f, sy, cx, cy)
-                } else if (viewAspect < bufferAspect) {
-                    val sx = bufferAspect / viewAspect
-                    matrix.postScale(sx, 1f, cx, cy)
-                }
+        if (relativeRotation == 90 || relativeRotation == 270) {
+            val bufferRect = RectF(0f, 0f, previewSize.height.toFloat(), previewSize.width.toFloat())
+            bufferRect.offset(cx - bufferRect.centerX(), cy - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+            val scale = maxOf(
+                viewH.toFloat() / previewSize.height.toFloat(),
+                viewW.toFloat() / previewSize.width.toFloat()
+            )
+            matrix.postScale(scale, scale, cx, cy)
+            matrix.postRotate(if (relativeRotation == 90) -90f else 90f, cx, cy)
+        } else {
+            val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
+            val viewAspect = viewW.toFloat() / viewH.toFloat()
+            if (viewAspect > bufferAspect) {
+                matrix.postScale(1f, viewAspect / bufferAspect, cx, cy)
+            } else if (viewAspect < bufferAspect) {
+                matrix.postScale(bufferAspect / viewAspect, 1f, cx, cy)
             }
-            180 -> {
-                val viewAspect = viewW.toFloat() / viewH.toFloat()
-                val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
-                if (viewAspect > bufferAspect) {
-                    matrix.postScale(1f, viewAspect / bufferAspect, cx, cy)
-                } else if (viewAspect < bufferAspect) {
-                    matrix.postScale(bufferAspect / viewAspect, 1f, cx, cy)
-                }
-                matrix.postRotate(180f, cx, cy)
-            }
-            90, 270 -> {
-                val viewRect = RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
-                val bufferRect = RectF(
-                    0f,
-                    0f,
-                    previewSize.height.toFloat(),
-                    previewSize.width.toFloat()
-                )
-                bufferRect.offset(cx - bufferRect.centerX(), cy - bufferRect.centerY())
-                matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-                val scale = maxOf(
-                    viewH.toFloat() / previewSize.height.toFloat(),
-                    viewW.toFloat() / previewSize.width.toFloat()
-                )
-                matrix.postScale(scale, scale, cx, cy)
-                matrix.postRotate(if (relativeRotation == 90) -90f else 90f, cx, cy)
-            }
+            if (relativeRotation == 180) matrix.postRotate(180f, cx, cy)
         }
 
         texture.setTransform(matrix)
-        applyManualTransform()
-        overlay.invalidate()
-    }
-
-    private fun applyManualTransform() {
-        if (!::texture.isInitialized || texture.width <= 0 || texture.height <= 0) return
-        texture.pivotX = texture.width / 2f
-        texture.pivotY = texture.height / 2f
-        texture.rotation = manualRotationDegrees
-        texture.scaleX = if (mirrorPreview) -1f else 1f
-        texture.scaleY = 1f
-
-        overlay.manualRotationDegrees = manualRotationDegrees
-        overlay.mirrorX = mirrorPreview
-        overlay.orientationLabel =
-            (if (mirrorPreview) "MIRROR ON" else "MIRROR OFF") +
-            "  ROT " + manualRotationDegrees.toInt() + "°"
+        applySensorLevel()
         overlay.invalidate()
     }
 
@@ -460,16 +497,6 @@ class MainActivity : Activity() {
                                     set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
                                 }
 
-                                val stab = cc.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
-                                if (stab.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)) {
-                                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                                }
-
-                                val ois = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
-                                if (ois.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)) {
-                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                                }
-
                                 set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
                                 set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
                             }.build()
@@ -478,31 +505,21 @@ class MainActivity : Activity() {
 
                             val fpsText = selectedFpsRange?.let { it.lower.toString() + "-" + it.upper.toString() } ?: "AUTO"
                             overlay.post {
-                                overlay.cameraLabel = overlay.cameraLabel + "  •  HAL " + fpsText + " FPS"
+                                overlay.cameraHzLabel = fpsText
                                 overlay.invalidate()
                             }
                         } catch (e: Exception) {
                             overlay.post {
-                                overlay.cameraLabel = "Session request: " + e.javaClass.simpleName
+                                overlay.cameraLabel = "Session: " + e.javaClass.simpleName
                                 overlay.invalidate()
                             }
                         }
                     }
 
                     override fun onConfigureFailed(s: CameraCaptureSession) {
-                        if (fps60) {
-                            fps60 = false
-                            overlay.post {
-                                overlay.fpsModeLabel = "30 FPS"
-                                overlay.cameraLabel = "60 FPS не поддержан этим потоком — возврат на 30"
-                                overlay.invalidate()
-                                restartCamera()
-                            }
-                        } else {
-                            overlay.post {
-                                overlay.cameraLabel = "Camera session configure failed — нажми CAMERA"
-                                overlay.invalidate()
-                            }
+                        overlay.post {
+                            overlay.cameraLabel = "Camera session configure failed"
+                            overlay.invalidate()
                         }
                     }
                 },
@@ -518,14 +535,15 @@ class MainActivity : Activity() {
         val rs = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return null
 
         if (want60) {
-            return rs.filter { it.lower <= 60 && it.upper >= 60 }
-                .minByOrNull { (it.upper - it.lower) + abs(it.upper - 60) }
-                ?: rs.maxByOrNull { it.upper }
+            val sixty = rs.filter { it.upper >= 60 }
+            if (sixty.isNotEmpty()) {
+                return sixty.minByOrNull {
+                    abs(it.upper - 60) * 10 + abs(it.lower - 60)
+                }
+            }
         }
 
-        return rs.filter { it.lower <= 30 && it.upper >= 30 }
-            .minByOrNull { (it.upper - it.lower) + abs(it.upper - 30) }
-            ?: rs.minByOrNull { abs(it.upper - 30) }
+        return rs.maxByOrNull { it.upper * 1000 + it.lower }
     }
 
     private fun processImage(img: Image) {
@@ -563,7 +581,7 @@ class MainActivity : Activity() {
 
     private fun runTracker(y: ByteArray, w: Int, h: Int, ts: Long) {
         pendingTap?.let { (x, yc) ->
-            val box = (minOf(w, h) * 0.13f).coerceIn(44f, 140f)
+            val box = (minOf(w, h) * 0.17f).coerceIn(30f, 80f)
             tracking = tracker.nativeInit(y, w, h, x, yc, box * 1.35f, box)
             pendingTap = null
             lastTs = ts
@@ -578,15 +596,15 @@ class MainActivity : Activity() {
         }
 
         val dt = if (lastTs == 0L) {
-            if (fps60) 1.0 / 60.0 else 1.0 / 30.0
+            1.0 / 60.0
         } else {
-            ((ts - lastTs) / 1e9).coerceIn(1.0 / 120.0, 0.12)
+            ((ts - lastTs) / 1e9).coerceIn(1.0 / 180.0, 0.12)
         }
         lastTs = ts
 
         val out = tracker.nativeProcess(y, w, h, dt)
         val instFps = (1.0 / dt).toFloat()
-        fpsEma = if (fpsEma == 0f) instFps else 0.9f * fpsEma + 0.1f * instFps
+        fpsEma = if (fpsEma == 0f) instFps else 0.88f * fpsEma + 0.12f * instFps
 
         val ui = OverlayView.UiTrack(
             out[0].toInt(),
