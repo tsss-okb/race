@@ -1,26 +1,7 @@
 package com.tsss.targetlock;
 
-import org.bytedeco.javacpp.Loader;
-import org.bytedeco.opencv.opencv_core.Mat;
-import org.bytedeco.opencv.opencv_core.Rect;
-import org.bytedeco.opencv.opencv_tracking.TrackerKCF;
+import java.util.Arrays;
 
-import static org.bytedeco.opencv.global.opencv_core.CV_8UC3;
-
-/**
- * TargetLock v1.5 KCF Hybrid
- *
- * Passive visual tracker:
- * YOLO26n INT8 acquisition/verification
- * -> native OpenCV KCF every analysis frame
- * -> detector-confirmed motion prior
- * -> drift reject
- * -> COAST
- * -> expanding YOLO reacquisition
- * -> KCF re-init.
- *
- * No flight-control or actuation output is produced here.
- */
 public class TargetTracker {
     public volatile boolean locked=false;
     public volatile boolean acquiring=false;
@@ -29,65 +10,45 @@ public class TargetTracker {
 
     public volatile float x=.5f,y=.5f,predX=.5f,predY=.5f;
     public volatile float renderX=.5f,renderY=.5f;
-    public volatile float vx=0f,vy=0f,box=.075f,boxW=.15f,boxH=.15f,confidence=0f;
+    public volatile float vx=0,vy=0,box=.075f,boxW=.15f,boxH=.15f,confidence=0;
 
-    public volatile float trackerFps=0f,latencyMs=0f,yoloConfidence=0f;
-    public volatile float flowDx=0f,flowDy=0f,flowQuality=0f,flowFps=0f;
-    public volatile float cameraDx=0f,cameraDy=0f,imuWeight=0f,flowWeight=0f;
+    public volatile float trackerFps=0,latencyMs=0,yoloConfidence=0;
+    public volatile float flowDx=0,flowDy=0,flowQuality=0,flowFps=0;
+    public volatile float cameraDx=0,cameraDy=0,imuWeight=1f,flowWeight=0f;
     public volatile int flowPoints=0;
 
     public volatile int lostFrames=0,targetClass=-1,yoloCorrections=0,reacquireCount=0;
     public volatile int imuCorrections=0,flowCorrections=0;
+    public volatile int verifyMisses=0;
     public volatile String targetName="manual";
     public volatile int tapCount=0;
     public volatile String acquireStatus="IDLE";
-    public volatile boolean useImu=false;
-    public volatile boolean useFlow=false;
+    public volatile boolean useImu=true;
+    public volatile boolean useFlow=true;
     public volatile boolean autoReacq=true;
-
-    // HUD-compatible diagnostics.
-    public volatile float filterSigmaX=.02f,filterSigmaY=.02f;
-    public volatile float filterInnovation=0f;
-    public volatile float errorX=0f,errorY=0f;
-    public volatile float errorEmaX=0f,errorEmaY=0f;
-
-    // KCF-specific diagnostics.
-    public volatile boolean kcfReady=false;
-    public volatile String kcfError="";
-    public volatile int kcfUpdates=0;
-    public volatile int driftRejects=0;
-    public volatile int verifyMisses=0;
 
     private ImuCompensator imu;
 
-    private TrackerKCF kcf;
-    private Mat frameMat;
-    private byte[] bgr;
-    private int frameW=0,frameH=0;
-    private long lastFrameNs=0;
-    private long frameIndex=0;
+    private static final int GRID=15;
+    private static final int FLOW_PATCH=2;
+    private static final int FLOW_SEARCH=4;
 
-    private YoloDetector.Detection pendingInit;
-    private YoloDetector.Detection pendingCorrection;
+    private final float[] template=new float[GRID*GRID];
+    private float templateMean=0f;
+    private float templateStd=1f;
+    private int templateSpan=18;
 
-    // Detector-confirmed motion prior, normalized image coordinates.
-    private boolean motionValid=false;
-    private float motionX=.5f,motionY=.5f,motionW=.12f,motionH=.12f;
-    private float motionVx=0f,motionVy=0f;
-    private long motionFrame=0;
+    private boolean hasTemplate=false;
+    private float pendingX=-1,pendingY=-1;
+    private float pendingBox=-1f;
+    private boolean pendingReseed=false;
 
-    private int consecutiveKcfFails=0;
+    private byte[] gray;
+    private byte[] prevGray;
+    private boolean havePrev=false;
 
-    public TargetTracker(){
-        try{
-            Loader.load(TrackerKCF.class);
-            kcfReady=true;
-            kcfError="";
-        }catch(Throwable t){
-            kcfReady=false;
-            kcfError=t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
-        }
-    }
+    private long lastNs=0,lastFrameNs=0,lastFlowNs=0;
+    private long coastStartNs=0;
 
     public synchronized void setImu(ImuCompensator compensator){imu=compensator;}
     public void setUseImu(boolean v){useImu=v;}
@@ -95,492 +56,551 @@ public class TargetTracker {
     public void setAutoReacq(boolean v){autoReacq=v;}
 
     public synchronized void requestLock(float nx,float ny){
-        nx=clamp(nx,.02f,.98f);
-        ny=clamp(ny,.02f,.98f);
-
-        targetClass=-1;
-        targetName="manual";
-        tapCount++;
-
-        // Manual point lock becomes a modest synthetic ROI that KCF seeds
-        // on the next available analysis frame.
-        pendingInit=new YoloDetector.Detection(
-                clamp(nx-.06f,0f,1f),clamp(ny-.09f,0f,1f),
-                clamp(nx+.06f,0f,1f),clamp(ny+.09f,0f,1f),
-                .50f,-1,"manual");
-
-        acquiring=true;
-        locked=false;
-        coasting=false;
-        reacquiring=false;
-        lostFrames=0;
-        acquireStatus="KCF SEED";
+        pendingX=clamp(nx,.06f,.94f);pendingY=clamp(ny,.10f,.90f);
+        pendingBox=-1f;pendingReseed=false;
+        acquiring=true;locked=false;coasting=false;reacquiring=false;
+        confidence=.15f;lostFrames=0;vx=vy=0;hasTemplate=false;
+        renderX=predX=pendingX;renderY=predY=pendingY;
+        targetClass=-1;targetName="manual";tapCount++;acquireStatus="TAP";
+        if(imu!=null)imu.resetMotion();
     }
 
     public synchronized void requestDetectedLock(YoloDetector.Detection d){
         if(d==null)return;
-
-        targetClass=d.classId;
+        float nx=clamp(d.cx(),.06f,.94f);
+        float ny=clamp(d.cy(),.10f,.90f);
+        pendingX=nx;pendingY=ny;
+        pendingBox=clamp(d.halfBox(),.025f,.28f);
+        pendingReseed=false;
+        acquiring=true;locked=false;coasting=false;reacquiring=false;
+        confidence=Math.max(.30f,d.confidence);
+        lostFrames=0;vx=vy=0;hasTemplate=false;
+        renderX=predX=nx;renderY=predY=ny;
+        box=pendingBox;
+        boxW=clamp(d.right-d.left,.02f,.85f);
+        boxH=clamp(d.bottom-d.top,.02f,.85f);
         targetName=d.className;
+        targetClass=d.classId;
         yoloConfidence=d.confidence;
         tapCount++;
-
-        pendingInit=d;
-        pendingCorrection=null;
-
-        acquiring=true;
-        locked=false;
-        coasting=false;
-        reacquiring=false;
-        lostFrames=0;
-        verifyMisses=0;
-        confidence=Math.max(.55f,d.confidence);
-        acquireStatus="YOLO → KCF";
+        acquireStatus="YOLO SELECT";
+        if(imu!=null)imu.resetMotion();
     }
 
     public synchronized boolean seedFromArgb(int[] pixels,int w,int h,float nx,float ny){
-        requestLock(nx,ny);
-        processArgb(pixels,w,h);
-        return locked;
+        if(pixels==null||pixels.length<w*h||w<80||h<60)return false;
+        ensureBuffers(w*h);
+        toGray(pixels,gray,w*h);
+
+        templateSpan=spanFromBox(box,w,h);
+        int cx=safeX(Math.round(clamp(nx,.06f,.94f)*(w-1)),w);
+        int cy=safeY(Math.round(clamp(ny,.10f,.90f)*(h-1)),h);
+        if(!extractTemplate(gray,w,h,cx,cy,template,templateSpan)){
+            acquireStatus="SEED FAIL";
+            return false;
+        }
+        recomputeTemplateStats();
+
+        x=predX=renderX=cx/(float)(w-1);
+        y=predY=renderY=cy/(float)(h-1);
+        pendingX=pendingY=-1;pendingBox=-1;
+        vx=vy=0;confidence=.90f;lostFrames=0;
+        locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
+        lastNs=System.nanoTime();coastStartNs=0;
+        acquireStatus="LOCKED";
+        copyCurrentToPrev(w*h);
+        if(imu!=null)imu.resetMotion();
+        return true;
     }
 
     public synchronized void clear(){
-        closeKcf();
-        if(frameMat!=null){
-            try{frameMat.close();}catch(Throwable ignored){}
-            frameMat=null;
-        }
-        bgr=null;
-        frameW=frameH=0;
-
-        pendingInit=null;
-        pendingCorrection=null;
-        motionValid=false;
-        motionX=motionY=.5f;
-        motionW=motionH=.12f;
-        motionVx=motionVy=0f;
-        motionFrame=0;
-
-        locked=false;
-        acquiring=false;
-        coasting=false;
-        reacquiring=false;
-
-        x=y=predX=predY=renderX=renderY=.5f;
-        vx=vy=0f;
-        box=.075f;
-        boxW=.15f;boxH=.15f;
-        confidence=0f;
-
-        targetClass=-1;
-        targetName="manual";
-        lostFrames=0;
-        verifyMisses=0;
-        consecutiveKcfFails=0;
-        filterInnovation=0f;
-        filterSigmaX=filterSigmaY=.02f;
-        errorX=errorY=errorEmaX=errorEmaY=0f;
-        acquireStatus="IDLE";
+        locked=false;acquiring=false;coasting=false;reacquiring=false;hasTemplate=false;
+        confidence=0;lostFrames=0;vx=vy=0;acquireStatus="IDLE";
+        pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
+        targetClass=-1;targetName="manual";
+        renderX=predX=.5f;renderY=predY=.5f;
+        if(imu!=null)imu.resetMotion();
     }
 
     public void processArgb(int[] pixels,int w,int h){
-        final long started=System.nanoTime();
-        final long now=started;
+        long started=System.nanoTime();
+        try{
+            if(pixels==null||w<80||h<60||pixels.length<w*h)return;
+            ensureBuffers(w*h);
+            toGray(pixels,gray,w*h);
 
-        synchronized(this){
-            frameIndex++;
-
+            long now=System.nanoTime();
             if(lastFrameNs!=0){
-                float fps=1e9f/Math.max(1,now-lastFrameNs);
-                trackerFps=trackerFps==0?fps:.88f*trackerFps+.12f*fps;
+                float f=1e9f/Math.max(1,now-lastFrameNs);
+                trackerFps=trackerFps==0?f:.86f*trackerFps+.14f*f;
             }
             lastFrameNs=now;
 
-            if(!kcfReady){
-                latencyMs=(System.nanoTime()-started)/1_000_000f;
+            Motion vm=estimateGlobalMotion(gray,prevGray,w,h);
+            flowDx=vm.dx;flowDy=vm.dy;flowQuality=vm.quality;flowPoints=vm.points;
+            if(lastFlowNs!=0){
+                float f=1e9f/Math.max(1,now-lastFlowNs);
+                flowFps=flowFps==0?f:.88f*flowFps+.12f*f;
+            }
+            lastFlowNs=now;
+
+            float imuDx=0,imuDy=0;
+            if(imu!=null&&useImu){
+                float[] raw=imu.consumeAnalysisRawShift();
+                imu.updateCalibration(raw[0],raw[1],vm.dx,vm.dy,vm.quality);
+                float[] scaled=imu.scaleRaw(raw[0],raw[1]);
+                imuDx=scaled[0];imuDy=scaled[1];
+            }
+
+            float fw=useFlow?computeFlowWeight(vm.quality,imu==null?0:imu.angularSpeedDeg):0f;
+            float iw=1f-fw;
+            float fusedDx=imuDx*iw+vm.dx*fw;
+            float fusedDy=imuDy*iw+vm.dy*fw;
+            imuWeight=iw;flowWeight=fw;cameraDx=fusedDx;cameraDy=fusedDy;
+
+            if(locked||coasting||reacquiring){
+                applyCameraShift(fusedDx,fusedDy);
+                if(Math.abs(imuDx)+Math.abs(imuDy)>.00002f)imuCorrections++;
+                if(fw>.08f&&vm.quality>.25f)flowCorrections++;
+            }
+
+            float px,py,pb;
+            boolean reseed;
+            synchronized(this){
+                px=pendingX;py=pendingY;pb=pendingBox;reseed=pendingReseed;
+            }
+
+            if(px>=0&&py>=0){
+                if(pb>0)box=pb;
+                templateSpan=spanFromBox(box,w,h);
+                int cx=safeX(Math.round(px*(w-1)),w);
+                int cy=safeY(Math.round(py*(h-1)),h);
+
+                if(extractTemplate(gray,w,h,cx,cy,template,templateSpan)){
+                    recomputeTemplateStats();
+                    synchronized(this){
+                        x=predX=renderX=cx/(float)(w-1);
+                        y=predY=renderY=cy/(float)(h-1);
+                        if(!reseed){vx=vy=0;}
+                        confidence=Math.max(.82f,confidence);
+                        locked=true;acquiring=false;coasting=false;reacquiring=false;hasTemplate=true;
+                        pendingX=pendingY=-1;pendingBox=-1;pendingReseed=false;
+                        lostFrames=0;coastStartNs=0;lastNs=System.nanoTime();
+                        acquireStatus=reseed?"REACQUIRED":"LOCKED";
+                        if(reseed)reacquireCount++;
+                        if(imu!=null)imu.resetMotion();
+                    }
+                }else{
+                    acquireStatus="SEED FAIL";
+                }
+                copyCurrentToPrev(w*h);
                 return;
             }
 
-            try{
-                ensureFrame(pixels,w,h);
+            if(hasTemplate&&(locked||coasting||reacquiring)){
+                int cx=safeX(Math.round(predX*(w-1)),w);
+                int cy=safeY(Math.round(predY*(h-1)),h);
 
-                if(pendingInit!=null){
-                    YoloDetector.Detection d=pendingInit;
-                    pendingInit=null;
-                    if(initKcfFromDetection(d)){
-                        setMotionFromDetection(d,true);
-                        locked=true;
-                        acquiring=false;
-                        coasting=false;
-                        reacquiring=false;
-                        lostFrames=0;
-                        consecutiveKcfFails=0;
-                        verifyMisses=0;
-                        acquireStatus="KCF LOCK";
-                    }else{
-                        acquiring=false;
-                        locked=false;
-                        coasting=true;
-                        reacquiring=true;
-                        acquireStatus="KCF INIT ERR";
+                int base=Math.max(12,Math.round(Math.max(templateSpan*1.5f,box*Math.min(w,h)*1.2f)));
+                int radius=Math.min(92,base+lostFrames*5+(imu!=null&&imu.angularSpeedDeg>55f?10:0));
+
+                Match best=searchMultiScale(gray,w,h,cx,cy,radius);
+
+                if(best!=null&&best.quality>=.52f){
+                    updateMeasurement(best.x/(float)(w-1),best.y/(float)(h-1),best.quality);
+                    lostFrames=0;
+                    coasting=false;reacquiring=false;locked=true;
+                    coastStartNs=0;
+                    acquireStatus="LOCKED";
+
+                    if(best.quality>.72f){
+                        adaptTemplate(gray,w,h,best.x,best.y,.025f,templateSpan);
                     }
-                }
-
-                // Apply detector correction/reacquisition before normal KCF update.
-                if(pendingCorrection!=null){
-                    YoloDetector.Detection d=pendingCorrection;
-                    pendingCorrection=null;
-                    boolean wasLost=coasting||reacquiring||!locked||kcf==null;
-
-                    if(initKcfFromDetection(d)){
-                        setMotionFromDetection(d,false);
-                        boxW=clamp(d.right-d.left,.02f,.85f);
-                        boxH=clamp(d.bottom-d.top,.02f,.85f);
-                        box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
-                        yoloCorrections++;
-                        if(wasLost)reacquireCount++;
-
-                        locked=true;
-                        acquiring=false;
-                        coasting=false;
-                        reacquiring=false;
-                        lostFrames=0;
-                        consecutiveKcfFails=0;
-                        verifyMisses=0;
-                        acquireStatus=wasLost?"REACQUIRED":"KCF VERIFIED";
-                    }
-                }
-
-                if(kcf!=null&&locked){
-                    Rect r=new Rect(
-                            clampInt(Math.round((x-boxW*.5f)*w),0,Math.max(0,w-2)),
-                            clampInt(Math.round((y-boxH*.5f)*h),0,Math.max(0,h-2)),
-                            Math.max(2,Math.round(boxW*w)),
-                            Math.max(2,Math.round(boxH*h))
-                    );
-                    clampRect(r,w,h);
-
-                    boolean ok=false;
-                    try{ok=kcf.update(frameMat,r);}catch(Throwable t){
-                        kcfError="update: "+t.getClass().getSimpleName();
-                    }
-
-                    if(ok){
-                        float kx=(r.x()+r.width()*.5f)/Math.max(1f,w);
-                        float ky=(r.y()+r.height()*.5f)/Math.max(1f,h);
-                        float kw=r.width()/Math.max(1f,w);
-                        float kh=r.height()/Math.max(1f,h);
-
-                        float[] mp=predictMotion(frameIndex);
-                        float driftPx=Float.MAX_VALUE;
-                        if(mp!=null){
-                            float dx=(kx-mp[0])*w;
-                            float dy=(ky-mp[1])*h;
-                            driftPx=(float)Math.hypot(dx,dy);
-                        }
-
-                        float driftGate=Math.max(22f,Math.min(w,h)*.14f);
-                        if(motionValid&&driftPx>driftGate){
-                            driftRejects++;
-                            closeKcf();
-                            enterCoast("DRIFT REJECT");
-                        }else{
-                            consecutiveKcfFails=0;
-                            kcfUpdates++;
-                            x=predX=clamp(kx);
-                            y=predY=clamp(ky);
-                            final float renderA=.72f;
-                            renderX=clamp(renderX+(predX-renderX)*renderA);
-                            renderY=clamp(renderY+(predY-renderY)*renderA);
-                            boxW=clamp(boxW+(kw-boxW)*.68f,.02f,.85f);
-                            boxH=clamp(boxH+(kh-boxH)*.68f,.02f,.85f);
-                            box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
-                            confidence=Math.max(.30f,confidence*.997f);
-                            acquireStatus="KCF HOLD";
-                            updateErrors();
-                        }
-                    }else{
-                        consecutiveKcfFails++;
-                        if(consecutiveKcfFails>=1){
-                            closeKcf();
-                            enterCoast("KCF LOST");
-                        }
-                    }
-
-                    try{r.close();}catch(Throwable ignored){}
-                }
-
-                if(coasting||reacquiring){
+                }else{
                     lostFrames++;
-                    float[] mp=predictMotion(frameIndex);
-                    if(mp!=null){
-                        predX=renderX=clamp(mp[0]);
-                        predY=renderY=clamp(mp[1]);
-                        x=predX;y=predY;
-                        boxW=clamp(motionW,.02f,.85f);
-                        boxH=clamp(motionH,.02f,.85f);
-                        box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
+                    coast();
+
+                    if(lostFrames>=3){
+                        coasting=true;locked=false;
+                        if(coastStartNs==0)coastStartNs=now;
+                        acquireStatus="COAST";
+                    }
+                    if(lostFrames>=7&&autoReacq){
+                        reacquiring=true;
+                        acquireStatus="REACQUIRE";
                     }
 
-                    confidence*=.985f;
-                    reacquiring=autoReacq&&lostFrames>=3;
-                    acquireStatus=reacquiring?"YOLO REACQ":"COAST";
-                    updateErrors();
-
-                    // Keep identity alive long enough for full-frame YOLO recovery.
-                    if(lostFrames>120){
-                        closeKcf();
-                        locked=false;
-                        coasting=false;
-                        reacquiring=false;
-                        motionValid=false;
-                        acquireStatus="SEARCH";
+                    // Keep target identity alive longer when auto reacquisition is enabled.
+                    int maxLost=autoReacq?70:24;
+                    long maxCoast=autoReacq?1_600_000_000L:650_000_000L;
+                    if(lostFrames>maxLost || (coastStartNs!=0&&now-coastStartNs>maxCoast)){
+                        clear();
                     }
                 }
-
-            }catch(Throwable t){
-                kcfError=t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
-                closeKcf();
-                enterCoast("KCF ERROR");
             }
 
+            copyCurrentToPrev(w*h);
+        }finally{
             latencyMs=(System.nanoTime()-started)/1_000_000f;
         }
     }
 
     public synchronized float associationScore(YoloDetector.Detection d){
         if(d==null)return Float.MAX_VALUE;
+        if((coasting||reacquiring)&&!autoReacq)return Float.MAX_VALUE;
         if(targetClass>=0&&d.classId!=targetClass)return Float.MAX_VALUE;
 
-        float[] mp=predictMotion(frameIndex);
-        float px=mp==null?predX:mp[0];
-        float py=mp==null?predY:mp[1];
+        float dx=d.cx()-predX,dy=d.cy()-predY;
+        float dist=(float)Math.sqrt(dx*dx+dy*dy);
 
-        float dxPx=(d.cx()-px)*Math.max(1,frameW);
-        float dyPx=(d.cy()-py)*Math.max(1,frameH);
-        float distPx=(float)Math.hypot(dxPx,dyPx);
+        float currentSize=Math.max(.025f,box);
+        float newSize=Math.max(.025f,d.halfBox());
+        float scaleErr=Math.abs((float)Math.log(newSize/currentSize));
 
-        float gatePx;
-        if(reacquiring||coasting){
-            gatePx=Math.min(
-                    Math.max(frameW,frameH)*.45f,
-                    Math.max(18f,Math.min(frameW,frameH)*.10f)+1.5f*lostFrames
-            );
-        }else{
-            gatePx=Math.max(20f,Math.min(frameW,frameH)*.12f);
-        }
+        float gate=reacquiring?.34f:(coasting?.24f:.16f);
+        if(dist>gate)return Float.MAX_VALUE;
+        if(scaleErr>1.0f)return Float.MAX_VALUE;
 
-        if(distPx>gatePx)return Float.MAX_VALUE;
-
-        float dw=Math.max(.008f,d.right-d.left);
-        float dh=Math.max(.008f,d.bottom-d.top);
-        float rw=Math.max(.008f,motionValid?motionW:box*2f);
-        float rh=Math.max(.008f,motionValid?motionH:box*2f);
-
-        float ratio=Math.max(
-                Math.max(dw/rw,rw/dw),
-                Math.max(dh/rh,rh/dh));
-        if(ratio>3.0f)return Float.MAX_VALUE;
-
-        float scalePenalty=Math.abs((float)Math.log(Math.max(1e-4f,ratio)))*5f;
-        float confBonus=d.confidence*4f;
-        return distPx+scalePenalty-confBonus;
+        float confPenalty=(1f-d.confidence)*.12f;
+        return dist + scaleErr*.08f + confPenalty;
     }
 
     public synchronized void onYoloDetection(YoloDetector.Detection d){
         if(d==null)return;
         if(targetClass>=0&&d.classId!=targetClass)return;
-        if(associationScore(d)==Float.MAX_VALUE)return;
 
-        if(targetClass<0){
-            targetClass=d.classId;
-            targetName=d.className;
-        }
+        float score=associationScore(d);
+        if(score==Float.MAX_VALUE)return;
 
         yoloConfidence=d.confidence;
-        confidence=Math.max(confidence,d.confidence);
 
-        float dw=Math.max(.008f,d.right-d.left);
-        float dh=Math.max(.008f,d.bottom-d.top);
+        if((reacquiring||coasting||!locked)&&autoReacq){
+            pendingX=clamp(d.cx(),.06f,.94f);
+            pendingY=clamp(d.cy(),.10f,.90f);
+            pendingBox=clamp(d.halfBox(),.025f,.28f);
+            pendingReseed=true;
+            acquiring=true;
+            reacquiring=true;
+            acquireStatus="YOLO REACQ";
+            confidence=Math.max(confidence,d.confidence*.80f);
+            return;
+        }
 
-        float centerErrPx=(float)Math.hypot(
-                (d.cx()-predX)*Math.max(1,frameW),
-                (d.cy()-predY)*Math.max(1,frameH));
+        float a=d.confidence>.65f?.20f:.12f;
+        x=(1f-a)*x+a*d.cx();
+        y=(1f-a)*y+a*d.cy();
+        box=(1f-a)*box+a*clamp(d.halfBox(),.025f,.28f);
+        boxW=(1f-a)*boxW+a*clamp(d.right-d.left,.02f,.85f);
+        boxH=(1f-a)*boxH+a*clamp(d.bottom-d.top,.02f,.85f);
+        predX=clamp(x+vx*.05f);
+        predY=clamp(y+vy*.05f);
+        renderX=predX;renderY=predY;
+        confidence=Math.max(confidence,d.confidence*.88f);
+        yoloCorrections++;
 
-        float scaleRatio=Math.max(
-                Math.max(dw/Math.max(.008f,boxW),boxW/Math.max(.008f,dw)),
-                Math.max(dh/Math.max(.008f,boxH),boxH/Math.max(.008f,dh)));
-
-        boolean lost=coasting||reacquiring||!locked||kcf==null;
-        float softGate=Math.max(4f,Math.min(frameW,frameH)*.025f);
-
-        if(!lost && centerErrPx<=softGate && scaleRatio<=1.18f){
-            // Detector confirms the same target. Update only the motion prior:
-            // this avoids destroying a good KCF correlation model every verify cycle.
-            setMotionFromDetection(d,false);
-            yoloCorrections++;
-            verifyMisses=0;
-            acquireStatus="KCF VERIFIED";
-        }else{
-            // Significant position/scale correction or reacquisition: re-seed KCF.
-            pendingCorrection=d;
+        // If scale changed substantially, reseed the visual template on next frame.
+        int desiredSpan=Math.max(10,Math.min(34,Math.round(box*180f)));
+        if(Math.abs(desiredSpan-templateSpan)>=5){
+            pendingX=d.cx();pendingY=d.cy();pendingBox=box;pendingReseed=true;
         }
     }
 
-    public synchronized void onYoloMiss(){
-        verifyMisses++;
+    public synchronized void onYoloMiss(){ verifyMisses++; }
+
+    private void ensureBuffers(int n){
+        if(gray==null||gray.length!=n)gray=new byte[n];
+        if(prevGray==null||prevGray.length!=n){
+            prevGray=new byte[n];
+            havePrev=false;
+        }
+    }
+
+    private void toGray(int[] src,byte[] dst,int n){
+        for(int i=0;i<n;i++){
+            int c=src[i];
+            int r=(c>>16)&255,g=(c>>8)&255,b=c&255;
+            dst[i]=(byte)((r*77+g*150+b*29)>>8);
+        }
+    }
+
+    private void copyCurrentToPrev(int n){
+        System.arraycopy(gray,0,prevGray,0,n);
+        havePrev=true;
+    }
+
+    private Motion estimateGlobalMotion(byte[] cur,byte[] prev,int w,int h){
+        if(!havePrev)return Motion.NONE;
+
+        int[] xs={w/6,w/3,w/2,2*w/3,5*w/6};
+        int[] ys={h/5,2*h/5,3*h/5,4*h/5};
+        float[] dxs=new float[20],dys=new float[20];
+        int count=0;
+        float scoreSum=0;
+
+        float tx=predX,ty=predY;
+        float ex=Math.max(.14f,box*2.4f),ey=Math.max(.18f,box*3.0f);
+
+        for(int yy:ys){
+            for(int xx:xs){
+                float nx=xx/(float)Math.max(1,w-1);
+                float ny=yy/(float)Math.max(1,h-1);
+                if((locked||coasting||reacquiring)&&Math.abs(nx-tx)<ex&&Math.abs(ny-ty)<ey)continue;
+
+                FlowMatch m=matchPatch(prev,cur,w,h,xx,yy);
+                if(m!=null&&m.score<22f){
+                    dxs[count]=m.dx;dys[count]=m.dy;
+                    scoreSum+=m.score;count++;
+                }
+            }
+        }
+
+        if(count<5)return Motion.NONE;
+
+        float mdx=median(dxs,count),mdy=median(dys,count);
+        int inliers=0;float spread=0;
+        for(int i=0;i<count;i++){
+            float ddx=dxs[i]-mdx,ddy=dys[i]-mdy;
+            float d=(float)Math.sqrt(ddx*ddx+ddy*ddy);
+            if(d<=2.2f){inliers++;spread+=d;}
+        }
+
+        float avgScore=scoreSum/count;
+        float inlierRatio=inliers/(float)count;
+        float avgSpread=inliers>0?spread/inliers:8f;
+        float q=clamp(inlierRatio*(1f-avgScore/40f)*(1f-avgSpread/7f),0f,1f);
+
+        return new Motion(mdx/Math.max(1f,w-1f),mdy/Math.max(1f,h-1f),q,count);
+    }
+
+    private FlowMatch matchPatch(byte[] prev,byte[] cur,int w,int h,int x,int y){
+        if(x<FLOW_PATCH+FLOW_SEARCH||y<FLOW_PATCH+FLOW_SEARCH||
+                x>=w-FLOW_PATCH-FLOW_SEARCH||y>=h-FLOW_PATCH-FLOW_SEARCH)return null;
+
+        float best=Float.MAX_VALUE,second=Float.MAX_VALUE;
+        int bdx=0,bdy=0;
+        for(int dy=-FLOW_SEARCH;dy<=FLOW_SEARCH;dy++){
+            for(int dx=-FLOW_SEARCH;dx<=FLOW_SEARCH;dx++){
+                float s=patchSad(prev,cur,w,x,y,x+dx,y+dy);
+                if(s<best){second=best;best=s;bdx=dx;bdy=dy;}
+                else if(s<second)second=s;
+            }
+        }
+        if(best>=second*.97f)return null;
+        return new FlowMatch(bdx,bdy,best);
+    }
+
+    private float patchSad(byte[] a,byte[] b,int w,int ax,int ay,int bx,int by){
+        int sum=0,n=0;
+        for(int yy=-FLOW_PATCH;yy<=FLOW_PATCH;yy++){
+            int ia=(ay+yy)*w+(ax-FLOW_PATCH);
+            int ib=(by+yy)*w+(bx-FLOW_PATCH);
+            for(int xx=0;xx<FLOW_PATCH*2+1;xx++){
+                sum+=Math.abs((a[ia+xx]&255)-(b[ib+xx]&255));
+                n++;
+            }
+        }
+        return sum/(float)n;
+    }
+
+    private Match searchMultiScale(byte[] g,int w,int h,int cx,int cy,int radius){
+        int[] spans={
+                Math.max(8,Math.round(templateSpan*.82f)),
+                Math.max(8,Math.round(templateSpan*.92f)),
+                templateSpan,
+                Math.min(38,Math.round(templateSpan*1.10f)),
+                Math.min(38,Math.round(templateSpan*1.22f))
+        };
+        Match best=null;
+        for(int span:spans){
+            Match coarse=search(g,w,h,cx,cy,radius,4,span);
+            if(coarse==null)continue;
+            Match fine=search(g,w,h,coarse.x,coarse.y,7,1,span);
+            Match candidate=fine!=null?fine:coarse;
+            if(best==null||candidate.quality>best.quality)best=candidate;
+        }
+        if(best!=null&&best.quality>.74f&&Math.abs(best.span-templateSpan)>=3){
+            templateSpan=best.span;
+            box=clamp(templateSpan/(float)Math.max(1,Math.min(w,h)),.025f,.28f);
+            float side=box*2f;
+            boxW=side;
+            boxH=side;
+        }
+        return best;
+    }
+
+    private Match search(byte[] g,int w,int h,int cx,int cy,int radius,int step,int span){
+        Match best=null;
+        int minX=Math.max(span+2,cx-radius),maxX=Math.min(w-span-3,cx+radius);
+        int minY=Math.max(span+2,cy-radius),maxY=Math.min(h-span-3,cy+radius);
+
+        for(int yy=minY;yy<=maxY;yy+=step){
+            for(int xx=minX;xx<=maxX;xx+=step){
+                float q=znccQuality(g,w,h,xx,yy,span);
+                if(best==null||q>best.quality)best=new Match(xx,yy,q,span);
+            }
+        }
+        return best;
+    }
+
+    private float znccQuality(byte[] g,int w,int h,int cx,int cy,int span){
+        float mean=0f;
+        int n=GRID*GRID;
+
+        for(int gy=0;gy<GRID;gy++){
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                mean+=(g[yy*w+xx]&255);
+            }
+        }
+        mean/=n;
+
+        float num=0f,den=0f;
+        int k=0;
+        for(int gy=0;gy<GRID;gy++){
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++,k++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                float a=(g[yy*w+xx]&255)-mean;
+                float b=template[k]-templateMean;
+                num+=a*b;
+                den+=a*a;
+            }
+        }
+
+        if(den<1f||templateStd<1f)return 0f;
+        float corr=(float)(num/(Math.sqrt(den)*templateStd));
+        return clamp((corr+1f)*.5f,0f,1f);
+    }
+
+    private boolean extractTemplate(byte[] g,int w,int h,int cx,int cy,float[] out,int span){
+        if(cx<span||cy<span||cx>=w-span||cy>=h-span)return false;
+        int k=0;
+        for(int gy=0;gy<GRID;gy++){
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++,k++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                out[k]=g[yy*w+xx]&255;
+            }
+        }
+        return true;
+    }
+
+    private void adaptTemplate(byte[] g,int w,int h,int cx,int cy,float alpha,int span){
+        if(cx<span||cy<span||cx>=w-span||cy>=h-span)return;
+        int k=0;
+        for(int gy=0;gy<GRID;gy++){
+            int yy=cy+((gy-GRID/2)*span*2)/(GRID-1);
+            for(int gx=0;gx<GRID;gx++,k++){
+                int xx=cx+((gx-GRID/2)*span*2)/(GRID-1);
+                float v=g[yy*w+xx]&255;
+                template[k]=(1f-alpha)*template[k]+alpha*v;
+            }
+        }
+        recomputeTemplateStats();
+    }
+
+    private void recomputeTemplateStats(){
+        float m=0f;
+        for(float v:template)m+=v;
+        m/=template.length;
+        float ss=0f;
+        for(float v:template){
+            float d=v-m;ss+=d*d;
+        }
+        templateMean=m;
+        templateStd=(float)Math.sqrt(Math.max(1f,ss));
+    }
+
+    private int spanFromBox(float halfBox,int w,int h){
+        int span=Math.round(clamp(halfBox,.035f,.22f)*Math.min(w,h));
+        return Math.max(10,Math.min(34,span));
+    }
+
+    private int safeX(int x,int w){
+        return Math.max(templateSpan+2,Math.min(w-templateSpan-3,x));
+    }
+
+    private int safeY(int y,int h){
+        return Math.max(templateSpan+2,Math.min(h-templateSpan-3,y));
+    }
+
+    private float computeFlowWeight(float q,float angularSpeedDeg){
+        float w=clamp((q-.20f)/.60f,0f,.68f);
+        if(angularSpeedDeg>100f)w*=.45f;
+        else if(angularSpeedDeg>60f)w*=.68f;
+        return clamp(w,0f,.68f);
+    }
+
+    private synchronized void applyCameraShift(float dx,float dy){
+        if(Math.abs(dx)+Math.abs(dy)<.000001f)return;
+        x=clamp(x+dx);y=clamp(y+dy);
+        predX=clamp(predX+dx);predY=clamp(predY+dy);
+        renderX=predX;renderY=predY;
+    }
+
+    private synchronized void updateMeasurement(float nx,float ny,float q){
+        long now=System.nanoTime();
+        float dt=lastNs==0?.016f:Math.max(.004f,Math.min(.12f,(now-lastNs)/1e9f));
+        lastNs=now;
+
+        float mx=(nx-x)/dt,my=(ny-y)/dt;
+        float va=q>.75f?.30f:.18f;
+        vx=(1f-va)*vx+va*mx;
+        vy=(1f-va)*vy+va*my;
+
+        float pa=q>.75f?.48f:.30f;
+        x=(1f-pa)*x+pa*nx;
+        y=(1f-pa)*y+pa*ny;
+
+        float lead=.055f;
+        predX=clamp(x+vx*lead);predY=clamp(y+vy*lead);
+        renderX=predX;renderY=predY;
+        confidence=.78f*confidence+.22f*q;
+    }
+
+    private synchronized void coast(){
+        long now=System.nanoTime();
+        float dt=lastNs==0?.016f:Math.min(.08f,(now-lastNs)/1e9f);
+        predX=clamp(x+vx*(dt+.055f));
+        predY=clamp(y+vy*(dt+.055f));
+        renderX=predX;renderY=predY;
+        confidence*=.955f;
     }
 
     public synchronized void predictOnly(){
         if(!(locked||coasting||reacquiring))return;
-
-        if(coasting||reacquiring){
-            float[] mp=predictMotion(frameIndex);
-            if(mp!=null){
-                renderX=clamp(mp[0]);
-                renderY=clamp(mp[1]);
-            }
-        }else{
-            renderX=predX;
-            renderY=predY;
+        float dx=0,dy=0;
+        if(imu!=null&&useImu){
+            float[] d=imu.peekDisplayAppliedShift();
+            dx=d[0];dy=d[1];
         }
-        updateErrors();
+        renderX=clamp(predX+dx);
+        renderY=clamp(predY+dy);
     }
 
-    private void ensureFrame(int[] pixels,int w,int h){
-        int need=w*h*3;
-        if(frameMat==null||frameW!=w||frameH!=h||bgr==null||bgr.length!=need){
-            if(frameMat!=null){
-                try{frameMat.close();}catch(Throwable ignored){}
-            }
-            frameW=w;frameH=h;
-            bgr=new byte[need];
-            frameMat=new Mat(h,w,CV_8UC3);
-        }
-
-        int j=0;
-        for(int c:pixels){
-            bgr[j++]=(byte)(c&255);          // B
-            bgr[j++]=(byte)((c>>8)&255);     // G
-            bgr[j++]=(byte)((c>>16)&255);    // R
-        }
-        frameMat.data().position(0).put(bgr);
+    private static float median(float[] a,int n){
+        float[] c=Arrays.copyOf(a,n);
+        Arrays.sort(c);
+        return (n&1)==1?c[n/2]:(c[n/2-1]+c[n/2])*.5f;
     }
 
-    private boolean initKcfFromDetection(YoloDetector.Detection d){
-        if(frameMat==null||frameW<2||frameH<2)return false;
-
-        int l=clampInt(Math.round(d.left*frameW),0,frameW-2);
-        int t=clampInt(Math.round(d.top*frameH),0,frameH-2);
-        int r=clampInt(Math.round(d.right*frameW),l+2,frameW);
-        int b=clampInt(Math.round(d.bottom*frameH),t+2,frameH);
-
-        Rect rect=new Rect(l,t,Math.max(2,r-l),Math.max(2,b-t));
-        clampRect(rect,frameW,frameH);
-
-        try{
-            closeKcf();
-            kcf=TrackerKCF.create();
-            kcf.init(frameMat,rect);
-
-            x=predX=renderX=(rect.x()+rect.width()*.5f)/Math.max(1f,frameW);
-            y=predY=renderY=(rect.y()+rect.height()*.5f)/Math.max(1f,frameH);
-            float nw=rect.width()/Math.max(1f,frameW);
-            float nh=rect.height()/Math.max(1f,frameH);
-            boxW=clamp(nw,.02f,.85f);
-            boxH=clamp(nh,.02f,.85f);
-            box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
-            updateErrors();
-            return true;
-        }catch(Throwable err){
-            kcfError="init: "+err.getClass().getSimpleName()+": "+String.valueOf(err.getMessage());
-            closeKcf();
-            return false;
-        }finally{
-            try{rect.close();}catch(Throwable ignored){}
-        }
-    }
-
-    private void setMotionFromDetection(YoloDetector.Detection d,boolean resetVelocity){
-        float nx=d.cx(),ny=d.cy();
-        float nw=Math.max(.008f,d.right-d.left);
-        float nh=Math.max(.008f,d.bottom-d.top);
-
-        if(!motionValid||resetVelocity){
-            motionVx=motionVy=0f;
-        }else{
-            long dt=Math.max(1,frameIndex-motionFrame);
-            float mvx=(nx-motionX)/dt;
-            float mvy=(ny-motionY)/dt;
-            final float a=.35f;
-            motionVx=(1f-a)*motionVx+a*mvx;
-            motionVy=(1f-a)*motionVy+a*mvy;
-        }
-
-        motionX=nx;motionY=ny;
-        motionW=nw;motionH=nh;
-        motionFrame=frameIndex;
-        motionValid=true;
-
-        vx=motionVx*Math.max(1f,trackerFps);
-        vy=motionVy*Math.max(1f,trackerFps);
-    }
-
-    private float[] predictMotion(long atFrame){
-        if(!motionValid)return null;
-        long dt=Math.max(0,atFrame-motionFrame);
-        float decay=(float)Math.pow(.985,Math.max(0,dt-1));
-        return new float[]{
-                clamp(motionX+motionVx*dt*decay),
-                clamp(motionY+motionVy*dt*decay)
-        };
-    }
-
-    private void enterCoast(String reason){
-        locked=false;
-        acquiring=false;
-        coasting=true;
-        reacquiring=autoReacq;
-        lostFrames=Math.max(1,lostFrames);
-        acquireStatus=reason;
-    }
-
-    private void updateErrors(){
-        errorX=(renderX-.5f)*2f;
-        errorY=(renderY-.5f)*2f;
-        errorEmaX=.92f*errorEmaX+.08f*errorX;
-        errorEmaY=.92f*errorEmaY+.08f*errorY;
-
-        float conf=Math.max(.05f,confidence);
-        filterSigmaX=filterSigmaY=.004f+(1f-conf)*.025f;
-        filterInnovation=motionValid
-                ?(float)Math.hypot((renderX-motionX)*frameW,(renderY-motionY)*frameH)
-                :0f;
-
-        imuWeight=0f;
-        flowWeight=0f;
-        flowQuality=0f;
-        flowPoints=0;
-    }
-
-    private void closeKcf(){
-        if(kcf!=null){
-            try{kcf.close();}catch(Throwable ignored){}
-            kcf=null;
-        }
-    }
-
-    private static void clampRect(Rect r,int w,int h){
-        int x=clampInt(r.x(),0,Math.max(0,w-2));
-        int y=clampInt(r.y(),0,Math.max(0,h-2));
-        int rw=Math.max(2,Math.min(r.width(),w-x));
-        int rh=Math.max(2,Math.min(r.height(),h-y));
-        r.x(x);r.y(y);r.width(rw);r.height(rh);
-    }
-
-    private static int clampInt(int v,int lo,int hi){
-        return Math.max(lo,Math.min(hi,v));
-    }
-    private static float clamp(float v){return Math.max(0f,Math.min(1f,v));}
+    private static float clamp(float v){return Math.max(0,Math.min(1,v));}
     private static float clamp(float v,float lo,float hi){return Math.max(lo,Math.min(hi,v));}
+
+    private static final class Match{
+        final int x,y,span;final float quality;
+        Match(int x,int y,float q,int span){this.x=x;this.y=y;this.quality=q;this.span=span;}
+    }
+
+    private static final class FlowMatch{
+        final int dx,dy;final float score;
+        FlowMatch(int dx,int dy,float s){this.dx=dx;this.dy=dy;this.score=s;}
+    }
+
+    private static final class Motion{
+        static final Motion NONE=new Motion(0,0,0,0);
+        final float dx,dy,quality;final int points;
+        Motion(float dx,float dy,float q,int p){this.dx=dx;this.dy=dy;this.quality=q;this.points=p;}
+    }
 }
