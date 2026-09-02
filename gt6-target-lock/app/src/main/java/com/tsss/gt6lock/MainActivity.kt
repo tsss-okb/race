@@ -1,172 +1,485 @@
 package com.tsss.gt6lock
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
-import android.graphics.RectF
-import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.hardware.camera2.*
-import android.media.Image
-import android.media.ImageReader
-import android.os.*
+import android.os.Bundle
+import android.os.Process
+import android.os.SystemClock
 import android.util.Range
 import android.util.Size
-import android.view.*
+import android.view.Surface
+import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.core.SessionConfig
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.min
+import kotlin.math.sqrt
 
-class MainActivity : Activity(), SensorEventListener {
-    private lateinit var root: FrameLayout
-    private lateinit var previewHost: FrameLayout
-    private lateinit var texture: TextureView
+/**
+ * Fusion v2:
+ * - PlaneAimPhone CameraX/60fps/Y-plane architecture
+ * - C++/NDK hot-path tracker
+ * - YOLO26 only in SEARCH/REACQUIRE
+ * - IMU is avionics/prediction data only and never rotates the video.
+ */
+class MainActivity : ComponentActivity(), SensorEventListener {
+    private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
-    private lateinit var cameraThread: HandlerThread
-    private lateinit var cameraHandler: Handler
-    private lateinit var trackerThread: HandlerThread
-    private lateinit var trackerHandler: Handler
+    private lateinit var cameraExecutor: ExecutorService
+    private lateinit var detectorExecutor: ExecutorService
+
+    private val nativeTracker = NativeTracker()
+    private val luma = FastLumaExtractor(maxOutputWidth = 320, ringSize = 3)
+    private val inferenceBusy = AtomicBoolean(false)
+    private val prioritySet = AtomicBoolean(false)
+
+    @Volatile private var detector: Yolo26OnnxDetector? = null
+    @Volatile private var boundCamera: Camera? = null
+    @Volatile private var tracking = false
+    @Volatile private var latestDetections: List<Detection> = emptyList()
+    @Volatile private var pendingTap: Pair<Float, Float>? = null
+    @Volatile private var pendingReacquire: Detection? = null
+    @Volatile private var manualSearchRequested = false
+    @Volatile private var lastTrackDetection: Detection? = null
+    @Volatile private var stateLabel = "SEARCH"
+
+    private var lastFrameTs = 0L
+    private var lastCameraTs = 0L
+    private var cameraFpsEma = 0f
+    private var trackCounter = 0
+    private var trackWindowStart = SystemClock.elapsedRealtime()
+    private var trackFps = 0f
+    private var frameSerial = 0L
+    private var lastYoloRunMs = 0L
+    private var lastUiMs = 0L
+    private var lastTapMs = 0L
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
     private var gyroSensor: Sensor? = null
     private var accelSensor: Sensor? = null
-    private var avionicsHud = true
-
-    private var sensorRollDeg = 0f
-    private var sensorPitchDeg = 0f
-    private var sensorHeadingDeg = 0f
-    private var gyroPDeg = 0f
-    private var gyroQDeg = 0f
-    private var gyroRDeg = 0f
+    private var rawRoll = 0f
+    private var rawPitch = 0f
+    private var rawHeading = 0f
+    private var zeroRoll = 0f
+    private var zeroPitch = 0f
+    private var zeroHeading = 0f
+    private var calibrated = false
+    private var gyroP = 0f
+    private var gyroQ = 0f
+    private var gyroR = 0f
     private var gLoad = 1f
 
-    private var latestAttitudeMatrix: FloatArray? = null
-    private var bodyZeroMatrix: FloatArray? = null
-    private var bodyCalibrated = false
-
-    private var camera: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
-    private var reader: ImageReader? = null
-    private var cameraCharacteristics: CameraCharacteristics? = null
-    private var currentCameraId = "?"
-    private var previewSize = Size(1280, 720)
-    private var analysisSize = Size(320, 180)
-    private var relativeRotation = 0
-    private var openingCamera = false
-
-    private var backCameraIds: List<String> = emptyList()
-    private var cameraIndex = 0
-    private var fps60 = true
-    private var selectedFpsRange: Range<Int>? = null
-
-    private val tracker = NativeTracker()
-    @Volatile private var tracking = false
-    @Volatile private var pendingTap: Pair<Float, Float>? = null
-    private var lastTs = 0L
-    private var fpsEma = 0f
-    private var lastCameraTs = 0L
-    private var cameraFpsEma = 0f
-    private var cameraFrameCounter = 0
-    private val requestCode = 42
-    private var lastTapMs = 0L
+    private val cameraPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) startCamera()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+
+        cameraExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "GT6-NDK-Track").apply { priority = Thread.MAX_PRIORITY }
+        }
+        detectorExecutor = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "GT6-YOLO-OnDemand").apply { priority = Thread.NORM_PRIORITY }
+        }
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        rotationSensor =
-            sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-                ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+        rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
-        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        previewHost = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
-        texture = TextureView(this)
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        previewView = PreviewView(this).apply {
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+            setBackgroundColor(Color.BLACK)
+        }
         overlay = OverlayView(this)
 
-        previewHost.addView(texture, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-        previewHost.addView(overlay, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-        root.addView(previewHost)
+        root.addView(previewView, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        root.addView(overlay, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         setContentView(root)
 
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitPreviewHost() }
-
-        overlay.onTapImage = { x, y ->
+        overlay.onTapNormalized = { x, y ->
             val now = SystemClock.uptimeMillis()
-            if (now - lastTapMs < 280) {
-                tracker.nativeReset()
-                tracking = false
-                pendingTap = null
+            if (now - lastTapMs < 280L) {
+                resetTracker()
             } else {
                 pendingTap = x to y
             }
             lastTapMs = now
         }
-
-        overlay.onCameraCycle = { runOnUiThread { switchCamera() } }
-
-        overlay.onFpsToggle = {
-            runOnUiThread {
-                val cc = cameraCharacteristics
-                val can60 = cc?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                    ?.any { it.upper >= 60 } == true
-                fps60 = if (can60) !fps60 else false
-                overlay.fpsModeLabel = if (fps60) "60" else if (can60) "30" else "MAX"
-                overlay.invalidate()
-                restartCamera()
-            }
+        overlay.onReset = { resetTracker() }
+        overlay.onSearch = {
+            manualSearchRequested = true
+            lastYoloRunMs = 0L
+            overlay.yoloMode = "MANUAL"
+            overlay.invalidate()
         }
-
-        overlay.onAutoLevelToggle = {
-            runOnUiThread {
-                avionicsHud = !avionicsHud
-                overlay.avionicsHudEnabled = avionicsHud
-                overlay.invalidate()
-            }
-        }
-
-        overlay.axisMode = 0
-
         overlay.onCalibrate = {
-            runOnUiThread { calibrateBodyFrame() }
+            zeroRoll = rawRoll
+            zeroPitch = rawPitch
+            zeroHeading = rawHeading
+            calibrated = true
+            overlay.bodyCalibrated = true
+            overlay.invalidate()
+        }
+        overlay.onHudToggle = {
+            overlay.showAvionics = !overlay.showAvionics
+            overlay.invalidate()
         }
 
-        cameraThread = HandlerThread("camera").also { it.start() }
-        cameraHandler = Handler(cameraThread.looper)
-        trackerThread = HandlerThread("tracker").also { it.start() }
-        trackerHandler = Handler(trackerThread.looper)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startCamera()
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
 
-        texture.surfaceTextureListener = surfaceListener
+    private fun startCamera() {
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            val provider = future.get()
+            if (!tryBind(provider, request60 = true)) {
+                tryBind(provider, request60 = false)
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
 
-        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), requestCode)
+    private fun tryBind(provider: ProcessCameraProvider, request60: Boolean): Boolean {
+        return runCatching {
+            provider.unbindAll()
+
+            val previewBuilder = Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+            if (!request60) previewBuilder.setTargetFrameRate(Range(30, 60))
+            val preview = previewBuilder.build().also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
+
+            val analysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(320, 180))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .build()
+
+            analysis.setAnalyzer(cameraExecutor) { image -> analyzeImage(image) }
+
+            boundCamera = if (request60) {
+                val session = SessionConfig(
+                    useCases = listOf(preview, analysis),
+                    frameRateRange = Range(60, 60)
+                )
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, session)
+            } else {
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            }
+
+            overlay.yoloMode = if (request60) "IDLE / CAM60" else "IDLE / MAX"
+            overlay.invalidate()
+            true
+        }.getOrElse {
+            false
+        }
+    }
+
+    private fun analyzeImage(image: ImageProxy) {
+        try {
+            if (prioritySet.compareAndSet(false, true)) {
+                runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) }
+            }
+
+            val ts = image.imageInfo.timestamp
+            if (lastCameraTs != 0L) {
+                val dt = (ts - lastCameraTs) / 1e9
+                if (dt in 0.004..0.1) {
+                    val f = (1.0 / dt).toFloat()
+                    cameraFpsEma = if (cameraFpsEma == 0f) f else cameraFpsEma * 0.90f + f * 0.10f
+                }
+            }
+            lastCameraTs = ts
+
+            val gray = luma.extract(image) ?: return
+            frameSerial++
+            overlay.sourceAspectRatio = gray.width.toFloat() / gray.height.toFloat()
+
+            pendingReacquire?.let { d ->
+                initFromDetection(gray, d)
+                pendingReacquire = null
+            }
+
+            pendingTap?.let { tap ->
+                val chosen = chooseDetectionAt(tap.first, tap.second)
+                if (chosen != null) initFromDetection(gray, chosen)
+                else initAtTap(gray, tap.first, tap.second)
+                pendingTap = null
+            }
+
+            var trackerConf = 0f
+            var jitter = 0f
+
+            if (tracking) {
+                val dt = if (lastFrameTs == 0L) 1.0 / 60.0
+                else ((gray.timestampNs - lastFrameTs) / 1e9).coerceIn(1.0 / 180.0, 0.10)
+                lastFrameTs = gray.timestampNs
+
+                val out = nativeTracker.nativeProcess(gray.pixels, gray.width, gray.height, dt)
+                val state = out[0].toInt()
+                trackerConf = out[5]
+                jitter = out[6]
+                val misses = out[8].toInt()
+
+                val det = nativeResultToDetection(out, gray.width, gray.height)
+                lastTrackDetection = det
+                overlay.locked = det
+
+                stateLabel = when {
+                    state == 2 -> "REACQUIRE"
+                    trackerConf >= 0.60f && misses == 0 -> "LOCK"
+                    else -> "PREDICT"
+                }
+
+                if (misses > 18) {
+                    resetTrackerInternal(clearDetections = false)
+                }
+
+                trackCounter++
+                val nowTrack = SystemClock.elapsedRealtime()
+                if (nowTrack - trackWindowStart >= 1000L) {
+                    trackFps = trackCounter * 1000f / (nowTrack - trackWindowStart).coerceAtLeast(1L)
+                    trackCounter = 0
+                    trackWindowStart = nowTrack
+                }
+            } else {
+                stateLabel = "SEARCH"
+                lastFrameTs = gray.timestampNs
+            }
+
+            maybeRunYolo(image)
+
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastUiMs >= 65L) {
+                lastUiMs = now
+                overlay.stateLabel = stateLabel
+                overlay.cameraFps = cameraFpsEma
+                overlay.trackFps = trackFps
+                overlay.trackConf = trackerConf
+                overlay.jitterPx = jitter
+                overlay.detections = if (tracking && stateLabel == "LOCK") emptyList() else latestDetections
+                overlay.invalidate()
+            }
+        } finally {
+            image.close()
+        }
+    }
+
+    private fun maybeRunYolo(image: ImageProxy) {
+        val now = SystemClock.elapsedRealtime()
+        val interval = when {
+            manualSearchRequested -> 0L
+            !tracking -> 950L
+            stateLabel == "REACQUIRE" -> 420L
+            stateLabel == "PREDICT" -> 700L
+            else -> Long.MAX_VALUE
+        }
+        if (interval == Long.MAX_VALUE || now - lastYoloRunMs < interval) {
+            if (stateLabel == "LOCK") {
+                overlay.yoloMode = "IDLE"
+                latestDetections = emptyList()
+            }
+            return
+        }
+        if (!inferenceBusy.compareAndSet(false, true)) return
+
+        val rotation = image.imageInfo.rotationDegrees
+        val raw = runCatching { image.toBitmap() }.getOrNull()
+        if (raw == null) {
+            inferenceBusy.set(false)
+            return
+        }
+        val bitmap = if (rotation == 0) raw else {
+            val m = Matrix().apply { postRotate(rotation.toFloat()) }
+            val b = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, false)
+            if (b !== raw) raw.recycle()
+            b
+        }
+
+        lastYoloRunMs = now
+        manualSearchRequested = false
+        overlay.yoloMode = if (tracking) "REACQUIRE" else "SEARCH"
+
+        detectorExecutor.execute {
+            try {
+                val net = detector ?: Yolo26OnnxDetector(this).also { detector = it }
+                val found = if (net.available) net.detect(bitmap) else emptyList()
+                latestDetections = found
+                overlay.yoloBackend = net.backendName
+                overlay.yoloMs = net.lastInferenceMs
+
+                if (tracking && stateLabel != "LOCK" && found.isNotEmpty()) {
+                    val p = lastTrackDetection
+                    val best = if (p != null) {
+                        found.minByOrNull { d ->
+                            hypot((d.cx - p.cx).toDouble(), (d.cy - p.cy).toDouble())
+                        }
+                    } else found.maxByOrNull { it.confidence }
+
+                    if (best != null) {
+                        val dist = p?.let {
+                            hypot((best.cx - it.cx).toDouble(), (best.cy - it.cy).toDouble())
+                        } ?: 0.0
+                        if (p == null || dist < 0.32) pendingReacquire = best
+                    }
+                }
+
+                runOnUiThread {
+                    overlay.detections = found
+                    overlay.yoloMode = if (tracking && stateLabel == "LOCK") "IDLE" else
+                        if (tracking) "REACQUIRE" else "SEARCH"
+                    overlay.invalidate()
+                }
+            } finally {
+                bitmap.recycle()
+                inferenceBusy.set(false)
+            }
+        }
+    }
+
+    private fun chooseDetectionAt(nx: Float, ny: Float): Detection? {
+        val inside = latestDetections
+            .filter { nx in it.x1..it.x2 && ny in it.y1..it.y2 }
+            .maxByOrNull { it.confidence }
+        if (inside != null) return inside
+
+        return latestDetections.minByOrNull {
+            hypot((it.cx - nx).toDouble(), (it.cy - ny).toDouble())
+        }?.takeIf {
+            hypot((it.cx - nx).toDouble(), (it.cy - ny).toDouble()) < 0.10
+        }
+    }
+
+    private fun initFromDetection(gray: FastLumaExtractor.GrayFrame, d: Detection) {
+        val cx = d.cx * gray.width
+        val cy = d.cy * gray.height
+        val bw = (d.width * gray.width).coerceAtLeast(28f)
+        val bh = (d.height * gray.height).coerceAtLeast(24f)
+        tracking = nativeTracker.nativeInit(gray.pixels, gray.width, gray.height, cx, cy, bw, bh)
+        if (tracking) {
+            lastTrackDetection = d
+            overlay.locked = d
+            stateLabel = "LOCK"
+            latestDetections = emptyList()
+            lastFrameTs = gray.timestampNs
+        }
+    }
+
+    private fun initAtTap(gray: FastLumaExtractor.GrayFrame, nx: Float, ny: Float) {
+        val box = min(gray.width, gray.height) * 0.18f
+        tracking = nativeTracker.nativeInit(
+            gray.pixels,
+            gray.width,
+            gray.height,
+            nx * gray.width,
+            ny * gray.height,
+            box * 1.25f,
+            box
+        )
+        if (tracking) {
+            val w = box * 1.25f / gray.width
+            val h = box / gray.height
+            val d = Detection(
+                (nx - w * 0.5f).coerceIn(0f, 1f),
+                (ny - h * 0.5f).coerceIn(0f, 1f),
+                (nx + w * 0.5f).coerceIn(0f, 1f),
+                (ny + h * 0.5f).coerceIn(0f, 1f),
+                0.6f, -1, "SMART"
+            )
+            lastTrackDetection = d
+            overlay.locked = d
+            stateLabel = "LOCK"
+            lastFrameTs = gray.timestampNs
+        }
+    }
+
+    private fun nativeResultToDetection(out: FloatArray, w: Int, h: Int): Detection {
+        val cx = out[1] / w
+        val cy = out[2] / h
+        val bw = out[3] / w
+        val bh = out[4] / h
+        return Detection(
+            (cx - bw * 0.5f).coerceIn(0f, 1f),
+            (cy - bh * 0.5f).coerceIn(0f, 1f),
+            (cx + bw * 0.5f).coerceIn(0f, 1f),
+            (cy + bh * 0.5f).coerceIn(0f, 1f),
+            out[5].coerceIn(0f, 1f),
+            -1,
+            "LOCK",
+            predicted = out[0].toInt() == 2 || out[8] > 0f
+        )
+    }
+
+    private fun resetTracker() {
+        cameraExecutor.execute { resetTrackerInternal(clearDetections = true) }
+    }
+
+    private fun resetTrackerInternal(clearDetections: Boolean) {
+        nativeTracker.nativeReset()
+        tracking = false
+        pendingTap = null
+        pendingReacquire = null
+        lastTrackDetection = null
+        lastFrameTs = 0L
+        stateLabel = "SEARCH"
+        overlay.locked = null
+        if (clearDetections) latestDetections = emptyList()
+        runOnUiThread {
+            overlay.stateLabel = "SEARCH"
+            overlay.locked = null
+            if (clearDetections) overlay.detections = emptyList()
+            overlay.invalidate()
         }
     }
 
     override fun onResume() {
         super.onResume()
-        rotationSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-        gyroSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-        accelSensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
+        rotationSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        accelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
     }
 
     override fun onPause() {
@@ -174,46 +487,13 @@ class MainActivity : Activity(), SensorEventListener {
         super.onPause()
     }
 
-    private fun transposeMultiply(a: FloatArray, b: FloatArray): FloatArray {
-        val out = FloatArray(9)
-        for (i in 0..2) {
-            for (j in 0..2) {
-                var sum = 0f
-                for (k in 0..2) {
-                    sum += a[k * 3 + i] * b[k * 3 + j]
-                }
-                out[i * 3 + j] = sum
-            }
-        }
-        return out
-    }
-
-    private fun calibrateBodyFrame() {
-        val m = latestAttitudeMatrix ?: return
-        bodyZeroMatrix = m.copyOf()
-        bodyCalibrated = true
-        overlay.bodyCalibrated = true
-        overlay.invalidate()
-    }
-
-    private fun remapGyroToScreen(x: Float, y: Float, z: Float): FloatArray {
-        return when (display?.rotation ?: Surface.ROTATION_0) {
-            Surface.ROTATION_90 -> floatArrayOf(y, -x, z)
-            Surface.ROTATION_270 -> floatArrayOf(-y, x, z)
-            Surface.ROTATION_180 -> floatArrayOf(-x, -y, z)
-            else -> floatArrayOf(x, y, z)
-        }
-    }
-
     override fun onSensorChanged(event: SensorEvent) {
         when (event.sensor.type) {
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
                 val r = FloatArray(9)
                 SensorManager.getRotationMatrixFromVector(r, event.values)
-
                 val remapped = FloatArray(9)
-                val rot = display?.rotation ?: Surface.ROTATION_0
-                when (rot) {
+                when (display?.rotation ?: Surface.ROTATION_0) {
                     Surface.ROTATION_90 ->
                         SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remapped)
                     Surface.ROTATION_270 ->
@@ -222,564 +502,52 @@ class MainActivity : Activity(), SensorEventListener {
                         SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, remapped)
                     else -> System.arraycopy(r, 0, remapped, 0, 9)
                 }
+                val o = FloatArray(3)
+                SensorManager.getOrientation(remapped, o)
+                rawHeading = ((Math.toDegrees(o[0].toDouble()).toFloat() + 360f) % 360f)
+                rawPitch = Math.toDegrees(o[1].toDouble()).toFloat()
+                rawRoll = Math.toDegrees(o[2].toDouble()).toFloat()
 
-                latestAttitudeMatrix = remapped.copyOf()
-
-                // First stable app pose becomes the mount/body zero; CAL can reset it any time.
-                if (bodyZeroMatrix == null) {
-                    bodyZeroMatrix = remapped.copyOf()
-                    bodyCalibrated = true
-                }
-
-                val rawOrientation = FloatArray(3)
-                SensorManager.getOrientation(remapped, rawOrientation)
-                sensorHeadingDeg = ((Math.toDegrees(rawOrientation[0].toDouble()).toFloat() + 360f) % 360f)
-
-                val relative = transposeMultiply(bodyZeroMatrix!!, remapped)
-                val relOrientation = FloatArray(3)
-                SensorManager.getOrientation(relative, relOrientation)
-
-                // Body-frame attitude: current pose relative to calibrated phone mount.
-                sensorPitchDeg = Math.toDegrees(relOrientation[1].toDouble()).toFloat()
-                sensorRollDeg = -Math.toDegrees(relOrientation[2].toDouble()).toFloat()
+                overlay.rollDeg = wrap180(rawRoll - zeroRoll)
+                overlay.pitchDeg = wrap180(rawPitch - zeroPitch)
+                overlay.headingDeg = ((rawHeading - zeroHeading + 360f) % 360f)
             }
-
             Sensor.TYPE_GYROSCOPE -> {
-                val s = remapGyroToScreen(event.values[0], event.values[1], event.values[2])
                 val k = (180.0 / Math.PI).toFloat()
-
-                // Phone camera looks along -screen-Z. Convert screen axes to aircraft-like P/Q/R:
-                // P roll about camera/forward axis, Q pitch, R yaw.
-                var p = -s[2] * k
-                var q = s[0] * k
-                var r = -s[1] * k
-
-                if (kotlin.math.abs(p) < 0.25f) p = 0f
-                if (kotlin.math.abs(q) < 0.25f) q = 0f
-                if (kotlin.math.abs(r) < 0.25f) r = 0f
-
-                gyroPDeg = 0.82f * gyroPDeg + 0.18f * p
-                gyroQDeg = 0.82f * gyroQDeg + 0.18f * q
-                gyroRDeg = 0.82f * gyroRDeg + 0.18f * r
+                val gx = event.values[0] * k
+                val gy = event.values[1] * k
+                val gz = event.values[2] * k
+                gyroP = 0.84f * gyroP + 0.16f * gz
+                gyroQ = 0.84f * gyroQ + 0.16f * gx
+                gyroR = 0.84f * gyroR - 0.16f * gy
+                overlay.pDeg = if (abs(gyroP) < 0.25f) 0f else gyroP
+                overlay.qDeg = if (abs(gyroQ) < 0.25f) 0f else gyroQ
+                overlay.rDeg = if (abs(gyroR) < 0.25f) 0f else gyroR
             }
-
             Sensor.TYPE_ACCELEROMETER -> {
-                val ax = event.values[0]
-                val ay = event.values[1]
-                val az = event.values[2]
-                gLoad = (kotlin.math.sqrt(ax * ax + ay * ay + az * az) / 9.80665f)
+                val x = event.values[0]
+                val y = event.values[1]
+                val z = event.values[2]
+                gLoad = sqrt(x * x + y * y + z * z) / 9.80665f
+                overlay.gLoad = gLoad
             }
         }
+    }
 
-        overlay.sensorRollDegrees = sensorRollDeg
-        overlay.sensorPitchDegrees = sensorPitchDeg
-        overlay.sensorHeadingDegrees = sensorHeadingDeg
-        overlay.gyroPDeg = gyroPDeg
-        overlay.gyroQDeg = gyroQDeg
-        overlay.gyroRDeg = gyroRDeg
-        overlay.gLoad = gLoad
-        overlay.bodyCalibrated = bodyCalibrated
-        overlay.avionicsHudEnabled = avionicsHud
-        overlay.invalidate()
+    private fun wrap180(v: Float): Float {
+        var x = v
+        while (x > 180f) x -= 360f
+        while (x < -180f) x += 360f
+        return x
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    // IMU is avionics data only. It must never rotate/mirror the camera frame.
-    private fun applySensorLevel() {
-        texture.rotation = 0f
-        texture.scaleX = 1f
-        texture.scaleY = 1f
-        overlay.levelCorrectionDegrees = 0f
-        overlay.levelScale = 1f
-        overlay.avionicsHudEnabled = avionicsHud
-        overlay.invalidate()
-    }
-
-    private fun fitPreviewHost() {
-        if (root.width <= 0 || root.height <= 0) return
-        val lp = (previewHost.layoutParams as? FrameLayout.LayoutParams)
-            ?: FrameLayout.LayoutParams(root.width, root.height)
-        lp.width = root.width
-        lp.height = root.height
-        lp.gravity = Gravity.CENTER
-        previewHost.layoutParams = lp
-        configurePreviewTransform(root.width, root.height)
-        applySensorLevel()
-        syncOverlayCameraMapping(root.width, root.height)
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == this.requestCode &&
-            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED &&
-            texture.isAvailable
-        ) openCamera()
-    }
-
-    private val surfaceListener = object : TextureView.SurfaceTextureListener {
-        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                openCamera()
-            }
-        }
-
-        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-            configurePreviewTransform(w, h)
-            applySensorLevel()
-            syncOverlayCameraMapping(w, h)
-        }
-
-        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-            closeCamera()
-            return true
-        }
-
-        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-    }
-
-    private fun refreshCameraList(cm: CameraManager) {
-        val ids = cm.cameraIdList.filter { id ->
-            val cc = cm.getCameraCharacteristics(id)
-            cc.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        }
-
-        fun score(id: String): Double {
-            val cc = cm.getCameraCharacteristics(id)
-            val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: floatArrayOf()
-            val focal = focals.firstOrNull() ?: 0f
-            val physical = cc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-            val area = if (physical != null) physical.width * physical.height else 0f
-            val ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
-            val has60 = ranges.any { it.upper >= 60 }
-
-            val focalClass = when {
-                focal in 3.0f..8.5f -> 200000.0
-                focal in 2.5f..9.5f -> 80000.0
-                else -> 0.0
-            }
-            val fpsClass = if (has60) 1000000.0 else 0.0
-            return fpsClass + focalClass + area * 1000.0 + if (id == "0") 100.0 else 0.0
-        }
-
-        backCameraIds = ids.sortedByDescending { score(it) }
-        if (backCameraIds.isEmpty()) return
-        if (cameraIndex !in backCameraIds.indices) cameraIndex = 0
-    }
-
-    private fun switchCamera() {
-        val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        refreshCameraList(cm)
-        if (backCameraIds.size <= 1) {
-            overlay.cameraLabel = "Одна задняя камера доступна через Camera2"
-            overlay.invalidate()
-            return
-        }
-        cameraIndex = (cameraIndex + 1) % backCameraIds.size
-        restartCamera()
-    }
-
-    private fun restartCamera() {
-        tracker.nativeReset()
-        tracking = false
-        pendingTap = null
-        lastTs = 0L
-        fpsEma = 0f
-        lastCameraTs = 0L
-        cameraFpsEma = 0f
-        cameraFrameCounter = 0
-        closeCamera()
-        cameraHandler.postDelayed({ openCamera() }, 220)
-    }
-
-    private fun closeCamera() {
-        try { session?.close() } catch (_: Exception) {}
-        session = null
-        try { camera?.close() } catch (_: Exception) {}
-        camera = null
-        try { reader?.close() } catch (_: Exception) {}
-        reader = null
-        openingCamera = false
-    }
-
-    private fun openCamera() {
-        if (openingCamera || camera != null || !texture.isAvailable) return
-
-        val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        refreshCameraList(cm)
-        if (backCameraIds.isEmpty()) {
-            overlay.cameraLabel = "Задняя камера не найдена"
-            overlay.invalidate()
-            return
-        }
-
-        val id = backCameraIds[cameraIndex]
-        currentCameraId = id
-        val cc = cm.getCameraCharacteristics(id)
-        cameraCharacteristics = cc
-        val map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        if (map == null) {
-            overlay.cameraLabel = "CAM $id: нет StreamConfigurationMap"
-            overlay.invalidate()
-            return
-        }
-
-        val yuv = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
-        val previews = map.getOutputSizes(SurfaceTexture::class.java)
-        if (yuv == null || previews == null) {
-            overlay.cameraLabel = "CAM $id: нет совместимого видеорежима"
-            overlay.invalidate()
-            return
-        }
-
-        analysisSize = choose16x9Near(yuv, 320, 180)
-        previewSize = choose16x9Near(previews, 1280, 720)
-
-        overlay.imageW = analysisSize.width
-        overlay.imageH = analysisSize.height
-        relativeRotation = calculateRelativeRotation(cc)
-
-        val ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
-        val maxFps = ranges.maxOfOrNull { it.upper } ?: 0
-        val has60 = maxFps >= 60
-        fps60 = has60
-        overlay.fpsModeLabel = if (has60) "60" else "MAX$maxFps"
-
-        val caps = cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-        val hs = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO)
-        val highRanges = try { map.highSpeedVideoFpsRanges } catch (_: Exception) { emptyArray() }
-        val highMax = highRanges.maxOfOrNull { it.upper } ?: 0
-
-        val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-        val focalText = focals?.joinToString("/") { "%.1f".format(it) } ?: "?"
-        val sensorOrientation = cc.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: -1
-        val displayRot = when (display?.rotation ?: Surface.ROTATION_0) {
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-
-        overlay.cameraLabel =
-            "CAM $id  " + focalText + "mm  SENSOR " + sensorOrientation + "° DISP " + displayRot +
-            "° REL " + relativeRotation + "°  • VIEW " +
-            previewSize.width + "×" + previewSize.height +
-            "  TRACK " + analysisSize.width + "×" + analysisSize.height +
-            "  • AE MAX " + maxFps +
-            (if (hs) "  HS " + highMax else "  HS —") + "  • VIDEO=-90° FIXED"
-        overlay.invalidate()
-
-        reader = ImageReader.newInstance(
-            analysisSize.width,
-            analysisSize.height,
-            android.graphics.ImageFormat.YUV_420_888,
-            2
-        ).apply {
-            setOnImageAvailableListener({ r ->
-                r.acquireLatestImage()?.use { processImage(it) }
-            }, cameraHandler)
-        }
-
-        openingCamera = true
-        try {
-            @Suppress("MissingPermission")
-            cm.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(c: CameraDevice) {
-                    openingCamera = false
-                    camera = c
-                    configurePreviewTransform(texture.width, texture.height)
-                    applySensorLevel()
-                    startSession(cc)
-                }
-
-                override fun onDisconnected(c: CameraDevice) {
-                    openingCamera = false
-                    c.close()
-                    if (camera === c) camera = null
-                }
-
-                override fun onError(c: CameraDevice, error: Int) {
-                    openingCamera = false
-                    c.close()
-                    if (camera === c) camera = null
-                    overlay.post {
-                        overlay.cameraLabel = "CAM $id ERROR $error"
-                        overlay.invalidate()
-                    }
-                }
-            }, cameraHandler)
-        } catch (e: Exception) {
-            openingCamera = false
-            overlay.cameraLabel = "CAM $id open: " + e.javaClass.simpleName
-            overlay.invalidate()
-        }
-    }
-
-    private fun choose16x9Near(sizes: Array<Size>, wantW: Int, wantH: Int): Size {
-        val exactAspect = sizes.filter { it.width * 9 == it.height * 16 }
-        val pool = if (exactAspect.isNotEmpty()) exactAspect else sizes.toList()
-        return pool.minByOrNull {
-            abs(it.width - wantW) + abs(it.height - wantH)
-        } ?: Size(wantW, wantH)
-    }
-
-    private fun calculateRelativeRotation(cc: CameraCharacteristics): Int {
-        val sensor = cc.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        val displayDegrees = when (display?.rotation ?: Surface.ROTATION_0) {
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-        return (sensor - displayDegrees + 360) % 360
-    }
-
-    private fun syncOverlayCameraMapping(viewW: Int, viewH: Int) {
-        if (viewW <= 0 || viewH <= 0) return
-
-        // TextureView first stretches the camera texture into its view bounds and then
-        // applies getTransform(). Reuse that *exact* transform for tracker boxes/taps.
-        val textureTransform = Matrix()
-        texture.getTransform(textureTransform)
-
-        val displayedCorners = floatArrayOf(
-            0f, 0f,
-            viewW.toFloat(), 0f,
-            viewW.toFloat(), viewH.toFloat(),
-            0f, viewH.toFloat()
-        )
-        textureTransform.mapPoints(displayedCorners)
-
-        overlay.setCameraMapping(
-            analysisSize.width,
-            analysisSize.height,
-            displayedCorners
-        )
-    }
-
-    private fun configurePreviewTransform(viewW: Int, viewH: Int) {
-        if (viewW <= 0 || viewH <= 0) return
-        val cc = cameraCharacteristics ?: return
-
-        // Keep the hardware orientation only for diagnostics.
-        relativeRotation = calculateRelativeRotation(cc)
-
-        // User-requested deterministic mode:
-        // rotate the camera video stream LEFT by exactly 90 degrees.
-        // This is the only video rotation in the app.
-        val matrix = Matrix()
-        val cx = viewW / 2f
-        val cy = viewH / 2f
-        val viewRect = RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
-
-        // After a 90° rotation width/height are swapped.
-        val rotatedBuffer = RectF(
-            0f,
-            0f,
-            previewSize.height.toFloat(),
-            previewSize.width.toFloat()
-        )
-        rotatedBuffer.offset(cx - rotatedBuffer.centerX(), cy - rotatedBuffer.centerY())
-
-        // Fill the screen while preserving the rotated camera geometry.
-        matrix.setRectToRect(viewRect, rotatedBuffer, Matrix.ScaleToFit.FILL)
-        val scale = maxOf(
-            viewW.toFloat() / previewSize.height.toFloat(),
-            viewH.toFloat() / previewSize.width.toFloat()
-        )
-        matrix.postScale(scale, scale, cx, cy)
-        matrix.postRotate(-90f, cx, cy)
-
-        texture.setTransform(matrix)
-        applySensorLevel()
-        syncOverlayCameraMapping(viewW, viewH)
-        overlay.mappingLabel = "VIDEO L90"
-        overlay.invalidate()
-    }
-
-    private fun startSession(cc: CameraCharacteristics) {
-        val st = texture.surfaceTexture ?: return
-        st.setDefaultBufferSize(previewSize.width, previewSize.height)
-        val preview = Surface(st)
-        val analysis = reader?.surface ?: return
-        val cam = camera ?: return
-
-        try {
-            cam.createCaptureSession(
-                listOf(preview, analysis),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(s: CameraCaptureSession) {
-                        session = s
-                        try {
-                            selectedFpsRange = chooseFps(cc, fps60)
-                            val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                addTarget(preview)
-                                addTarget(analysis)
-
-                                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-
-                                val af = cc.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-                                if (af.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)) {
-                                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                                }
-
-                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                                selectedFpsRange?.let {
-                                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
-                                }
-
-                                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                            }.build()
-
-                            s.setRepeatingRequest(req, null, cameraHandler)
-
-                            val fpsText = selectedFpsRange?.let { it.lower.toString() + "-" + it.upper.toString() } ?: "AUTO"
-                            overlay.post {
-                                overlay.cameraHzLabel = fpsText
-                                overlay.invalidate()
-                            }
-                        } catch (e: Exception) {
-                            overlay.post {
-                                overlay.cameraLabel = "Session: " + e.javaClass.simpleName
-                                overlay.invalidate()
-                            }
-                        }
-                    }
-
-                    override fun onConfigureFailed(s: CameraCaptureSession) {
-                        overlay.post {
-                            overlay.cameraLabel = "Camera session configure failed"
-                            overlay.invalidate()
-                        }
-                    }
-                },
-                cameraHandler
-            )
-        } catch (e: Exception) {
-            overlay.cameraLabel = "Create session: " + e.javaClass.simpleName
-            overlay.invalidate()
-        }
-    }
-
-    private fun chooseFps(cc: CameraCharacteristics, want60: Boolean): Range<Int>? {
-        val rs = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return null
-
-        if (want60) {
-            val sixty = rs.filter { it.upper >= 60 }
-            if (sixty.isNotEmpty()) {
-                return sixty.maxByOrNull { it.lower * 1000 - abs(it.upper - 60) }
-            }
-        }
-
-        return rs.maxByOrNull { it.upper * 1000 + it.lower }
-    }
-
-    private fun processImage(img: Image) {
-        val plane = img.planes[0]
-        val buf = plane.buffer
-        val w = img.width
-        val h = img.height
-        val y = ByteArray(w * h)
-
-        if (plane.pixelStride == 1 && plane.rowStride == w) {
-            buf.get(y)
-        } else {
-            val row = ByteArray(plane.rowStride)
-            var out = 0
-            for (r in 0 until h) {
-                val n = minOf(plane.rowStride, buf.remaining())
-                if (n <= 0) break
-                buf.get(row, 0, n)
-                var c = 0
-                while (c < w && c * plane.pixelStride < n) {
-                    y[out++] = row[c * plane.pixelStride]
-                    c++
-                }
-                while (c < w && out < y.size) {
-                    y[out++] = 0
-                    c++
-                }
-            }
-        }
-
-        val ts = img.timestamp
-        if (lastCameraTs != 0L) {
-            val dtCam = (ts - lastCameraTs) / 1e9
-            if (dtCam > 0.001 && dtCam < 0.2) {
-                val inst = (1.0 / dtCam).toFloat()
-                cameraFpsEma = if (cameraFpsEma == 0f) inst else 0.90f * cameraFpsEma + 0.10f * inst
-            }
-        }
-        lastCameraTs = ts
-        cameraFrameCounter++
-        if (cameraFrameCounter % 4 == 0) {
-            overlay.post {
-                overlay.cameraFps = cameraFpsEma
-                overlay.invalidate()
-            }
-        }
-
-        trackerHandler.removeCallbacksAndMessages(null)
-        trackerHandler.post { runTracker(y, w, h, ts) }
-    }
-
-    private fun runTracker(y: ByteArray, w: Int, h: Int, ts: Long) {
-        pendingTap?.let { (x, yc) ->
-            val box = (minOf(w, h) * 0.17f).coerceIn(30f, 80f)
-            tracking = tracker.nativeInit(y, w, h, x, yc, box * 1.35f, box)
-            pendingTap = null
-            lastTs = ts
-        }
-
-        if (!tracking) {
-            overlay.post {
-                overlay.track = OverlayView.UiTrack()
-                overlay.invalidate()
-            }
-            return
-        }
-
-        val dt = if (lastTs == 0L) {
-            1.0 / 60.0
-        } else {
-            ((ts - lastTs) / 1e9).coerceIn(1.0 / 180.0, 0.12)
-        }
-        lastTs = ts
-
-        val out = tracker.nativeProcess(y, w, h, dt)
-        val instFps = (1.0 / dt).toFloat()
-        fpsEma = if (fpsEma == 0f) instFps else 0.88f * fpsEma + 0.12f * instFps
-
-        val ui = OverlayView.UiTrack(
-            out[0].toInt(),
-            out[1],
-            out[2],
-            out[3],
-            out[4],
-            out[5],
-            out[6],
-            out[7],
-            out[8].toInt(),
-            fpsEma
-        )
-
-        overlay.post {
-            overlay.track = ui
-            overlay.invalidate()
-        }
-    }
-
     override fun onDestroy() {
-        closeCamera()
-        tracker.nativeReset()
-        cameraThread.quitSafely()
-        trackerThread.quitSafely()
+        runCatching { nativeTracker.nativeReset() }
+        runCatching { detector?.close() }
+        cameraExecutor.shutdown()
+        detectorExecutor.shutdown()
         super.onDestroy()
     }
 }
