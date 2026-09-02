@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var outputFps = 0f
     private var predictionLoopRunning = false
     private var lastMavHudMs = 0L
+    private var lastPerfHudMs = 0L
     private var lastYoloRunMs = 0L
     private var lastUiMs = 0L
     private var lastTapMs = 0L
@@ -122,6 +123,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             overlay.trackLoopMs = profiler.trackMs
             overlay.cpuPct = profiler.cpuPct
             overlay.ramMb = profiler.ramMb
+            if (now - lastPerfHudMs >= 250L) {
+                lastPerfHudMs = now
+                overlay.perfLine = String.format(
+                    Locale.US,
+                    "PERF  FLOW %.2fms  NCC %.2fms  LOOP %.2fms  CPU %.0f%%  RAM %.0fMB",
+                    profiler.flowMs, profiler.nccMs, profiler.trackMs,
+                    profiler.cpuPct, profiler.ramMb
+                )
+            }
 
             var needDraw = mavFresh
             if (stateLabel != "SEARCH") {
