@@ -13,8 +13,8 @@ void TrackerCore::reset() {
 
 bool TrackerCore::init(const uint8_t* gray, int width, int height, float cx, float cy, float boxW, float boxH) {
     if (!gray || width < 64 || height < 64) return false;
-    bw_ = clampf(boxW, 24.f, width * 0.45f);
-    bh_ = clampf(boxH, 24.f, height * 0.45f);
+    bw_ = clampf(boxW, 12.f, width * 0.32f);
+    bh_ = clampf(boxH, 12.f, height * 0.36f);
     cx_ = clampf(cx, bw_/2, width-bw_/2);
     cy_ = clampf(cy, bh_/2, height-bh_/2);
     vx_=vy_=0; prevCx_=cx_; prevCy_=cy_; misses_=0; reacqConfirm_=0; jitterEma_=0;
@@ -34,7 +34,7 @@ void TrackerCore::captureTemplate(const uint8_t* gray, int width, int height, fl
             int ix = std::max(0, std::min(width-1, (int)std::lround(fx)));
             uint8_t v = gray[iy*width + ix];
             int k = ty*tplW_+tx;
-            tpl_[k] = blend ? (uint8_t)std::lround(0.92f*tpl_[k] + 0.08f*v) : v;
+            tpl_[k] = blend ? (uint8_t)std::lround(0.965f*tpl_[k] + 0.035f*v) : v;
         }
     }
 }
@@ -42,7 +42,25 @@ void TrackerCore::captureTemplate(const uint8_t* gray, int width, int height, fl
 float TrackerCore::patchCost(const uint8_t* gray, int width, int height, float cx, float cy, float bw, float bh) const {
     if (tpl_.empty()) return 1e9f;
     if (cx-bw/2<1 || cy-bh/2<1 || cx+bw/2>=width-1 || cy+bh/2>=height-1) return 1e9f;
-    long sad=0; long gradSad=0; int n=0;
+
+    // Two-pass mean-normalized SAD. It is still tiny (~121 samples) but
+    // much less sensitive to auto-exposure changes than raw intensity SAD.
+    int sumV=0, sumT=0, n=0;
+    for (int ty=1; ty<tplH_-1; ty+=2) {
+        float fy = cy - bh*0.5f + (ty + 0.5f) * bh / tplH_;
+        int iy=(int)fy;
+        for (int tx=1; tx<tplW_-1; tx+=2) {
+            float fx = cx - bw*0.5f + (tx + 0.5f) * bw / tplW_;
+            int ix=(int)fx;
+            sumV += gray[iy*width+ix];
+            sumT += tpl_[ty*tplW_+tx];
+            ++n;
+        }
+    }
+    if (!n) return 1e9f;
+
+    const float meanV=(float)sumV/n, meanT=(float)sumT/n;
+    long normSad=0, gradSad=0;
     for (int ty=1; ty<tplH_-1; ty+=2) {
         float fy = cy - bh*0.5f + (ty + 0.5f) * bh / tplH_;
         int iy=(int)fy;
@@ -50,22 +68,23 @@ float TrackerCore::patchCost(const uint8_t* gray, int width, int height, float c
             float fx = cx - bw*0.5f + (tx + 0.5f) * bw / tplW_;
             int ix=(int)fx;
             int v=gray[iy*width+ix], t=tpl_[ty*tplW_+tx];
-            sad += std::abs(v-t);
+            normSad += (long)std::abs((v-meanV) - (t-meanT));
+
             int gx = (int)gray[iy*width+ix+1]-(int)gray[iy*width+ix-1];
+            int gy = (int)gray[(iy+1)*width+ix]-(int)gray[(iy-1)*width+ix];
             int tgx = (int)tpl_[ty*tplW_+tx+1]-(int)tpl_[ty*tplW_+tx-1];
-            gradSad += std::abs(gx-tgx);
-            ++n;
+            int tgy = (int)tpl_[(ty+1)*tplW_+tx]-(int)tpl_[(ty-1)*tplW_+tx];
+            gradSad += std::abs(gx-tgx) + std::abs(gy-tgy);
         }
     }
-    if (!n) return 1e9f;
-    return 0.72f*(float)sad/(n*255.f) + 0.28f*(float)gradSad/(n*510.f);
+    return 0.66f*(float)normSad/(n*255.f) + 0.34f*(float)gradSad/(n*1020.f);
 }
 
 TrackerCore::Candidate TrackerCore::search(const uint8_t* gray,int width,int height,float predX,float predY,float radius,bool wide) {
     Candidate best; best.cost=1e9f;
     const float scales[] = {0.94f,1.0f,1.06f};
-    int coarseStep = wide ? 10 : 6;
-    float maxR = std::min(radius, wide ? std::max(width,height)*0.38f : 72.f);
+    int coarseStep = wide ? 7 : 4;
+    float maxR = std::min(radius, wide ? std::max(width,height)*0.32f : 52.f);
     for (float s: scales) {
         float tw=bw_*s, th=bh_*s;
         for (int dy=-(int)maxR; dy<=(int)maxR; dy+=coarseStep) {
@@ -96,22 +115,23 @@ TrackResult TrackerCore::process(const uint8_t* gray, int width, int height, dou
     float predX=cx_+vx_*(float)dt, predY=cy_+vy_*(float)dt;
     float speed=std::sqrt(vx_*vx_+vy_*vy_);
     bool wide = state_==2;
-    float radius = wide ? std::max(70.f, std::min(120.f, 0.34f*std::max(width,height)))
-                        : std::max(26.f, std::min(64.f, 18.f + 0.035f*speed));
+    float radius = wide ? std::max(46.f, std::min(96.f, 0.28f*std::max(width,height)))
+                        : std::max(18.f, std::min(52.f, 14.f + 0.045f*speed));
+    if (wide) { vx_*=0.94f; vy_*=0.94f; }
     Candidate c=search(gray,width,height,predX,predY,radius,wide);
-    float conf = c.cost>=1e8f ? 0.f : clampf(1.f - c.cost/0.34f,0.f,1.f);
-    float threshold = wide ? 0.55f : 0.48f;
+    float conf = c.cost>=1e8f ? 0.f : clampf(1.f - c.cost/0.30f,0.f,1.f);
+    float threshold = wide ? 0.50f : 0.44f;
 
     if (conf >= threshold) {
         if (state_==2) {
-            if (reacqConfirm_==0 || std::hypot(c.cx-cx_,c.cy-cy_) < std::max(80.f,bw_*1.5f)) {
+            if (reacqConfirm_==0 || std::hypot(c.cx-cx_,c.cy-cy_) < std::max(42.f,bw_*2.2f)) {
                 ++reacqConfirm_; cx_=c.cx; cy_=c.cy; bw_=c.w; bh_=c.h;
             } else reacqConfirm_=1;
             if (reacqConfirm_>=2) { state_=1; misses_=0; vx_=vy_=0; captureTemplate(gray,width,height,cx_,cy_,bw_,bh_,true); }
         } else {
             float oldX=cx_, oldY=cy_;
-            float alpha = conf>0.75f ? 0.78f : 0.62f;
-            float beta  = conf>0.75f ? 0.20f : 0.12f;
+            float alpha = conf>0.72f ? 0.82f : 0.66f;
+            float beta  = conf>0.72f ? 0.24f : 0.14f;
             float ex=c.cx-predX, ey=c.cy-predY;
             cx_=predX+alpha*ex; cy_=predY+alpha*ey;
             vx_=vx_ + beta*ex/(float)dt; vy_=vy_ + beta*ey/(float)dt;
@@ -119,13 +139,13 @@ TrackResult TrackerCore::process(const uint8_t* gray, int width, int height, dou
             misses_=0;
             float d=std::hypot(cx_-oldX,cy_-oldY);
             jitterEma_=0.90f*jitterEma_+0.10f*d;
-            if (conf>0.78f && d<std::max(35.f,0.35f*bw_)) captureTemplate(gray,width,height,cx_,cy_,bw_,bh_,true);
+            if (conf>0.84f && d<std::max(5.f,0.22f*bw_)) captureTemplate(gray,width,height,cx_,cy_,bw_,bh_,true);
         }
     } else {
         ++misses_;
         if (state_==1) {
             cx_=predX; cy_=predY;
-            if (misses_>=3) { state_=2; reacqConfirm_=0; vx_=vy_=0; }
+            if (misses_>=5) { state_=2; reacqConfirm_=0; vx_*=0.82f; vy_*=0.82f; }
         }
     }
 
