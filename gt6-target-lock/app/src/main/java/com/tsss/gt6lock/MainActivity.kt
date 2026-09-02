@@ -39,7 +39,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4 HS120:
+ * Fusion v4.1 HS120 Axis Fix:
  * - preferred path: Camera2 constrained high-speed -> OES/GLES3 -> R8 640x360
  * - fallback path: CameraX YUV 60 fps
  * - Strong Hold: FB-GMC flow + dual-template multi-scale NCC + motion filter
@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         hsView.onResume()
 
         overlay.yoloMode =
-            "HS${profile.fps} / HALMAX${profile.maxAvailableFps} / GPU-R8"
+            "HS${profile.fps} / HALMAX${profile.maxAvailableFps} / GPU-R8 / L90"
         overlay.yoloBackend = "YOLO IDLE"
         overlay.postInvalidate()
     }
@@ -453,7 +453,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             highSpeedProfile?.let { p ->
                 if (!inferenceBusy.get()) {
                     overlay.yoloMode =
-                        "HS${p.fps} / HALMAX${p.maxAvailableFps} / GPU-R8"
+                        "HS${p.fps} / HALMAX${p.maxAvailableFps} / GPU-R8 / L90"
                 }
             }
             overlay.postInvalidate()
