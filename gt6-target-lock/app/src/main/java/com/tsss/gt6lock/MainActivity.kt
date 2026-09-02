@@ -42,6 +42,10 @@ class MainActivity : Activity() {
     private var fps60 = false
     private var selectedFpsRange: Range<Int>? = null
 
+    // User-reported GT6 correction preset. Can be adjusted live from the HUD.
+    private var manualRotationDegrees = -45f
+    private var mirrorPreview = true
+
     private val tracker = NativeTracker()
     @Volatile private var tracking = false
     @Volatile private var pendingTap: Pair<Float, Float>? = null
@@ -98,6 +102,32 @@ class MainActivity : Activity() {
             }
         }
 
+        overlay.onRotateLeft = {
+            runOnUiThread {
+                manualRotationDegrees -= 45f
+                if (manualRotationDegrees <= -180f) manualRotationDegrees += 360f
+                applyManualTransform()
+            }
+        }
+
+        overlay.onRotateRight = {
+            runOnUiThread {
+                manualRotationDegrees += 45f
+                if (manualRotationDegrees > 180f) manualRotationDegrees -= 360f
+                applyManualTransform()
+            }
+        }
+
+        overlay.onMirrorToggle = {
+            runOnUiThread {
+                mirrorPreview = !mirrorPreview
+                applyManualTransform()
+            }
+        }
+
+        overlay.manualRotationDegrees = manualRotationDegrees
+        overlay.mirrorX = mirrorPreview
+
         cameraThread = HandlerThread("camera").also { it.start() }
         cameraHandler = Handler(cameraThread.looper)
         trackerThread = HandlerThread("tracker").also { it.start() }
@@ -118,6 +148,7 @@ class MainActivity : Activity() {
         lp.gravity = Gravity.CENTER
         previewHost.layoutParams = lp
         configurePreviewTransform(root.width, root.height)
+        applyManualTransform()
     }
 
     override fun onRequestPermissionsResult(
@@ -377,6 +408,23 @@ class MainActivity : Activity() {
         }
 
         texture.setTransform(matrix)
+        applyManualTransform()
+        overlay.invalidate()
+    }
+
+    private fun applyManualTransform() {
+        if (!::texture.isInitialized || texture.width <= 0 || texture.height <= 0) return
+        texture.pivotX = texture.width / 2f
+        texture.pivotY = texture.height / 2f
+        texture.rotation = manualRotationDegrees
+        texture.scaleX = if (mirrorPreview) -1f else 1f
+        texture.scaleY = 1f
+
+        overlay.manualRotationDegrees = manualRotationDegrees
+        overlay.mirrorX = mirrorPreview
+        overlay.orientationLabel =
+            (if (mirrorPreview) "MIRROR ON" else "MIRROR OFF") +
+            "  ROT " + manualRotationDegrees.toInt() + "°"
         overlay.invalidate()
     }
 
