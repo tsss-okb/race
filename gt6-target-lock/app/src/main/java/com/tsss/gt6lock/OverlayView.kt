@@ -149,7 +149,7 @@ class OverlayView(context: Context) : View(context) {
             28f, 72f, text
         )
         c.drawText(
-            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  NDK HOT PATH",
+            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  FLOW+GMC/NCC 640",
             28f, 97f, text
         )
         if (showAvionics) {
