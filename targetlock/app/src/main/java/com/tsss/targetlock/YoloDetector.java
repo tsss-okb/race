@@ -18,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class YoloDetector {
+    private static final float CONF=.28f;
     private static final float IOU=.45f;
 
     public volatile boolean ready=false;
@@ -31,7 +32,6 @@ public class YoloDetector {
     public volatile String decoderMode="?";
     public volatile String modelMode="?";
     public volatile String tensorTypes="?";
-    public volatile float confidenceThreshold=.28f;
 
     private final Context context;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -176,9 +176,6 @@ public class YoloDetector {
     }
 
     public boolean isBusy(){return busy.get();}
-    public void setConfidenceThreshold(float v){
-        confidenceThreshold=Math.max(.10f,Math.min(.60f,v));
-    }
     public List<Detection> getDetections(){return detections;}
 
     public void clearDetections(){
@@ -321,7 +318,7 @@ public class YoloDetector {
                 float s=value(4+c,i);
                 if(s>best){best=s;bestClass=c;}
             }
-            if(best<confidenceThreshold||bestClass<0)continue;
+            if(best<CONF||bestClass<0)continue;
 
             float cx=value(0,i),cy=value(1,i);
             float bw=value(2,i),bh=value(3,i);
