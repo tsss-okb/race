@@ -6,10 +6,11 @@
 
 Сравнить на одном и том же видеопотоке:
 
-1. YOLO + 8-state Kalman
-2. YOLO + CSRT
-3. YOLO + KCF
-4. YOLO + MOSSE
+1. YOLO + KCF Hybrid (рекомендуемый)
+2. YOLO + 8-state Kalman
+3. YOLO + CSRT
+4. YOLO + KCF
+5. YOLO + MOSSE
 
 Сначала выбираем лучший visual-tracking core. Только потом переносим победителя в Android.
 
@@ -62,7 +63,29 @@ sudo apt install -y python3-venv libgl1 libglib2.0-0
 
 ## Быстрый тест USB-камеры
 
-Основная камера:
+Основная камера — текущий рекомендуемый режим:
+```bash
+python run_camera.py --source 0 --model yolo26n.pt --mode kcf-hybrid
+```
+
+KCF Hybrid работает так:
+```
+YOLO acquire
+   ↓
+KCF every frame
+   ↓
+YOLO verify every 3 frames
+   ↓
+если KCF ушёл от motion-prior → reject
+   ↓
+COAST / predictor
+   ↓
+расширяющееся окно YOLO reacquire
+   ↓
+KCF re-init
+```
+
+Чистый Kalman:
 ```bash
 python run_camera.py --source 0 --model yolo26n.pt --mode kalman
 ```
@@ -93,6 +116,7 @@ python run_camera.py --source 0 --model yolo26n.pt --class-id 4 --mode kalman
 
 - ЛКМ по YOLO bbox — выбрать цель.
 - R — сбросить удержание.
+- 0 — KCF Hybrid.
 - 1 — Kalman.
 - 2 — CSRT.
 - 3 — KCF.
@@ -122,7 +146,7 @@ CSV пишется автоматически:
 MAVLink/ArduPilot команды здесь отсутствуют.
 
 
-## Автоматический A/B всех 4 режимов
+## Автоматический A/B всех 5 режимов
 
 Один ролик автоматически прогоняется через Kalman, CSRT, KCF и MOSSE:
 
@@ -155,3 +179,21 @@ python benchmark_all.py \
 - reacquire count.
 
 Победитель печатается строкой `WINNER: ...`.
+
+
+## Результат реального теста YOLO26n
+
+На загруженном тестовом ролике (264×148, цель очень маленькая) официальный YOLO26n ONNX был прогнан через ONNX Runtime.
+
+На участке кадров 20–90:
+- YOLO26n CPU: около 78 мс среднего inference, p95 около 93 мс;
+- чистый KCF был самым точным, пока цель оставалась видимой, но быстро терял её;
+- CSRT продолжал выдавать bbox после потери и уходил в drift;
+- чистый Kalman также продолжал prediction слишком долго;
+- KCF Hybrid с verify каждые 3 кадра и full-frame reacquire после длительной потери дал:
+  - median center error ≈ 2.25 px;
+  - mean IoU ≈ 0.45;
+  - около 81.7% reference-кадров в пределах 10 px;
+  - 2 успешных reacquire.
+
+Поэтому KCF Hybrid теперь является режимом по умолчанию.
