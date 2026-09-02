@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.tsss.gt6lock"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.tsss.gt6lock.v12"
+        applicationId = "com.tsss.gt6lock.v20"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.2.0"
+        versionCode = 20
+        versionName = "2.0.0"
         externalNativeBuild {
             cmake { cppFlags += listOf("-O3", "-ffast-math", "-fno-exceptions", "-fno-rtti") }
         }
@@ -38,4 +38,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.camera:camera-core:1.6.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.24.3")
 }
