@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-MODES = ("kalman", "csrt", "kcf", "mosse")
+MODES = ("kcf-hybrid", "kalman", "csrt", "kcf", "mosse")
 
 
 def parse_args():
