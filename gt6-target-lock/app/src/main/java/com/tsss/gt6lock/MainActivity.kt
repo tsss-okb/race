@@ -88,8 +88,11 @@ class MainActivity : Activity() {
 
         overlay.onFpsToggle = {
             runOnUiThread {
-                fps60 = !fps60
-                overlay.fpsModeLabel = if (fps60) "60 FPS" else "30 FPS"
+                val cc = cameraCharacteristics
+                val can60 = cc?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?.any { it.lower <= 60 && it.upper >= 60 } == true
+                fps60 = if (can60) !fps60 else false
+                overlay.fpsModeLabel = if (fps60) "60 FPS" else if (can60) "30 FPS" else "MAX 30"
                 overlay.invalidate()
                 restartCamera()
             }
@@ -108,25 +111,13 @@ class MainActivity : Activity() {
 
     private fun fitPreviewHost() {
         if (root.width <= 0 || root.height <= 0) return
-        val target = 16f / 9f
-        val screen = root.width.toFloat() / root.height.toFloat()
-        val w: Int
-        val h: Int
-        if (screen >= target) {
-            h = root.height
-            w = (h * target).toInt()
-        } else {
-            w = root.width
-            h = (w / target).toInt()
-        }
         val lp = (previewHost.layoutParams as? FrameLayout.LayoutParams)
-            ?: FrameLayout.LayoutParams(w, h)
-        if (lp.width != w || lp.height != h || lp.gravity != Gravity.CENTER) {
-            lp.width = w
-            lp.height = h
-            lp.gravity = Gravity.CENTER
-            previewHost.layoutParams = lp
-        }
+            ?: FrameLayout.LayoutParams(root.width, root.height)
+        lp.width = root.width
+        lp.height = root.height
+        lp.gravity = Gravity.CENTER
+        previewHost.layoutParams = lp
+        configurePreviewTransform(root.width, root.height)
     }
 
     override fun onRequestPermissionsResult(
@@ -166,15 +157,24 @@ class MainActivity : Activity() {
             cc.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
         }
 
-        backCameraIds = ids.sortedWith(
-            compareBy<String> { if (it == "0") 0 else 1 }
-                .thenBy { id ->
-                    val cc = cm.getCameraCharacteristics(id)
-                    val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                    focals?.minOrNull() ?: 99f
-                }
-        )
+        fun score(id: String): Double {
+            val cc = cm.getCameraCharacteristics(id)
+            val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: floatArrayOf()
+            val focal = focals.firstOrNull() ?: 0f
+            val physical = cc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val area = if (physical != null) physical.width * physical.height else 0f
 
+            // Main wide camera wins: reject ultrawide (<3 mm), avoid long tele (>9 mm),
+            // then prefer the larger sensor. Camera ID 0 gets only a small tie-break.
+            val focalClass = when {
+                focal in 3.0f..8.5f -> 100000.0
+                focal in 2.5f..9.5f -> 50000.0
+                else -> 0.0
+            }
+            return focalClass + area * 1000.0 + if (id == "0") 100.0 else 0.0
+        }
+
+        backCameraIds = ids.sortedByDescending { score(it) }
         if (backCameraIds.isEmpty()) return
         if (cameraIndex !in backCameraIds.indices) cameraIndex = 0
     }
@@ -247,7 +247,10 @@ class MainActivity : Activity() {
         overlay.imageH = analysisSize.height
         relativeRotation = calculateRelativeRotation(cc)
         overlay.rotationDegrees = relativeRotation
-        overlay.fpsModeLabel = if (fps60) "60 FPS" else "30 FPS"
+        val has60 = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.any { it.lower <= 60 && it.upper >= 60 } == true
+        if (!has60) fps60 = false
+        overlay.fpsModeLabel = if (fps60) "60 FPS" else if (has60) "30 FPS" else "MAX 30"
 
         val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
         val focalText = focals?.joinToString("/") { "%.1f".format(it) } ?: "?"
@@ -333,7 +336,27 @@ class MainActivity : Activity() {
         val cy = viewH / 2f
 
         when (relativeRotation) {
-            180 -> matrix.postRotate(180f, cx, cy)
+            0 -> {
+                val viewAspect = viewW.toFloat() / viewH.toFloat()
+                val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
+                if (viewAspect > bufferAspect) {
+                    val sy = viewAspect / bufferAspect
+                    matrix.postScale(1f, sy, cx, cy)
+                } else if (viewAspect < bufferAspect) {
+                    val sx = bufferAspect / viewAspect
+                    matrix.postScale(sx, 1f, cx, cy)
+                }
+            }
+            180 -> {
+                val viewAspect = viewW.toFloat() / viewH.toFloat()
+                val bufferAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
+                if (viewAspect > bufferAspect) {
+                    matrix.postScale(1f, viewAspect / bufferAspect, cx, cy)
+                } else if (viewAspect < bufferAspect) {
+                    matrix.postScale(bufferAspect / viewAspect, 1f, cx, cy)
+                }
+                matrix.postRotate(180f, cx, cy)
+            }
             90, 270 -> {
                 val viewRect = RectF(0f, 0f, viewW.toFloat(), viewH.toFloat())
                 val bufferRect = RectF(
