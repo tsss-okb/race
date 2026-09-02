@@ -1,0 +1,28 @@
+name: Fetch ONNX Runtime Wheels
+
+on:
+  push:
+    branches: [targetlock-android-apk]
+    paths:
+      - '.github/workflows/fetch-ort-wheels.yml'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download wheels
+        run: |
+          mkdir -p wheels
+          python -m pip download --only-binary=:all: -d wheels onnxruntime==1.22.1
+          ls -lh wheels
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-py313-wheels
+          path: wheels/*
+          if-no-files-found: error
