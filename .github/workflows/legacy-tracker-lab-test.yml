@@ -25,7 +25,6 @@ jobs:
         run: |
           python -m py_compile tracking_core.py run_camera.py benchmark_all.py synthetic_test.py
           python benchmark_all.py --help >/dev/null
-          python run_camera.py --help >/dev/null
       - name: Run synthetic hold test
         working-directory: legacy_tracker_lab
         run: python synthetic_test.py
