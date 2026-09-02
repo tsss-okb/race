@@ -25,6 +25,11 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var yoloMode: String = "IDLE"
     @Volatile var yoloMs: Double = 0.0
     @Volatile var yoloBackend: String = "OFF"
+    @Volatile var flowMs: Float = 0f
+    @Volatile var nccMs: Float = 0f
+    @Volatile var trackLoopMs: Float = 0f
+    @Volatile var cpuPct: Float = 0f
+    @Volatile var ramMb: Float = 0f
 
     @Volatile var rollDeg: Float = 0f
     @Volatile var pitchDeg: Float = 0f
@@ -184,7 +189,7 @@ class OverlayView(context: Context) : View(context) {
         }
 
         // Minimal top-left telemetry.
-        val panelBottom = if (showAvionics && mavConnected) 174f else 126f
+        val panelBottom = if (showAvionics && mavConnected) 200f else 151f
         c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 1040f), panelBottom), 12f, 12f, shade)
         text.textSize = 28f
         text.color = when (stateLabel) {
@@ -227,6 +232,16 @@ class OverlayView(context: Context) : View(context) {
                 )
             }
         }
+
+        text.color = 0xffb9d9ff.toInt()
+        text.textSize = 17f
+        val perfY = if (showAvionics && mavConnected) 194f else 146f
+        c.drawText(
+            "PERF  FLOW " + "%.2f".format(flowMs) + "ms  NCC " + "%.2f".format(nccMs) +
+                "ms  LOOP " + "%.2f".format(trackLoopMs) + "ms  CPU " +
+                "%.0f".format(cpuPct) + "%  RAM " + "%.0f".format(ramMb) + "MB",
+            28f, perfY, text
+        )
 
         c.drawRoundRect(searchButton(), 10f, 10f, button)
         c.drawRoundRect(resetButton(), 10f, 10f, button)
