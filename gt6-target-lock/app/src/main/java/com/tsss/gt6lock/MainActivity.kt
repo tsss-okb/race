@@ -191,6 +191,7 @@ class MainActivity : Activity(), SensorEventListener {
         texture.scaleY = extra
 
         overlay.levelCorrectionDegrees = correction
+        overlay.levelScale = extra
         overlay.sensorRollDegrees = filteredRollDeg
         overlay.autoLevelEnabled = autoLevel
         overlay.invalidate()
