@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3.9 Strong Hold + ArduPilot Avionics:
+ * Fusion v4.0 Strong Hold + ArduPilot + Performance Profiler:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val visualTracker = SmartVisualTracker()
     private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
     private val mavlink = MavlinkTelemetry(port = 14550)
+    private val profiler = PerformanceProfiler()
 
     private val inferenceBusy = AtomicBoolean(false)
     private val prioritySet = AtomicBoolean(false)
@@ -115,6 +116,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
             val now = SystemClock.elapsedRealtime()
             val mavFresh = updateMavlinkHud(now)
+
+            overlay.flowMs = profiler.flowMs
+            overlay.nccMs = profiler.nccMs
+            overlay.trackLoopMs = profiler.trackMs
+            overlay.cpuPct = profiler.cpuPct
+            overlay.ramMb = profiler.ramMb
 
             var needDraw = mavFresh
             if (stateLabel != "SEARCH") {
@@ -346,6 +353,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     private fun analyzeImage(image: ImageProxy) {
+        val trackStartNs = System.nanoTime()
         try {
             if (prioritySet.compareAndSet(false, true)) {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) }
@@ -384,7 +392,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 // v3.8: native sparse flow/GMC runs on every camera frame.
                 // NCC cadence stays equivalent to v3.7.
                 val runFlow = true
+                val flowStartNs = System.nanoTime()
                 val flow = sparseFlow.track(gray, target)
+                profiler.recordFlow(System.nanoTime() - flowStartNs)
 
                 if (runFlow) {
                     currentFlowScore = flow?.let {
@@ -435,9 +445,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     }
 
                 val visualBase = flowMeasurement ?: target
+                val nccStartNs = if (runTemplate) System.nanoTime() else 0L
                 val visual =
                     if (runTemplate) visualTracker.track(gray, visualBase, softRescue)
                     else null
+                if (runTemplate) {
+                    profiler.recordNcc(System.nanoTime() - nccStartNs)
+                }
                 if (runTemplate) {
                     attemptedMeasurement = true
                     currentVisualScore = visual?.score ?: visualTracker.score
@@ -528,6 +542,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.invalidate()
             }
         } finally {
+            profiler.recordTrack(System.nanoTime() - trackStartNs)
             image.close()
         }
     }
@@ -727,6 +742,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        profiler.start()
         mavlink.start()
         request120HzDisplay()
         window.decorView.postDelayed({ request120HzDisplay() }, 400L)
@@ -743,6 +759,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onPause() {
         predictionLoopRunning = false
+        profiler.stop()
         mavlink.stop()
         overlay.mavConnected = false
         sensorManager.unregisterListener(this)
@@ -809,6 +826,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDestroy() {
+        profiler.stop()
         mavlink.stop()
         runCatching { detector?.close() }
         cameraExecutor.shutdown()
