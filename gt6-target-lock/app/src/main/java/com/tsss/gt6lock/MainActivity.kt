@@ -47,6 +47,10 @@ class MainActivity : Activity(), SensorEventListener {
     private var gyroRDeg = 0f
     private var gLoad = 1f
 
+    private var latestAttitudeMatrix: FloatArray? = null
+    private var bodyZeroMatrix: FloatArray? = null
+    private var bodyCalibrated = false
+
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
@@ -83,8 +87,8 @@ class MainActivity : Activity(), SensorEventListener {
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         rotationSensor =
-            sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
@@ -134,6 +138,10 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
 
+        overlay.onCalibrate = {
+            runOnUiThread { calibrateBodyFrame() }
+        }
+
         cameraThread = HandlerThread("camera").also { it.start() }
         cameraHandler = Handler(cameraThread.looper)
         trackerThread = HandlerThread("tracker").also { it.start() }
@@ -164,6 +172,37 @@ class MainActivity : Activity(), SensorEventListener {
         super.onPause()
     }
 
+    private fun transposeMultiply(a: FloatArray, b: FloatArray): FloatArray {
+        val out = FloatArray(9)
+        for (i in 0..2) {
+            for (j in 0..2) {
+                var sum = 0f
+                for (k in 0..2) {
+                    sum += a[k * 3 + i] * b[k * 3 + j]
+                }
+                out[i * 3 + j] = sum
+            }
+        }
+        return out
+    }
+
+    private fun calibrateBodyFrame() {
+        val m = latestAttitudeMatrix ?: return
+        bodyZeroMatrix = m.copyOf()
+        bodyCalibrated = true
+        overlay.bodyCalibrated = true
+        overlay.invalidate()
+    }
+
+    private fun remapGyroToScreen(x: Float, y: Float, z: Float): FloatArray {
+        return when (display?.rotation ?: Surface.ROTATION_0) {
+            Surface.ROTATION_90 -> floatArrayOf(y, -x, z)
+            Surface.ROTATION_270 -> floatArrayOf(-y, x, z)
+            Surface.ROTATION_180 -> floatArrayOf(-x, -y, z)
+            else -> floatArrayOf(x, y, z)
+        }
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
         when (event.sensor.type) {
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
@@ -182,18 +221,44 @@ class MainActivity : Activity(), SensorEventListener {
                     else -> System.arraycopy(r, 0, remapped, 0, 9)
                 }
 
-                val orientation = FloatArray(3)
-                SensorManager.getOrientation(remapped, orientation)
-                sensorHeadingDeg = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
-                sensorPitchDeg = Math.toDegrees(orientation[1].toDouble()).toFloat()
-                sensorRollDeg = Math.toDegrees(orientation[2].toDouble()).toFloat()
+                latestAttitudeMatrix = remapped.copyOf()
+
+                // First stable app pose becomes the mount/body zero; CAL can reset it any time.
+                if (bodyZeroMatrix == null) {
+                    bodyZeroMatrix = remapped.copyOf()
+                    bodyCalibrated = true
+                }
+
+                val rawOrientation = FloatArray(3)
+                SensorManager.getOrientation(remapped, rawOrientation)
+                sensorHeadingDeg = ((Math.toDegrees(rawOrientation[0].toDouble()).toFloat() + 360f) % 360f)
+
+                val relative = transposeMultiply(bodyZeroMatrix!!, remapped)
+                val relOrientation = FloatArray(3)
+                SensorManager.getOrientation(relative, relOrientation)
+
+                // Body-frame attitude: current pose relative to calibrated phone mount.
+                sensorPitchDeg = Math.toDegrees(relOrientation[1].toDouble()).toFloat()
+                sensorRollDeg = -Math.toDegrees(relOrientation[2].toDouble()).toFloat()
             }
 
             Sensor.TYPE_GYROSCOPE -> {
+                val s = remapGyroToScreen(event.values[0], event.values[1], event.values[2])
                 val k = (180.0 / Math.PI).toFloat()
-                gyroPDeg = event.values[0] * k
-                gyroQDeg = event.values[1] * k
-                gyroRDeg = event.values[2] * k
+
+                // Phone camera looks along -screen-Z. Convert screen axes to aircraft-like P/Q/R:
+                // P roll about camera/forward axis, Q pitch, R yaw.
+                var p = -s[2] * k
+                var q = s[0] * k
+                var r = -s[1] * k
+
+                if (kotlin.math.abs(p) < 0.25f) p = 0f
+                if (kotlin.math.abs(q) < 0.25f) q = 0f
+                if (kotlin.math.abs(r) < 0.25f) r = 0f
+
+                gyroPDeg = 0.82f * gyroPDeg + 0.18f * p
+                gyroQDeg = 0.82f * gyroQDeg + 0.18f * q
+                gyroRDeg = 0.82f * gyroRDeg + 0.18f * r
             }
 
             Sensor.TYPE_ACCELEROMETER -> {
@@ -211,6 +276,7 @@ class MainActivity : Activity(), SensorEventListener {
         overlay.gyroQDeg = gyroQDeg
         overlay.gyroRDeg = gyroRDeg
         overlay.gLoad = gLoad
+        overlay.bodyCalibrated = bodyCalibrated
         overlay.avionicsHudEnabled = avionicsHud
         overlay.invalidate()
     }
@@ -388,9 +454,16 @@ class MainActivity : Activity(), SensorEventListener {
         val focals = cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
         val focalText = focals?.joinToString("/") { "%.1f".format(it) } ?: "?"
         val sensorOrientation = cc.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: -1
+        val displayRot = when (display?.rotation ?: Surface.ROTATION_0) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
 
         overlay.cameraLabel =
-            "CAM $id  " + focalText + "mm  SENSOR " + sensorOrientation + "°  • VIEW " +
+            "CAM $id  " + focalText + "mm  SENSOR " + sensorOrientation + "° DISP " + displayRot +
+            "° REL " + relativeRotation + "°  • VIEW " +
             previewSize.width + "×" + previewSize.height +
             "  TRACK " + analysisSize.width + "×" + analysisSize.height +
             "  • AE MAX " + maxFps +
