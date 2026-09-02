@@ -82,6 +82,8 @@ public class HudView extends View {
         int amber=Color.rgb(255,210,92);
         int red=Color.rgb(255,100,100);
         int cyan=Color.rgb(96,230,255);
+        int orange=Color.rgb(255,145,55);
+        int magenta=Color.rgb(255,70,210);
         int panel=Color.argb(165,0,12,4);
         int dim=Color.argb(170,112,255,125);
         int off=Color.rgb(95,105,95);
@@ -130,8 +132,10 @@ public class HudView extends View {
                     t.imuWeight*100,t.flowWeight*100,t.yoloCorrections,t.tapCount),24,192,p);
         }
 
-        // YOLO candidate boxes are ALWAYS visible when DETECT is enabled.
-        if(camera.detectEnabled){
+        boolean targetActive=t.locked||t.acquiring||t.coasting||t.reacquiring;
+
+        // Candidate boxes are useful only before target selection.
+        if(camera.detectEnabled&&!targetActive){
             List<YoloDetector.Detection> ds=yolo.getDetections();
             p.setTextSize(15);
             for(YoloDetector.Detection d:ds){
@@ -154,7 +158,14 @@ public class HudView extends View {
             float x=t.renderX*w,y=t.renderY*h,s=Math.max(18f,Math.min(w,h)*t.box);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(3.4f);
-            p.setColor(t.locked?green:amber);
+            int targetColor;
+            if(t.reacquiring)targetColor=magenta;
+            else if(t.coasting)targetColor=orange;
+            else if(t.acquiring)targetColor=amber;
+            else if(t.locked)targetColor=green;
+            else targetColor=red;
+
+            p.setColor(targetColor);
             drawCorners(c,x-s,y-s,x+s,y+s,16,p);
             c.drawCircle(x,y,6,p);
         }
