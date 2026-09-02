@@ -39,9 +39,9 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v3:
+ * Fusion v3.1 Strong Hold:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
- * - alternating sparse target/background flow (GMC) and NCC appearance tracker
+ * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
  * - YOLO26 only for SEARCH / prolonged REACQUIRE
  * - IMU is HUD-only and never rotates the video.
@@ -79,6 +79,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var lastTapMs = 0L
     private var currentFlowScore = 0f
     private var currentVisualScore = 0f
+    private var lightFailStreak = 0
+    private var strongLockStreak = 0
     private var jitterEma = 0f
     private var lastCenterX = Float.NaN
     private var lastCenterY = Float.NaN
@@ -202,7 +204,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
             }
 
-            overlay.yoloMode = if (request60) "IDLE / CAM60 / TRACK640" else "IDLE / MAX / TRACK640"
+            overlay.yoloMode = if (request60) "IDLE / CAM60 / STRONG640" else "IDLE / MAX / STRONG640"
             overlay.invalidate()
             true
         }.getOrElse { false }
@@ -244,49 +246,75 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var target = motionTracker.locked
 
             if (target != null) {
-                // Alternate the two expensive measurements: flow one frame, NCC the next.
-                // This matches the old PHONE AIM fast path and keeps 60 Hz headroom.
+                // Flow is the cheap high-rate measurement. NCC is adaptive:
+                // normal lock -> every other frame; strong lock -> about 10 Hz.
                 val runFlow = (frameSerial and 1L) == 0L
                 val flow = if (runFlow) sparseFlow.track(gray, target) else null
 
                 if (runFlow) {
                     currentFlowScore = flow?.let {
-                        (0.68f * it.targetConsistency + 0.32f * it.globalConsistency).coerceIn(0f, 1f)
-                    } ?: currentFlowScore * 0.94f
+                        (0.72f * it.targetConsistency + 0.28f * it.globalConsistency)
+                            .coerceIn(0f, 1f)
+                    } ?: currentFlowScore * 0.92f
                 }
 
-                if (flow != null &&
-                    flow.targetConsistency >= 0.40f &&
-                    abs(flow.dxNorm) + abs(flow.dyNorm) < 0.18f
+                if (
+                    flow != null &&
+                    flow.targetConsistency >= 0.36f &&
+                    abs(flow.dxNorm) + abs(flow.dyNorm) < 0.16f
                 ) {
                     val shifted = shiftDetection(
                         target,
                         flow.dxNorm,
                         flow.dyNorm,
-                        (0.48f + 0.48f * flow.targetConsistency).coerceIn(0.48f, 0.95f),
-                        predicted = flow.targetConsistency < 0.62f
+                        (0.50f + 0.46f * flow.targetConsistency).coerceIn(0.50f, 0.96f),
+                        predicted = flow.targetConsistency < 0.60f
                     )
                     motionTracker.applyVisual(shifted, ts)
                     gotMeasurement = true
                 }
 
                 target = motionTracker.locked ?: target
-                val runTemplate = !runFlow || flow == null || flow.targetConsistency < 0.56f
+                val strongHold =
+                    stateLabel == "LOCK" &&
+                    currentFlowScore >= 0.68f &&
+                    currentVisualScore >= 0.72f &&
+                    lightFailStreak == 0
+
+                val runTemplate =
+                    (!runFlow && (!strongHold || frameSerial % 6L == 1L)) ||
+                    flow == null ||
+                    (flow?.targetConsistency ?: 0f) < 0.50f
+
                 val visual = if (runTemplate) visualTracker.track(gray, target) else null
-                if (visual != null) {
-                    currentVisualScore = visual.score
-                    if (visual.score >= 0.50f) {
-                        motionTracker.applyVisual(visual.detection, ts)
-                        gotMeasurement = true
-                    }
+                if (runTemplate) {
+                    currentVisualScore = visual?.score ?: visualTracker.score
                 }
 
-                if (!gotMeasurement) motionTracker.miss(ts)
+                if (visual != null && visual.score >= 0.52f) {
+                    motionTracker.applyVisual(visual.detection, ts)
+                    gotMeasurement = true
+                }
+
+                if (gotMeasurement) {
+                    lightFailStreak = 0
+                    if (currentFlowScore >= 0.62f || currentVisualScore >= 0.70f) {
+                        strongLockStreak = (strongLockStreak + 1).coerceAtMost(30)
+                    } else {
+                        strongLockStreak = 0
+                    }
+                } else {
+                    lightFailStreak = (lightFailStreak + 1).coerceAtMost(30)
+                    strongLockStreak = 0
+                    motionTracker.miss(ts)
+                }
 
                 val current = motionTracker.locked
                 if (current == null) {
                     visualTracker.clear()
                     sparseFlow.clear()
+                    lightFailStreak = 0
+                    strongLockStreak = 0
                     stateLabel = "SEARCH"
                     overlay.locked = null
                 } else {
@@ -294,10 +322,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     overlay.locked = projected
                     updateJitter(projected, gray.width, gray.height)
 
+                    val bothLightTrackersWeak =
+                        currentFlowScore < 0.34f && currentVisualScore < 0.52f
+
                     stateLabel = when {
-                        visualTracker.state == SmartVisualTracker.State.REACQUIRE || motionTracker.misses >= 3 -> "REACQUIRE"
-                        projected.predicted || visualTracker.state == SmartVisualTracker.State.PREDICT -> "PREDICT"
-                        else -> "LOCK"
+                        lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
+                        lightFailStreak >= 2 ||
+                            (projected.predicted && strongLockStreak == 0) -> "PREDICT"
+                        strongLockStreak >= 2 || gotMeasurement -> "LOCK"
+                        else -> "PREDICT"
                     }
 
                     trackCounter++
@@ -339,11 +372,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun maybeRunYolo(image: ImageProxy) {
         val now = SystemClock.elapsedRealtime()
         val hasLock = motionTracker.locked != null
+        val bothLightTrackersWeak =
+            currentFlowScore < 0.34f && currentVisualScore < 0.52f
+
         val interval = when {
             manualSearchRequested -> 0L
             !hasLock -> 900L
-            stateLabel == "REACQUIRE" -> 360L
-            stateLabel == "PREDICT" -> 650L
+            stateLabel == "REACQUIRE" &&
+                bothLightTrackersWeak &&
+                lightFailStreak >= 4 -> 420L
             else -> Long.MAX_VALUE
         }
 
@@ -432,6 +469,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             stateLabel = "LOCK"
             currentVisualScore = 1f
             currentFlowScore = 0.7f
+            lightFailStreak = 0
+            strongLockStreak = 2
             latestDetections = emptyList()
         }
     }
@@ -444,6 +483,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         stateLabel = "LOCK"
         currentVisualScore = 1f
         currentFlowScore = 0.7f
+        lightFailStreak = 0
+        strongLockStreak = 2
     }
 
     private fun shiftDetection(
@@ -503,6 +544,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             latestDetections = emptyList()
             currentFlowScore = 0f
             currentVisualScore = 0f
+            lightFailStreak = 0
+            strongLockStreak = 0
             jitterEma = 0f
             lastCenterX = Float.NaN
             lastCenterY = Float.NaN
