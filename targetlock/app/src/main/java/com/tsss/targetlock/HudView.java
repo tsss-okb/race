@@ -84,7 +84,7 @@ public class HudView extends View {
         p.setTextSize(17);p.setStyle(Paint.Style.FILL);
 
         p.setColor(green);
-        c.drawText("REF HOLD • YOLO + 8D KALMAN • NO IMU/FLOW",24,32,p);
+        c.drawText("KCF HYBRID • YOLO26 INT8 • VERIFY/COAST/REACQ",24,32,p);
 
         p.setColor("ERROR".equals(camera.status)?red:green);
         c.drawText(String.format("CAM %.0f/%d FPS  %s  ANALYSIS %dx%d",
@@ -102,15 +102,20 @@ public class HudView extends View {
                 t.acquireStatus,t.targetName,t.confidence*100,t.lostFrames,t.reacquireCount),
                 24,110,p);
 
-        c.drawText(String.format("KF σ %.4f/%.4f  INN %.2f  vx/vy %.3f/%.3f",
-                t.filterSigmaX,t.filterSigmaY,t.filterInnovation,t.vx,t.vy),
-                24,136,p);
+        p.setColor(t.kcfReady?green:red);
+        c.drawText(String.format("KCF %s  upd %d  drift %d  miss %d  prior %.1fpx",
+                t.kcfReady?"READY":"ERR",t.kcfUpdates,t.driftRejects,t.verifyMisses,
+                t.filterInnovation),24,136,p);
 
-        c.drawText(String.format("TRACK %.0f FPS  Ycorr %d  tap %d  EMA %.2f/%.2f",
-                t.trackerFps,t.yoloCorrections,t.tapCount,t.errorEmaX,t.errorEmaY),
+        p.setColor(green);
+        c.drawText(String.format("TRACK %.0f FPS / %.1f ms  Ycorr %d  tap %d  EMA %.2f/%.2f",
+                t.trackerFps,t.latencyMs,t.yoloCorrections,t.tapCount,t.errorEmaX,t.errorEmaY),
                 24,162,p);
 
-        if(yolo.error.length()>0){
+        if(!t.kcfReady){
+            p.setColor(red);
+            c.drawText("KCF ERR "+shortText(t.kcfError,84),24,188,p);
+        }else if(yolo.error.length()>0){
             p.setColor(red);
             c.drawText("YOLO ERR "+shortText(yolo.error,84),24,188,p);
         }else if(camera.lastError.length()>0){
@@ -118,7 +123,7 @@ public class HudView extends View {
             c.drawText("ERR "+shortText(camera.lastError,90),24,188,p);
         }else{
             p.setColor(green);
-            c.drawText("DETECT → TAP BOX → REF HOLD → PREDICT → REACQUIRE",24,188,p);
+            c.drawText("DETECT → TAP → KCF HOLD → VERIFY → COAST → REACQUIRE",24,188,p);
         }
 
         if(camera.detectEnabled){
