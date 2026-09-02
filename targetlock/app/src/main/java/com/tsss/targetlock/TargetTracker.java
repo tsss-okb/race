@@ -454,8 +454,8 @@ public class TargetTracker {
             box=clamp(Math.max(nw,nh)*.5f,.012f,.42f);
             updateErrors();
             return true;
-        }catch(Throwable t){
-            kcfError="init: "+t.getClass().getSimpleName()+": "+String.valueOf(t.getMessage());
+        }catch(Throwable err){
+            kcfError="init: "+err.getClass().getSimpleName()+": "+String.valueOf(err.getMessage());
             closeKcf();
             return false;
         }finally{
