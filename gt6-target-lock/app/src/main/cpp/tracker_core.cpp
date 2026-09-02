@@ -43,10 +43,10 @@ float TrackerCore::patchCost(const uint8_t* gray, int width, int height, float c
     if (tpl_.empty()) return 1e9f;
     if (cx-bw/2<1 || cy-bh/2<1 || cx+bw/2>=width-1 || cy+bh/2>=height-1) return 1e9f;
     long sad=0; long gradSad=0; int n=0;
-    for (int ty=2; ty<tplH_-2; ty+=2) {
+    for (int ty=1; ty<tplH_-1; ty+=2) {
         float fy = cy - bh*0.5f + (ty + 0.5f) * bh / tplH_;
         int iy=(int)fy;
-        for (int tx=2; tx<tplW_-2; tx+=2) {
+        for (int tx=1; tx<tplW_-1; tx+=2) {
             float fx = cx - bw*0.5f + (tx + 0.5f) * bw / tplW_;
             int ix=(int)fx;
             int v=gray[iy*width+ix], t=tpl_[ty*tplW_+tx];
@@ -64,8 +64,8 @@ float TrackerCore::patchCost(const uint8_t* gray, int width, int height, float c
 TrackerCore::Candidate TrackerCore::search(const uint8_t* gray,int width,int height,float predX,float predY,float radius,bool wide) {
     Candidate best; best.cost=1e9f;
     const float scales[] = {0.94f,1.0f,1.06f};
-    int coarseStep = wide ? 8 : 5;
-    float maxR = std::min(radius, wide ? std::max(width,height)*0.45f : 150.f);
+    int coarseStep = wide ? 10 : 6;
+    float maxR = std::min(radius, wide ? std::max(width,height)*0.38f : 72.f);
     for (float s: scales) {
         float tw=bw_*s, th=bh_*s;
         for (int dy=-(int)maxR; dy<=(int)maxR; dy+=coarseStep) {
@@ -96,8 +96,8 @@ TrackResult TrackerCore::process(const uint8_t* gray, int width, int height, dou
     float predX=cx_+vx_*(float)dt, predY=cy_+vy_*(float)dt;
     float speed=std::sqrt(vx_*vx_+vy_*vy_);
     bool wide = state_==2;
-    float radius = wide ? std::max(180.f, std::min(420.f, 0.32f*std::max(width,height)))
-                        : std::max(48.f, std::min(135.f, 30.f + 0.055f*speed));
+    float radius = wide ? std::max(70.f, std::min(120.f, 0.34f*std::max(width,height)))
+                        : std::max(26.f, std::min(64.f, 18.f + 0.035f*speed));
     Candidate c=search(gray,width,height,predX,predY,radius,wide);
     float conf = c.cost>=1e8f ? 0.f : clampf(1.f - c.cost/0.34f,0.f,1.f);
     float threshold = wide ? 0.55f : 0.48f;
