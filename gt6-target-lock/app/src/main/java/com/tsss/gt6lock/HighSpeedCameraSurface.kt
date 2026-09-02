@@ -97,8 +97,17 @@ class HighSpeedCameraSurface(
         Surface.ROTATION_270 -> 270
         else -> 0
     }
-    private val relativeRotation = ((profile.sensorOrientation - displayDegrees) % 360 + 360) % 360
-    private val rendererImpl = CameraRenderer(profile, onGrayFrame, onRenderedFps, relativeRotation)
+    private val baseRelativeRotation =
+        ((profile.sensorOrientation - displayDegrees) % 360 + 360) % 360
+
+    // Realme GT6 constrained-high-speed Camera2 path is quarter-turned relative
+    // to the CameraX path that the user verified as correct. Apply one common
+    // fixed LEFT 90° correction to both preview and GPU tracking texture.
+    private val correctedRotation =
+        ((baseRelativeRotation + 270) % 360 + 360) % 360
+
+    private val rendererImpl =
+        CameraRenderer(profile, onGrayFrame, onRenderedFps, correctedRotation)
     private val cameraThread = HandlerThread("GT6-HS-Camera").apply { start() }
     private val cameraHandler = Handler(cameraThread.looper)
     private var camera: CameraDevice? = null
@@ -207,7 +216,7 @@ class HighSpeedCameraSurface(
         private val profile: Profile,
         private val onGrayFrame: (FastLumaExtractor.GrayFrame) -> Unit,
         private val onRenderedFps: (Float) -> Unit,
-        private val relativeRotation: Int
+        private val correctedRotation: Int
     ) : Renderer, SurfaceTexture.OnFrameAvailableListener {
 
         var onSurfaceTextureReady: ((SurfaceTexture) -> Unit)? = null
@@ -244,7 +253,8 @@ class HighSpeedCameraSurface(
         private val posBuffer: FloatBuffer = floatBuffer(
             floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
         )
-        private val texBuffer: FloatBuffer = floatBuffer(textureCoordsForRotation(relativeRotation))
+        private val texBuffer: FloatBuffer =
+            floatBuffer(textureCoordsForRotation(correctedRotation))
 
         private var lastFrameTimestamp = 0L
         private var fpsEma = 0f
