@@ -1,0 +1,57 @@
+name: GT6 Target Lock APK
+
+on:
+  push:
+    branches:
+      - gt6-target-lock-apk
+    paths:
+      - 'gt6-target-lock/**'
+      - '.github/workflows/gt6-target-lock-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: gt6-target-lock
+        run: gradle --no-daemon clean assembleDebug
+
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose gt6-target-lock/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Rename APK
+        run: cp gt6-target-lock/app/build/outputs/apk/debug/app-debug.apk GT6-Target-Lock-Realme-GT6.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GT6-Target-Lock-Realme-GT6
+          path: GT6-Target-Lock-Realme-GT6.apk
+          if-no-files-found: error
