@@ -17,6 +17,7 @@ class OverlayView(context: Context) : View(context) {
 
     @Volatile var cameraFps: Float = 0f
     @Volatile var trackFps: Float = 0f
+    @Volatile var outputFps: Float = 0f
     @Volatile var trackConf: Float = 0f
     @Volatile var jitterPx: Float = 0f
     @Volatile var yoloMode: String = "IDLE"
@@ -144,12 +145,12 @@ class OverlayView(context: Context) : View(context) {
         text.color = Color.WHITE
         text.textSize = 18f
         c.drawText(
-            "CAM " + "%.1f".format(cameraFps) + "  TRACK " + "%.1f".format(trackFps) +
-                "  JIT " + "%.1f".format(jitterPx) + "px  YOLO " + yoloMode,
+            "CAM " + "%.1f".format(cameraFps) + "  MEAS " + "%.1f".format(trackFps) +
+                "  OUT " + "%.1f".format(outputFps) + "  JIT " + "%.1f".format(jitterPx) + "px  YOLO " + yoloMode,
             28f, 72f, text
         )
         c.drawText(
-            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  STRONG HOLD 640 • FB-GMC • DUAL NCC",
+            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  120Hz PREDICT OUT  •  STRONG HOLD 640",
             28f, 97f, text
         )
         if (showAvionics) {
