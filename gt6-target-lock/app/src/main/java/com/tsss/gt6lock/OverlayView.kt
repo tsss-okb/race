@@ -50,6 +50,10 @@ class OverlayView(context: Context) : View(context) {
     var cameraHzLabel = "AUTO"
     var fpsModeLabel = "60"
     var mappingLabel = "MAP WAIT"
+    // Realme GT6 CAM0 analysis stream reports X/Y transposed relative to displayed preview.
+    // 0=NORMAL, 1=90CW, 3=90CCW. Default to 90CW from the user's observed axis swap.
+    var axisMode = 1
+    var onAxisModeChanged: ((Int) -> Unit)? = null
 
     var onTapImage: ((Float, Float) -> Unit)? = null
     var onCameraCycle: (() -> Unit)? = null
@@ -99,7 +103,9 @@ class OverlayView(context: Context) : View(context) {
         m.getValues(values)
         val det = values[Matrix.MSCALE_X] * values[Matrix.MSCALE_Y] -
             values[Matrix.MSKEW_X] * values[Matrix.MSKEW_Y]
-        mappingLabel = if (det < 0f) "MAP MIRROR" else "MAP NORMAL"
+        val base = if (det < 0f) "MAP MIRROR" else "MAP NORMAL"
+        val axis = when (axisMode) { 1 -> "XY↻"; 3 -> "XY↺"; 2 -> "XY180"; else -> "XY0" }
+        mappingLabel = base + " " + axis
         invalidate()
     }
 
@@ -134,14 +140,40 @@ class OverlayView(context: Context) : View(context) {
         color = 0xCCd8e1e5.toInt()
     }
 
-    private fun cameraButton(): RectF = RectF(width - 560f, 16f, width - 430f, 72f)
+    private fun cameraButton(): RectF = RectF(width - 690f, 16f, width - 560f, 72f)
+    private fun axisButton(): RectF = RectF(width - 550f, 16f, width - 430f, 72f)
     private fun calButton(): RectF = RectF(width - 420f, 16f, width - 310f, 72f)
     private fun hudButton(): RectF = RectF(width - 300f, 16f, width - 160f, 72f)
     private fun fpsButton(): RectF = RectF(width - 150f, 16f, width - 16f, 72f)
 
+    private fun analysisToPreviewPoint(x: Float, y: Float): Pair<Float, Float> {
+        val u = (x / imageW.toFloat()).coerceIn(0f, 1f)
+        val v = (y / imageH.toFloat()).coerceIn(0f, 1f)
+        val p = when (axisMode) {
+            1 -> (1f - v) to u       // 90° clockwise
+            2 -> (1f - u) to (1f - v)
+            3 -> v to (1f - u)       // 90° counter-clockwise
+            else -> u to v
+        }
+        return (p.first * imageW) to (p.second * imageH)
+    }
+
+    private fun previewToAnalysisPoint(x: Float, y: Float): Pair<Float, Float> {
+        val u = (x / imageW.toFloat()).coerceIn(0f, 1f)
+        val v = (y / imageH.toFloat()).coerceIn(0f, 1f)
+        val p = when (axisMode) {
+            1 -> v to (1f - u)       // inverse of 90° clockwise
+            2 -> (1f - u) to (1f - v)
+            3 -> (1f - v) to u       // inverse of 90° counter-clockwise
+            else -> u to v
+        }
+        return (p.first * imageW) to (p.second * imageH)
+    }
+
     private fun imageToView(x: Float, y: Float): Pair<Float, Float> {
         if (!mappingReady) return x to y
-        val pts = floatArrayOf(x, y)
+        val corrected = analysisToPreviewPoint(x, y)
+        val pts = floatArrayOf(corrected.first, corrected.second)
         bufferToView.mapPoints(pts)
         return pts[0] to pts[1]
     }
@@ -154,8 +186,9 @@ class OverlayView(context: Context) : View(context) {
 
         val pts = floatArrayOf(x, y)
         viewToBuffer.mapPoints(pts)
-        return pts[0].coerceIn(0f, imageW.toFloat() - 1f) to
-            pts[1].coerceIn(0f, imageH.toFloat() - 1f)
+        val raw = previewToAnalysisPoint(pts[0], pts[1])
+        return raw.first.coerceIn(0f, imageW.toFloat() - 1f) to
+            raw.second.coerceIn(0f, imageH.toFloat() - 1f)
     }
 
     private fun drawTrackedBox(c: Canvas, tr: UiTrack, col: Int) {
@@ -265,13 +298,16 @@ class OverlayView(context: Context) : View(context) {
         )
 
         c.drawRoundRect(cameraButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(axisButton(), 12f, 12f, activeButtonPaint)
         c.drawRoundRect(calButton(), 12f, 12f, if (bodyCalibrated) activeButtonPaint else buttonPaint)
         c.drawRoundRect(hudButton(), 12f, 12f, if (avionicsHudEnabled) activeButtonPaint else buttonPaint)
         c.drawRoundRect(fpsButton(), 12f, 12f, buttonPaint)
 
         textPaint.color = 0xffe7eef1.toInt()
         textPaint.textSize = 18f
-        c.drawText("CAMERA", width - 545f, 51f, textPaint)
+        c.drawText("CAMERA", width - 675f, 51f, textPaint)
+        val axisText = when (axisMode) { 1 -> "XY↻"; 3 -> "XY↺"; 2 -> "180"; else -> "XY0" }
+        c.drawText(axisText, width - 530f, 51f, textPaint)
         c.drawText(if (bodyCalibrated) "CAL✓" else "CAL", width - 396f, 51f, textPaint)
         c.drawText(if (avionicsHudEnabled) "HUD✓" else "HUD", width - 268f, 51f, textPaint)
         c.drawText(fpsModeLabel + " FPS", width - 136f, 51f, textPaint)
@@ -288,6 +324,13 @@ class OverlayView(context: Context) : View(context) {
         if (e.action == MotionEvent.ACTION_UP) {
             if (cameraButton().contains(e.x, e.y)) {
                 onCameraCycle?.invoke()
+                return true
+            }
+            if (axisButton().contains(e.x, e.y)) {
+                axisMode = when (axisMode) { 1 -> 3; 3 -> 0; else -> 1 }
+                onAxisModeChanged?.invoke(axisMode)
+                mappingLabel = when (axisMode) { 1 -> "AXIS XY↻"; 3 -> "AXIS XY↺"; else -> "AXIS XY0" }
+                invalidate()
                 return true
             }
             if (calButton().contains(e.x, e.y)) {
