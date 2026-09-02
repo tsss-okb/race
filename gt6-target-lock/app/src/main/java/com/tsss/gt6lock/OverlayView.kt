@@ -3,6 +3,7 @@ package com.tsss.gt6lock
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Matrix
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
@@ -29,9 +30,16 @@ class OverlayView(context: Context) : View(context) {
     var rotationDegrees = 0
     var cameraLabel = "CAMERA"
     var fpsModeLabel = "30 FPS"
+    var orientationLabel = "MIRROR ON  ROT -45°"
+    var manualRotationDegrees = -45f
+    var mirrorX = true
+
     var onTapImage: ((Float, Float) -> Unit)? = null
     var onCameraCycle: (() -> Unit)? = null
     var onFpsToggle: (() -> Unit)? = null
+    var onRotateLeft: (() -> Unit)? = null
+    var onRotateRight: (() -> Unit)? = null
+    var onMirrorToggle: (() -> Unit)? = null
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -71,6 +79,36 @@ class OverlayView(context: Context) : View(context) {
 
     private fun cameraButton(): RectF = RectF(width - 330f, 16f, width - 180f, 72f)
     private fun fpsButton(): RectF = RectF(width - 166f, 16f, width - 16f, 72f)
+    private fun rotLeftButton(): RectF = RectF(width - 330f, 82f, width - 230f, 138f)
+    private fun mirrorButton(): RectF = RectF(width - 220f, 82f, width - 110f, 138f)
+    private fun rotRightButton(): RectF = RectF(width - 100f, 82f, width - 16f, 138f)
+
+    private fun manualMatrix(): Matrix {
+        val m = Matrix()
+        val cx = width / 2f
+        val cy = height / 2f
+        val rad = Math.toRadians(manualRotationDegrees.toDouble())
+        val cos = kotlin.math.cos(rad).toFloat()
+        val sin = kotlin.math.sin(rad).toFloat()
+        val sx = if (mirrorX) -1f else 1f
+
+        val a = sx * cos
+        val b = -sin
+        val d = sx * sin
+        val e = cos
+        val tx = cx - a * cx - b * cy
+        val ty = cy - d * cx - e * cy
+        m.setValues(floatArrayOf(a, b, tx, d, e, ty, 0f, 0f, 1f))
+        return m
+    }
+
+    private fun inverseManualPoint(x: Float, y: Float): Pair<Float, Float> {
+        val pts = floatArrayOf(x, y)
+        val inv = Matrix()
+        val m = manualMatrix()
+        if (m.invert(inv)) inv.mapPoints(pts)
+        return pts[0] to pts[1]
+    }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
@@ -104,6 +142,8 @@ class OverlayView(context: Context) : View(context) {
         textPaint.color = col
 
         if (tr.state != 0 && tr.bw > 0) {
+            c.save()
+            c.concat(manualMatrix())
             val point = toDisplayPoint(tr.cx, tr.cy)
             val dcx = point.first
             val dcy = point.second
@@ -127,6 +167,7 @@ class OverlayView(context: Context) : View(context) {
             val by = (top + b) / 2f
             c.drawLine(bx - 14f, by, bx + 14f, by, boxPaint)
             c.drawLine(bx, by - 14f, bx, by + 14f, boxPaint)
+            c.restore()
         }
 
         c.drawRoundRect(RectF(16f, 14f, min(width - 350f, 670f), 100f), 12f, 12f, shadePaint)
@@ -141,10 +182,20 @@ class OverlayView(context: Context) : View(context) {
 
         c.drawRoundRect(cameraButton(), 12f, 12f, buttonPaint)
         c.drawRoundRect(fpsButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(rotLeftButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(mirrorButton(), 12f, 12f, buttonPaint)
+        c.drawRoundRect(rotRightButton(), 12f, 12f, buttonPaint)
+
         textPaint.color = 0xffe7eef1.toInt()
         textPaint.textSize = 20f
         c.drawText("CAMERA", width - 310f, 51f, textPaint)
         c.drawText(fpsModeLabel, width - 150f, 51f, textPaint)
+        c.drawText("-45°", width - 310f, 118f, textPaint)
+        c.drawText(if (mirrorX) "MIRROR✓" else "MIRROR", width - 210f, 118f, textPaint)
+        c.drawText("+45°", width - 90f, 118f, textPaint)
+
+        textPaint.textSize = 16f
+        c.drawText(orientationLabel, width - 330f, 158f, textPaint)
 
         val labelW = min(width - 32f, 820f)
         c.drawRoundRect(RectF(16f, height - 70f, 16f + labelW, height - 14f), 12f, 12f, shadePaint)
@@ -164,13 +215,26 @@ class OverlayView(context: Context) : View(context) {
                 onFpsToggle?.invoke()
                 return true
             }
+            if (rotLeftButton().contains(e.x, e.y)) {
+                onRotateLeft?.invoke()
+                return true
+            }
+            if (mirrorButton().contains(e.x, e.y)) {
+                onMirrorToggle?.invoke()
+                return true
+            }
+            if (rotRightButton().contains(e.x, e.y)) {
+                onRotateRight?.invoke()
+                return true
+            }
 
+            val pre = inverseManualPoint(e.x, e.y)
             val s = max(width.toFloat() / imageW, height.toFloat() / imageH)
             val ox = (width - imageW * s) / 2f
             val oy = (height - imageH * s) / 2f
 
-            val dx = ((e.x - ox) / s).coerceIn(0f, imageW.toFloat() - 1)
-            val dy = ((e.y - oy) / s).coerceIn(0f, imageH.toFloat() - 1)
+            val dx = ((pre.first - ox) / s).coerceIn(0f, imageW.toFloat() - 1)
+            val dy = ((pre.second - oy) / s).coerceIn(0f, imageH.toFloat() - 1)
             val point = fromDisplayPoint(dx, dy)
             onTapImage?.invoke(point.first, point.second)
         }
