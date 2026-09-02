@@ -5,35 +5,30 @@ import android.graphics.*;
 import android.view.MotionEvent;
 import android.view.View;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 public class HudView extends View {
     private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final CameraPreview camera;
     private final TargetTracker t;
+    private final ImuCompensator imu;
     private final YoloDetector yolo;
 
-    private final RectF[] buttons=new RectF[5];
-    private final String[] labels={"DETECT","HOLD","REACQ","CLEAR","DEBUG"};
-    private boolean debug=false;
+    private final RectF[] buttons=new RectF[6];
+    private final String[] labels={"DETECT","TRACK","IMU","FLOW","REACQ","CLEAR"};
 
     public HudView(Context c,CameraPreview cp,TargetTracker tr,ImuCompensator im){
         super(c);
-        camera=cp;t=tr;yolo=cp.getDetector();
-
-        p.setTypeface(Typeface.create(Typeface.MONOSPACE,Typeface.BOLD));
+        camera=cp;t=tr;imu=im;yolo=cp.getDetector();
+        p.setTypeface(Typeface.MONOSPACE);
         setWillNotDraw(false);
         setClickable(true);
-
         for(int i=0;i<buttons.length;i++)buttons[i]=new RectF();
 
         setOnTouchListener((v,e)->{
             if(e.getAction()!=MotionEvent.ACTION_UP)return true;
 
             float x=e.getX(),y=e.getY();
-
             for(int i=0;i<buttons.length;i++){
                 if(buttons[i].contains(x,y)){
                     handleButton(i);
@@ -45,7 +40,6 @@ public class HudView extends View {
             if(getWidth()>0&&getHeight()>0){
                 camera.selectTargetAt(x/getWidth(),y/getHeight());
             }
-
             performClick();
             return true;
         });
@@ -60,13 +54,16 @@ public class HudView extends View {
                 camera.setTrackEnabled(!camera.trackEnabled);
                 break;
             case 2:
-                camera.setAutoReacqEnabled(!camera.autoReacqEnabled);
+                camera.setImuEnabled(!camera.imuEnabled);
                 break;
             case 3:
-                camera.clearTarget();
+                camera.setFlowEnabled(!camera.flowEnabled);
                 break;
             case 4:
-                debug=!debug;
+                camera.setAutoReacqEnabled(!camera.autoReacqEnabled);
+                break;
+            case 5:
+                camera.clearTarget();
                 break;
         }
         invalidate();
@@ -79,222 +76,109 @@ public class HudView extends View {
 
     @Override protected void onDraw(Canvas c){
         super.onDraw(c);
+        int w=getWidth(),h=getHeight();
 
-        final int w=getWidth();
-        final int h=getHeight();
+        int green=Color.rgb(112,255,125);
+        int amber=Color.rgb(255,210,92);
+        int red=Color.rgb(255,100,100);
+        int cyan=Color.rgb(96,230,255);
+        int panel=Color.argb(165,0,12,4);
+        int dim=Color.argb(170,112,255,125);
+        int off=Color.rgb(95,105,95);
 
-        final int green=Color.rgb(110,255,126);
-        final int cyan=Color.rgb(96,225,255);
-        final int amber=Color.rgb(255,205,86);
-        final int red=Color.rgb(255,92,92);
-        final int orange=Color.rgb(255,145,55);
-        final int magenta=Color.rgb(255,70,210);
-        final int white=Color.rgb(224,240,226);
-        final int dim=Color.rgb(115,145,120);
-        final int panel=Color.argb(170,0,10,4);
-        final int panelSoft=Color.argb(125,0,10,4);
+        // Compact telemetry panel.
+        p.setColor(panel);p.setStyle(Paint.Style.FILL);
+        c.drawRoundRect(12,10,1040,210,12,12,p);
+        p.setTextSize(17);p.setStyle(Paint.Style.FILL);
 
-        boolean active=t.locked||t.acquiring||t.coasting||t.reacquiring;
-        boolean search=!active;
+        p.setColor("ERROR".equals(camera.status)?red:green);
+        c.drawText(String.format("CAM %.0f/%d FPS  %s  ANALYSIS %dx%d",
+                camera.cameraFps,camera.requestedFps,camera.status,
+                camera.getAnalysisW(),camera.getAnalysisH()),24,34,p);
 
-        String state;
-        int stateColor;
+        p.setColor(yolo.ready?green:(yolo.error.length()>0?red:amber));
+        c.drawText(String.format("YOLO %s %s  %.1f FPS / %.0f ms  det %d  %s",
+                yolo.ready?"READY":(yolo.started?"LOADING":"STANDBY"),
+                yolo.modelMode,yolo.detectorFps,yolo.latencyMs,yolo.detectionCount,
+                yolo.tensorTypes),24,60,p);
 
-        if(t.lockConfirmed){
-            state="LOCK";
-            stateColor=green;
-        }else if(t.reacquiring){
-            state="REACQUIRE";
-            stateColor=magenta;
-        }else if(t.coasting){
-            state="COAST";
-            stateColor=orange;
-        }else if(t.locked||t.acquiring){
-            state="ACQUIRE";
-            stateColor=amber;
+        if(yolo.error.length()>0){
+            p.setColor(red);
+            c.drawText("YOLO ERR "+shortText(yolo.error,86),24,86,p);
         }else{
-            state="SEARCH";
-            stateColor=cyan;
+            p.setColor(green);
+            c.drawText(String.format("IMU %.0f Hz  %.1f deg/s  Kx %.2f Ky %.2f",
+                    imu.gyroHz,imu.angularSpeedDeg,imu.strengthX,imu.strengthY),24,86,p);
         }
 
-        // ===== Main top status: readable in one glance =====
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(panel);
-        c.drawRoundRect(14,12,430,92,14,14,p);
+        p.setColor(green);
+        c.drawText(String.format("TRK %.0f FPS / %.1f ms  FLOW %.0f%% pts %d  GRAB %.0f",
+                t.trackerFps,t.latencyMs,t.flowQuality*100f,t.flowPoints,camera.analysisGrabFps),24,112,p);
 
-        p.setTextSize(28);
-        p.setColor(stateColor);
-        c.drawText(state,28,46,p);
+        c.drawText(String.format("STATE %s  CLASS %s  Q %.0f%%  lost %d  reacq %d",
+                t.acquireStatus,t.targetName,t.confidence*100,t.lostFrames,t.reacquireCount),24,138,p);
 
-        p.setTextSize(17);
-        p.setColor(white);
-        if(active){
-            String cls=t.targetName==null?"target":t.targetName;
-            c.drawText(cls.toUpperCase()+"  "+Math.round(t.confidence*100)+"%",28,74,p);
+        c.drawText(String.format("KF σ %.3f/%.3f  INN %.2f  EMA %.2f/%.2f",
+                t.filterSigmaX,t.filterSigmaY,t.filterInnovation,t.errorEmaX,t.errorEmaY),24,164,p);
+
+        if(camera.lastError.length()>0){
+            p.setColor(red);
+            c.drawText("ERR "+shortText(camera.lastError,92),24,192,p);
         }else{
-            c.drawText("ТАП ПО РАМКЕ ЦЕЛИ",28,74,p);
+            p.setColor(green);
+            c.drawText(String.format("FUSION IMU/FLOW %.0f/%.0f%%  Ycorr %d  tap %d",
+                    t.imuWeight*100,t.flowWeight*100,t.yoloCorrections,t.tapCount),24,192,p);
         }
 
-        // ===== Compact performance card =====
-        float statsW=330f;
-        float statsL=w-statsW-14f;
-        p.setColor(panelSoft);
-        c.drawRoundRect(statsL,12,w-14,92,14,14,p);
-
-        p.setTextSize(16);
-        p.setColor(white);
-        c.drawText(String.format("CAM  %.0f",camera.cameraFps),statsL+18,37,p);
-        c.drawText(String.format("YOLO %.1f",yolo.detectorFps),statsL+125,37,p);
-        c.drawText(String.format("TRK  %.0f",t.trackerFps),statsL+230,37,p);
-
-        p.setColor(yolo.ready?green:amber);
-        c.drawText("YOLO "+(yolo.ready?"OK":"..."),statsL+18,68,p);
-
-        p.setColor(t.lockConfirmed?green:(active?amber:dim));
-        c.drawText("HOLD "+(t.lockConfirmed?"OK":(active?"...":"IDLE")),statsL+125,68,p);
-
-        p.setColor(active?stateColor:dim);
-        c.drawText("Q "+Math.round(t.confidence*100)+"%",statsL+230,68,p);
-
-        // ===== YOLO candidates ONLY while searching =====
-        if(search&&camera.detectEnabled){
-            List<YoloDetector.Detection> ds=new ArrayList<>(yolo.getDetections());
-            ds.sort(Comparator.comparingDouble((YoloDetector.Detection d)->d.confidence).reversed());
-
-            int max=Math.min(8,ds.size());
+        // YOLO candidate boxes are ALWAYS visible when DETECT is enabled.
+        if(camera.detectEnabled){
+            List<YoloDetector.Detection> ds=yolo.getDetections();
             p.setTextSize(15);
+            for(YoloDetector.Detection d:ds){
+                float l=d.left*w,tb=d.top*h,r=d.right*w,b=d.bottom*h;
 
-            for(int i=0;i<max;i++){
-                YoloDetector.Detection d=ds.get(i);
-
-                float l=d.left*w;
-                float top=d.top*h;
-                float r=d.right*w;
-                float b=d.bottom*h;
-
+                boolean selectedClass=t.targetClass>=0&&d.classId==t.targetClass;
+                p.setColor(selectedClass?green:cyan);
                 p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(2.2f);
-                p.setColor(cyan);
-                drawCorners(c,l,top,r,b,13,p);
+                p.setStrokeWidth(selectedClass?3.0f:2.0f);
+                c.drawRect(l,tb,r,b,p);
 
                 p.setStyle(Paint.Style.FILL);
-                p.setColor(panelSoft);
-                float textW=p.measureText(d.className+" "+Math.round(d.confidence*100)+"%");
-                c.drawRoundRect(l,Math.max(4,top-24),l+textW+10,Math.max(23,top-3),5,5,p);
-
-                p.setColor(white);
                 c.drawText(d.className+" "+Math.round(d.confidence*100)+"%",
-                        l+5,Math.max(20,top-7),p);
+                        l+4,Math.max(18,tb-5),p);
             }
         }
 
-        // ===== ONE selected target box =====
-        if(active){
-            float cx=t.renderX*w;
-            float cy=t.renderY*h;
-
-            float halfW=Math.max(15f,t.boxW*w*.5f);
-            float halfH=Math.max(15f,t.boxH*h*.5f);
-
-            float l=cx-halfW;
-            float top=cy-halfH;
-            float r=cx+halfW;
-            float b=cy+halfH;
-
+        // Tracked target.
+        if(t.locked||t.acquiring||t.coasting||t.reacquiring){
+            float x=t.renderX*w,y=t.renderY*h,s=Math.max(18f,Math.min(w,h)*t.box);
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(t.lockConfirmed?4.4f:3.2f);
-            p.setColor(stateColor);
-            drawCorners(c,l,top,r,b,18,p);
-
-            c.drawCircle(cx,cy,5,p);
-
-            p.setStrokeWidth(1.5f);
-            p.setColor(Color.argb(120,
-                    Color.red(stateColor),
-                    Color.green(stateColor),
-                    Color.blue(stateColor)));
-            c.drawLine(w/2f,h/2f,cx,cy,p);
-
-            // Selected target label only.
-            String tag=state+" • "+t.targetName+" • Q "+Math.round(t.confidence*100)+"%";
-            p.setStyle(Paint.Style.FILL);
-            p.setTextSize(16);
-            float tw=p.measureText(tag);
-            float tagTop=Math.max(102,top-30);
-            p.setColor(panel);
-            c.drawRoundRect(l,tagTop,l+tw+16,tagTop+26,6,6,p);
-            p.setColor(stateColor);
-            c.drawText(tag,l+8,tagTop+19,p);
+            p.setStrokeWidth(3.4f);
+            p.setColor(t.locked?green:amber);
+            drawCorners(c,x-s,y-s,x+s,y+s,16,p);
+            c.drawCircle(x,y,6,p);
         }
 
-        // ===== Minimal center reticle =====
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeWidth(2f);
-        p.setColor(Color.argb(145,110,255,126));
-        c.drawLine(w/2f-15,h/2f,w/2f-5,h/2f,p);
-        c.drawLine(w/2f+5,h/2f,w/2f+15,h/2f,p);
-        c.drawLine(w/2f,h/2f-15,w/2f,h/2f-5,p);
-        c.drawLine(w/2f,h/2f+5,w/2f,h/2f+15,p);
+        // Screen center reticle.
+        p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);p.setColor(dim);
+        c.drawLine(w/2-18,h/2,w/2-5,h/2,p);c.drawLine(w/2+5,h/2,w/2+18,h/2,p);
+        c.drawLine(w/2,h/2-18,w/2,h/2-5,p);c.drawLine(w/2,h/2+5,w/2,h/2+18,p);
 
-        // ===== Debug is opt-in only =====
-        if(debug){
-            drawDebug(c,w,h,panel,white,green,red);
-        }
-
-        drawDashboard(c,w,h,green,dim,panel);
+        drawDashboard(c,w,h,green,off,panel);
 
         postInvalidateOnAnimation();
     }
 
-    private void drawDebug(Canvas c,int w,int h,int panel,int white,int green,int red){
-        float top=108f;
-        float right=Math.min(w-14f,770f);
-
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(panel);
-        c.drawRoundRect(14,top,right,top+128,10,10,p);
-
-        p.setTextSize(14);
-        p.setColor(white);
-
-        c.drawText(String.format("YOLO %s %s  %.1f FPS / %.0f ms  det %d",
-                yolo.modelMode,yolo.tensorTypes,yolo.detectorFps,yolo.latencyMs,yolo.detectionCount),
-                26,top+24,p);
-
-        p.setColor(green);
-        c.drawText(String.format("TRK %.1f FPS / %.1f ms  FLOW Q %.0f%%  miss %d",
-                t.trackerFps,t.latencyMs,t.flowQuality*100f,t.verifyMisses),
-                26,top+48,p);
-
-        p.setColor(white);
-        c.drawText(String.format("STATE %s  lost %d  reacq %d  Ycorr %d",
-                t.acquireStatus,t.lostFrames,t.reacquireCount,t.yoloCorrections),
-                26,top+72,p);
-
-        c.drawText(String.format("ANALYSIS %dx%d  grab %.0f FPS  track %.1f ms",
-                camera.getAnalysisW(),camera.getAnalysisH(),
-                camera.analysisGrabFps,t.latencyMs),
-                26,top+96,p);
-
-        if(yolo.error.length()>0){
-            p.setColor(red);
-            c.drawText("YOLO ERR "+shortText(yolo.error,70),26,top+120,p);
-        }
-    }
-
     private void drawDashboard(Canvas c,int w,int h,int onColor,int offColor,int panel){
-        float bw=132f;
-        float bh=46f;
-        float gap=8f;
-        float total=bw*5+gap*4;
-        float left=Math.max(14f,w-total-14f);
-        float top=h-bh-14f;
+        float bw=142f,bh=50f,gap=8f;
+        float total=bw*6+gap*5;
+        float left=Math.max(16,w-total-18);
+        float top=h-bh-16;
 
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(panel);
-        c.drawRoundRect(left-8,top-7,w-6,h-7,12,12,p);
+        p.setColor(panel);p.setStyle(Paint.Style.FILL);
+        c.drawRoundRect(left-10,top-8,w-8,h-8,12,12,p);
 
-        for(int i=0;i<5;i++){
+        for(int i=0;i<6;i++){
             float l=left+i*(bw+gap);
             buttons[i].set(l,top,l+bw,top+bh);
 
@@ -302,40 +186,32 @@ public class HudView extends View {
             switch(i){
                 case 0:on=camera.detectEnabled;break;
                 case 1:on=camera.trackEnabled;break;
-                case 2:on=camera.autoReacqEnabled;break;
-                case 3:on=true;break;
-                case 4:on=debug;break;
-                default:on=false;
+                case 2:on=camera.imuEnabled;break;
+                case 3:on=camera.flowEnabled;break;
+                case 4:on=camera.autoReacqEnabled;break;
+                default:on=true;break;
             }
 
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(2f);
-            p.setColor(i==3?Color.rgb(255,150,90):(on?onColor:offColor));
+            p.setColor(i==5?Color.rgb(255,150,90):(on?onColor:offColor));
             c.drawRoundRect(buttons[i],8,8,p);
 
             p.setStyle(Paint.Style.FILL);
-            p.setTextSize(15);
+            p.setTextSize(16);
             float tw=p.measureText(labels[i]);
-            c.drawText(labels[i],l+(bw-tw)/2f,top+29,p);
+            c.drawText(labels[i],l+(bw-tw)/2,top+31,p);
         }
     }
 
-    private void drawCorners(Canvas c,float l,float top,float r,float b,float k,Paint p){
-        c.drawLine(l,top,l+k,top,p);
-        c.drawLine(l,top,l,top+k,p);
-
-        c.drawLine(r,top,r-k,top,p);
-        c.drawLine(r,top,r,top+k,p);
-
-        c.drawLine(l,b,l+k,b,p);
-        c.drawLine(l,b,l,b-k,p);
-
-        c.drawLine(r,b,r-k,b,p);
-        c.drawLine(r,b,r,b-k,p);
+    private void drawCorners(Canvas c,float l,float t,float r,float b,float k,Paint p){
+        c.drawLine(l,t,l+k,t,p);c.drawLine(l,t,l,t+k,p);
+        c.drawLine(r,t,r-k,t,p);c.drawLine(r,t,r,t+k,p);
+        c.drawLine(l,b,l+k,b,p);c.drawLine(l,b,l,b-k,p);
+        c.drawLine(r,b,r-k,b,p);c.drawLine(r,b,r,b-k,p);
     }
 
     private String shortText(String s,int n){
-        if(s==null)return "";
-        return s.length()<=n?s:s.substring(0,n);
+        return s==null?"":(s.length()<=n?s:s.substring(0,n));
     }
 }
