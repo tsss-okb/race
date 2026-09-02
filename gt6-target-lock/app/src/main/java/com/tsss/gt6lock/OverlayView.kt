@@ -149,7 +149,7 @@ class OverlayView(context: Context) : View(context) {
             28f, 72f, text
         )
         c.drawText(
-            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  FLOW+GMC/NCC 640",
+            yoloBackend + "  " + "%.1f".format(yoloMs) + "ms  •  CameraX 60  •  STRONG HOLD 640 • FB-GMC • DUAL NCC",
             28f, 97f, text
         )
         if (showAvionics) {
@@ -174,7 +174,7 @@ class OverlayView(context: Context) : View(context) {
 
         c.drawRoundRect(RectF(14f, height - 42f, min(width - 14f, 760f), height - 10f), 10f, 10f, shade)
         text.textSize = 15f
-        c.drawText("ТАП = LOCK  •  ДВОЙНОЙ ТАП = RESET  •  VIDEO/TRACK AXES = CAMERAX", 26f, height - 20f, text)
+        c.drawText("ТАП = LOCK  •  ДВОЙНОЙ ТАП = RESET  •  STRONG HOLD • VIDEO/TRACK AXES = CAMERAX", 26f, height - 20f, text)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
