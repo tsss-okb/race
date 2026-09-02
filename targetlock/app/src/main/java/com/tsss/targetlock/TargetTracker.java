@@ -234,6 +234,9 @@ public class TargetTracker {
 
                     if(initKcfFromDetection(d)){
                         setMotionFromDetection(d,false);
+                        boxW=clamp(d.right-d.left,.02f,.85f);
+                        boxH=clamp(d.bottom-d.top,.02f,.85f);
+                        box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
                         yoloCorrections++;
                         if(wasLost)reacquireCount++;
 
@@ -250,10 +253,10 @@ public class TargetTracker {
 
                 if(kcf!=null&&locked){
                     Rect r=new Rect(
-                            clampInt(Math.round((x-box)*w),0,Math.max(0,w-2)),
-                            clampInt(Math.round((y-box)*h),0,Math.max(0,h-2)),
-                            Math.max(2,Math.round(box*2f*w)),
-                            Math.max(2,Math.round(box*2f*h))
+                            clampInt(Math.round((x-boxW*.5f)*w),0,Math.max(0,w-2)),
+                            clampInt(Math.round((y-boxH*.5f)*h),0,Math.max(0,h-2)),
+                            Math.max(2,Math.round(boxW*w)),
+                            Math.max(2,Math.round(boxH*h))
                     );
                     clampRect(r,w,h);
 
@@ -284,10 +287,13 @@ public class TargetTracker {
                         }else{
                             consecutiveKcfFails=0;
                             kcfUpdates++;
-                            x=predX=renderX=clamp(kx);
-                            y=predY=renderY=clamp(ky);
-                            boxW=clamp(kw,.02f,.85f);
-                            boxH=clamp(kh,.02f,.85f);
+                            x=predX=clamp(kx);
+                            y=predY=clamp(ky);
+                            final float renderA=.72f;
+                            renderX=clamp(renderX+(predX-renderX)*renderA);
+                            renderY=clamp(renderY+(predY-renderY)*renderA);
+                            boxW=clamp(boxW+(kw-boxW)*.68f,.02f,.85f);
+                            boxH=clamp(boxH+(kh-boxH)*.68f,.02f,.85f);
                             box=clamp(Math.max(boxW,boxH)*.5f,.012f,.42f);
                             confidence=Math.max(.30f,confidence*.997f);
                             acquireStatus="KCF HOLD";
@@ -393,7 +399,32 @@ public class TargetTracker {
 
         yoloConfidence=d.confidence;
         confidence=Math.max(confidence,d.confidence);
-        pendingCorrection=d;
+
+        float dw=Math.max(.008f,d.right-d.left);
+        float dh=Math.max(.008f,d.bottom-d.top);
+
+        float centerErrPx=(float)Math.hypot(
+                (d.cx()-predX)*Math.max(1,frameW),
+                (d.cy()-predY)*Math.max(1,frameH));
+
+        float scaleRatio=Math.max(
+                Math.max(dw/Math.max(.008f,boxW),boxW/Math.max(.008f,dw)),
+                Math.max(dh/Math.max(.008f,boxH),boxH/Math.max(.008f,dh)));
+
+        boolean lost=coasting||reacquiring||!locked||kcf==null;
+        float softGate=Math.max(4f,Math.min(frameW,frameH)*.025f);
+
+        if(!lost && centerErrPx<=softGate && scaleRatio<=1.18f){
+            // Detector confirms the same target. Update only the motion prior:
+            // this avoids destroying a good KCF correlation model every verify cycle.
+            setMotionFromDetection(d,false);
+            yoloCorrections++;
+            verifyMisses=0;
+            acquireStatus="KCF VERIFIED";
+        }else{
+            // Significant position/scale correction or reacquisition: re-seed KCF.
+            pendingCorrection=d;
+        }
     }
 
     public synchronized void onYoloMiss(){
