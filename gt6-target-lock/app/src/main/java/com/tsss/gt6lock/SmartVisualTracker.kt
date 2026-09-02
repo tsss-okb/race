@@ -79,7 +79,11 @@ class SmartVisualTracker {
     }
 
     @Synchronized
-    fun track(frame: FastLumaExtractor.GrayFrame, base: Detection): Result? {
+    fun track(
+        frame: FastLumaExtractor.GrayFrame,
+        base: Detection,
+        jumpBoost: Boolean = false
+    ): Result? {
         val anchor = anchorTemplate ?: return null
         val current = currentTemplate ?: anchor
 
@@ -90,21 +94,36 @@ class SmartVisualTracker {
         // Strong LOCK = tiny ROI. Only uncertainty is allowed to grow search cost.
         val stable = state == State.LOCK && goodStreak >= 4 && badStreak == 0
         val radiusGain = when {
+            jumpBoost -> 2.65f
             badStreak >= 4 -> 1.70f
             badStreak >= 2 -> 1.28f
             stable -> 0.66f
             else -> 0.92f
         }
-        val radiusX = ((12f + boxPx * 0.34f) * radiusGain).toInt().coerceIn(10, 92)
-        val radiusY = ((9f + boxPx * 0.28f) * radiusGain).toInt().coerceIn(8, 70)
 
-        // Three scales cost less than old 1px exhaustive search by using coarse->fine.
-        val scales = if (badStreak >= 2) {
-            floatArrayOf(0.88f, 1.00f, 1.12f)
+        val radiusX = if (jumpBoost) {
+            (32f + boxPx * 1.55f).toInt()
+                .coerceIn(70, (frame.width * 0.22f).toInt().coerceAtLeast(70))
         } else {
-            floatArrayOf(0.94f, 1.00f, 1.06f)
+            ((12f + boxPx * 0.34f) * radiusGain).toInt().coerceIn(10, 92)
         }
+
+        val radiusY = if (jumpBoost) {
+            (24f + boxPx * 1.10f).toInt()
+                .coerceIn(48, (frame.height * 0.25f).toInt().coerceAtLeast(48))
+        } else {
+            ((9f + boxPx * 0.28f) * radiusGain).toInt().coerceIn(8, 70)
+        }
+
+        // During a jerk use a coarse, much wider rescue scan.
+        val scales = when {
+            jumpBoost -> floatArrayOf(0.86f, 1.00f, 1.14f)
+            badStreak >= 2 -> floatArrayOf(0.88f, 1.00f, 1.12f)
+            else -> floatArrayOf(0.94f, 1.00f, 1.06f)
+        }
+
         val coarseStep = when {
+            jumpBoost -> 6
             badStreak >= 3 -> 3
             stable -> 3
             else -> 2
@@ -115,6 +134,7 @@ class SmartVisualTracker {
         var bestX = predictedX
         var bestY = predictedY
         var bestScale = 1f
+        var bestAnchorCorr = -2.0
 
         for (scale in scales) {
             val hw = max(anchor.halfW, current.halfW)
@@ -137,10 +157,17 @@ class SmartVisualTracker {
                         else correlation(frame, x, y, anchor, scale)
 
                     // Anchor resists drift. Current template can still win if viewpoint changed.
-                    val fused = max(
-                        0.64 * curCorr + 0.36 * anchorCorr,
-                        0.90 * curCorr - 0.03
-                    )
+                    val fused = if (jumpBoost) {
+                        max(
+                            0.50 * curCorr + 0.50 * anchorCorr,
+                            0.92 * anchorCorr - 0.04
+                        )
+                    } else {
+                        max(
+                            0.64 * curCorr + 0.36 * anchorCorr,
+                            0.90 * curCorr - 0.03
+                        )
+                    }
 
                     if (fused > bestScore) {
                         secondScore = bestScore
@@ -148,6 +175,7 @@ class SmartVisualTracker {
                         bestX = x
                         bestY = y
                         bestScale = scale
+                        bestAnchorCorr = anchorCorr
                     } else if (
                         fused > secondScore &&
                         abs(x - bestX) + abs(y - bestY) > 5
@@ -171,25 +199,44 @@ class SmartVisualTracker {
                 val curCorr = correlation(frame, x, y, current, bestScale)
                 val anchorCorr = if (anchor === current) curCorr
                     else correlation(frame, x, y, anchor, bestScale)
-                val fused = max(
-                    0.64 * curCorr + 0.36 * anchorCorr,
-                    0.90 * curCorr - 0.03
-                )
+                val fused = if (jumpBoost) {
+                    max(
+                        0.50 * curCorr + 0.50 * anchorCorr,
+                        0.92 * anchorCorr - 0.04
+                    )
+                } else {
+                    max(
+                        0.64 * curCorr + 0.36 * anchorCorr,
+                        0.90 * curCorr - 0.03
+                    )
+                }
                 if (fused > bestScore) {
                     bestScore = fused
                     bestX = x
                     bestY = y
+                    bestAnchorCorr = anchorCorr
                 }
             }
         }
 
         val score = (((bestScore + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
+        val anchorScore =
+            (((bestAnchorCorr + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
         val uniqueness = ((bestScore - secondScore).coerceIn(0.0, 1.0)).toFloat()
         lastScore = score
 
-        // Hysteresis: one weak frame does not drop LOCK.
-        val strong = score >= 0.69f && uniqueness >= 0.018f
-        val usable = score >= 0.56f
+        // Rescue may accept a slightly weaker candidate, but only if the
+        // immutable anchor also agrees. This avoids grabbing nearby background.
+        val strong = if (jumpBoost) {
+            score >= 0.66f && anchorScore >= 0.62f && uniqueness >= 0.010f
+        } else {
+            score >= 0.69f && uniqueness >= 0.018f
+        }
+        val usable = if (jumpBoost) {
+            score >= 0.53f && anchorScore >= 0.56f
+        } else {
+            score >= 0.56f
+        }
         if (!usable) return lost(base)
 
         badStreak = 0
@@ -224,7 +271,8 @@ class SmartVisualTracker {
             state == State.LOCK &&
             score >= 0.82f &&
             uniqueness >= 0.032f &&
-            framesSinceAdaptiveRefresh >= 10
+            framesSinceAdaptiveRefresh >= 10 &&
+            !jumpBoost
         ) {
             buildTemplate(frame, result)?.let { currentTemplate = it }
             framesSinceAdaptiveRefresh = 0
