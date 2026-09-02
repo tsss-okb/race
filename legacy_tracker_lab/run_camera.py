@@ -36,6 +36,8 @@ def parse_args():
     p.add_argument("--metrics", default="legacy_metrics.csv")
     p.add_argument("--record", default="")
     p.add_argument("--headless", action="store_true")
+    p.add_argument("--auto-select", action="store_true",
+                   help="Automatically select the highest-confidence candidate")
     return p.parse_args()
 
 
@@ -198,6 +200,8 @@ class App:
 
         if not self.selected:
             clicked = self.pick_clicked_detection()
+            if clicked is None and self.args.auto_select and detections:
+                clicked = max(detections, key=lambda d: d["confidence"])
             if clicked is not None:
                 self.start_from_detection(frame, clicked)
             return
@@ -239,6 +243,8 @@ class App:
 
             if not self.selected:
                 clicked = self.pick_clicked_detection()
+                if clicked is None and self.args.auto_select and detections:
+                    clicked = max(detections, key=lambda d: d["confidence"])
                 if clicked is not None:
                     self.start_from_detection(frame, clicked)
                 return
