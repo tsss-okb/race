@@ -35,7 +35,7 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var gLoad: Float = 1f
     @Volatile var bodyCalibrated: Boolean = false
     @Volatile var showAvionics: Boolean = true
-    @Volatile var jumpRescue: Boolean = false
+    @Volatile var softRescue: Boolean = false
 
     var onTapNormalized: ((Float, Float) -> Unit)? = null
     var onReset: (() -> Unit)? = null
@@ -144,7 +144,7 @@ class OverlayView(context: Context) : View(context) {
             else -> 0xffd8e1e5.toInt()
         }
         c.drawText(
-            stateLabel + (if (jumpRescue) " • JR" else "") +
+            stateLabel + (if (softRescue) " • SR" else "") +
                 "  " + (trackConf * 100).toInt() + "%",
             28f, 44f, text
         )
