@@ -34,6 +34,8 @@ class SmartVisualTracker {
         val heightNorm: Float
     )
 
+    private val nativeNcc = NativeNccMatcher()
+
     private var anchorTemplate: Template? = null
     private var currentTemplate: Template? = null
     private var badStreak = 0
@@ -50,6 +52,7 @@ class SmartVisualTracker {
     fun clear() {
         anchorTemplate = null
         currentTemplate = null
+        nativeNcc.clear()
         badStreak = 0
         goodStreak = 0
         framesSinceAdaptiveRefresh = 0
@@ -70,6 +73,17 @@ class SmartVisualTracker {
         val built = buildTemplate(frame, detection) ?: return false
         anchorTemplate = built
         currentTemplate = built
+        nativeNcc.setAnchor(
+            built.samples,
+            built.halfW,
+            built.halfH,
+            built.step,
+            built.sum,
+            built.sumSq,
+            built.widthNorm,
+            built.heightNorm,
+            copyToCurrent = true
+        )
         badStreak = 0
         goodStreak = 0
         framesSinceAdaptiveRefresh = 0
@@ -103,12 +117,7 @@ class SmartVisualTracker {
         val radiusX = ((12f + boxPx * 0.34f) * radiusGain).toInt().coerceIn(10, 92)
         val radiusY = ((9f + boxPx * 0.28f) * radiusGain).toInt().coerceIn(8, 70)
 
-        // Three scales cost less than old 1px exhaustive search by using coarse->fine.
-        val scales = if (badStreak >= 2) {
-            floatArrayOf(0.88f, 1.00f, 1.12f)
-        } else {
-            floatArrayOf(0.94f, 1.00f, 1.06f)
-        }
+        // Scale set remains identical to v4.2; C++ executes the coarse-to-fine scan.
         val coarseStep = when {
             softRescue -> 2
             badStreak >= 3 -> 3
@@ -116,78 +125,24 @@ class SmartVisualTracker {
             else -> 2
         }
 
-        var bestScore = -2.0
-        var secondScore = -2.0
-        var bestX = predictedX
-        var bestY = predictedY
-        var bestScale = 1f
+        val native = nativeNcc.nativeMatch(
+            frame.pixels,
+            frame.width,
+            frame.height,
+            predictedX,
+            predictedY,
+            radiusX,
+            radiusY,
+            coarseStep,
+            badStreak >= 2
+        )
 
-        for (scale in scales) {
-            val hw = max(anchor.halfW, current.halfW)
-            val hh = max(anchor.halfH, current.halfH)
-            val scaledHw = (hw * scale).toInt().coerceAtLeast(3)
-            val scaledHh = (hh * scale).toInt().coerceAtLeast(3)
+        if (native.size < 6 || native[0] < 0.5f) return lost(base)
 
-            val xStart = max(scaledHw + 2, predictedX - radiusX)
-            val xEnd = min(frame.width - scaledHw - 3, predictedX + radiusX)
-            val yStart = max(scaledHh + 2, predictedY - radiusY)
-            val yEnd = min(frame.height - scaledHh - 3, predictedY + radiusY)
-            if (xStart >= xEnd || yStart >= yEnd) continue
-
-            var y = yStart
-            while (y <= yEnd) {
-                var x = xStart
-                while (x <= xEnd) {
-                    val curCorr = correlation(frame, x, y, current, scale)
-                    val anchorCorr = if (anchor === current) curCorr
-                        else correlation(frame, x, y, anchor, scale)
-
-                    // Anchor resists drift. Current template can still win if viewpoint changed.
-                    val fused = max(
-                        0.64 * curCorr + 0.36 * anchorCorr,
-                        0.90 * curCorr - 0.03
-                    )
-
-                    if (fused > bestScore) {
-                        secondScore = bestScore
-                        bestScore = fused
-                        bestX = x
-                        bestY = y
-                        bestScale = scale
-                    } else if (
-                        fused > secondScore &&
-                        abs(x - bestX) + abs(y - bestY) > 5
-                    ) {
-                        secondScore = fused
-                    }
-                    x += coarseStep
-                }
-                y += coarseStep
-            }
-        }
-
-        if (bestScore <= -1.5) return lost(base)
-
-        // Fine refinement only around the best coarse candidate.
-        for (dy in -2..2) {
-            for (dx in -2..2) {
-                val x = bestX + dx
-                val y = bestY + dy
-                if (!fitsScaled(frame, x, y, current, bestScale)) continue
-                val curCorr = correlation(frame, x, y, current, bestScale)
-                val anchorCorr = if (anchor === current) curCorr
-                    else correlation(frame, x, y, anchor, bestScale)
-                val fused = max(
-                    0.64 * curCorr + 0.36 * anchorCorr,
-                    0.90 * curCorr - 0.03
-                )
-                if (fused > bestScore) {
-                    bestScore = fused
-                    bestX = x
-                    bestY = y
-                }
-            }
-        }
+        val bestX = native[1].toInt()
+        val bestY = native[2].toInt()
+        val bestScore = native[3].toDouble()
+        val secondScore = native[4].toDouble()
 
         val score = (((bestScore + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
         val uniqueness = ((bestScore - secondScore).coerceIn(0.0, 1.0)).toFloat()
@@ -231,7 +186,19 @@ class SmartVisualTracker {
             uniqueness >= 0.032f &&
             framesSinceAdaptiveRefresh >= 10
         ) {
-            buildTemplate(frame, result)?.let { currentTemplate = it }
+            buildTemplate(frame, result)?.let {
+                currentTemplate = it
+                nativeNcc.setCurrent(
+                    it.samples,
+                    it.halfW,
+                    it.halfH,
+                    it.step,
+                    it.sum,
+                    it.sumSq,
+                    it.widthNorm,
+                    it.heightNorm
+                )
+            }
             framesSinceAdaptiveRefresh = 0
         }
 
@@ -310,57 +277,6 @@ class SmartVisualTracker {
             detection.width.coerceIn(0.010f, 0.45f),
             detection.height.coerceIn(0.010f, 0.45f)
         )
-    }
-
-    private fun correlation(
-        frame: FastLumaExtractor.GrayFrame,
-        cx: Int,
-        cy: Int,
-        t: Template,
-        scale: Float
-    ): Double {
-        if (!fitsScaled(frame, cx, cy, t, scale)) return -2.0
-
-        var sumC = 0.0
-        var sumSqC = 0.0
-        var dot = 0.0
-        var i = 0
-
-        var ty = -t.halfH
-        while (ty <= t.halfH) {
-            var tx = -t.halfW
-            while (tx <= t.halfW && i < t.samples.size) {
-                val sx = cx + (tx * scale).toInt()
-                val sy = cy + (ty * scale).toInt()
-                val c = pixel(frame, sx, sy).toDouble()
-                val tv = t.samples[i++].toDouble()
-                sumC += c
-                sumSqC += c * c
-                dot += tv * c
-                tx += t.step
-            }
-            ty += t.step
-        }
-
-        val n = i.toDouble().coerceAtLeast(1.0)
-        val cov = dot - t.sum * sumC / n
-        val varT = t.sumSq - t.sum * t.sum / n
-        val varC = sumSqC - sumC * sumC / n
-        val denom = sqrt(max(1e-9, varT * varC))
-        return (cov / denom).coerceIn(-1.0, 1.0)
-    }
-
-    private fun fitsScaled(
-        frame: FastLumaExtractor.GrayFrame,
-        cx: Int,
-        cy: Int,
-        t: Template,
-        scale: Float
-    ): Boolean {
-        val hw = (t.halfW * scale).toInt() + 2
-        val hh = (t.halfH * scale).toInt() + 2
-        return cx - hw >= 0 && cy - hh >= 0 &&
-            cx + hw < frame.width && cy + hh < frame.height
     }
 
     private fun makeBox(
