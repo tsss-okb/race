@@ -75,14 +75,17 @@ Java_com_tsss_gt6lock_NativeSparseFlowGmcTracker_nativeTrack(
     }
     env->ReleaseByteArrayElements(y, p, JNI_ABORT);
 
-    float out[7] = {
+    float out[11] = {
         r.valid ? 1.f : 0.f,
         r.dxNorm, r.dyNorm,
         r.targetConsistency, r.globalConsistency,
-        (float)r.targetPoints, (float)r.backgroundPoints
+        (float)r.targetPoints, (float)r.backgroundPoints,
+        r.globalDxNorm, r.globalDyNorm,
+        r.blurRisk,
+        r.pyramidUsed ? 1.f : 0.f
     };
-    jfloatArray arr = env->NewFloatArray(7);
-    env->SetFloatArrayRegion(arr, 0, 7, out);
+    jfloatArray arr = env->NewFloatArray(11);
+    env->SetFloatArrayRegion(arr, 0, 11, out);
     return arr;
 }
 
