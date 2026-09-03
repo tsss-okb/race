@@ -33,6 +33,31 @@ class NativeNccMatcher {
         heightNorm: Float
     )
 
+    external fun nativeClearContext()
+
+    external fun nativeSetContext(
+        samples: FloatArray,
+        halfW: Int,
+        halfH: Int,
+        step: Int,
+        sum: Double,
+        sumSq: Double,
+        widthNorm: Float,
+        heightNorm: Float
+    )
+
+    external fun nativeMatchContext(
+        y: ByteArray,
+        w: Int,
+        h: Int,
+        predictedX: Int,
+        predictedY: Int,
+        radiusX: Int,
+        radiusY: Int,
+        coarseStep: Int,
+        wideScales: Boolean
+    ): FloatArray
+
     external fun nativeMatch(
         y: ByteArray,
         w: Int,
@@ -45,7 +70,10 @@ class NativeNccMatcher {
         wideScales: Boolean
     ): FloatArray
 
-    fun clear() = nativeClear()
+    fun clear() {
+        nativeClear()
+        nativeClearContext()
+    }
 
     fun setAnchor(
         samples: FloatArray,
@@ -60,6 +88,20 @@ class NativeNccMatcher {
     ) = nativeSetAnchor(
         samples, halfW, halfH, step, sum, sumSq,
         widthNorm, heightNorm, copyToCurrent
+    )
+
+    fun setContext(
+        samples: FloatArray,
+        halfW: Int,
+        halfH: Int,
+        step: Int,
+        sum: Double,
+        sumSq: Double,
+        widthNorm: Float,
+        heightNorm: Float
+    ) = nativeSetContext(
+        samples, halfW, halfH, step, sum, sumSq,
+        widthNorm, heightNorm
     )
 
     fun setCurrent(
