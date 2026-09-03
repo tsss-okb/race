@@ -44,7 +44,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.9 Strong Hold + ArduPilot + Shock Hold:
+ * Fusion v5.0 Strong Hold + ArduPilot + Anchor Reacquire:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -110,6 +110,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var shockCooldown = 0
     private var lastShockYawRate = 0f
     private var lastShockPitchRate = 0f
+    private var wideReacquireFrames = 0
+    private var wideReacquireCooldown = 0
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -607,6 +609,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val hardFlowFail =
                     flow == null || flow.targetConsistency < 0.36f
 
+                val flowJump =
+                    flow == null ||
+                    abs(flow.dxNorm) + abs(flow.dyNorm) > 0.050f ||
+                    flow.targetConsistency < 0.44f
+
+                val wideTrigger =
+                    shockEvent ||
+                    (previousLosJitter >= 7.5f && flowJump) ||
+                    (hardFlowFail && currentVisualScore < 0.62f)
+
+                if (wideTrigger && wideReacquireCooldown == 0) {
+                    wideReacquireFrames = 6
+                    wideReacquireCooldown = 12
+                    if (shockGraceFrames < 3) shockGraceFrames = 3
+                }
+
+                val wideActive = wideReacquireFrames > 0
+                overlay.anchorReacquire = wideActive
+
                 if (
                     hardFlowFail &&
                     nccRescueFrames == 0 &&
@@ -617,11 +638,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     nccRescueCooldown = 9
                 }
 
-                val rescueBurst = nccRescueFrames > 0 || shockActive
+                val rescueBurst = nccRescueFrames > 0 || shockActive || wideActive
                 val softRescue = rescueBurst || lightFailStreak in 1..3
                 overlay.softRescue = softRescue
 
                 val nccPeriod = when {
+                    wideActive -> 1L
                     shockActive -> 1L
                     rescueBurst -> 1L                         // ~60 Hz, short burst
                     stateLabel != "LOCK" -> 2L               // ~30 Hz
@@ -640,15 +662,32 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                 val visualBase = flowMeasurement ?: gyroPrior
                 val nccStartNs = if (runTemplate) System.nanoTime() else 0L
+                var wideRecovered = false
                 val visual =
                     if (runTemplate) {
-                        visualTracker.track(
-                            gray,
-                            visualBase,
-                            softRescue = softRescue,
-                            shockRescue = shockActive,
-                            freezeAdaptive = shockActive
-                        )
+                        if (wideActive) {
+                            val recovered = visualTracker.wideReacquire(gray, target)
+                            if (recovered != null) {
+                                wideRecovered = true
+                                recovered
+                            } else {
+                                visualTracker.track(
+                                    gray,
+                                    visualBase,
+                                    softRescue = true,
+                                    shockRescue = true,
+                                    freezeAdaptive = true
+                                )
+                            }
+                        } else {
+                            visualTracker.track(
+                                gray,
+                                visualBase,
+                                softRescue = softRescue,
+                                shockRescue = shockActive,
+                                freezeAdaptive = shockActive
+                            )
+                        }
                     } else null
                 if (runTemplate) {
                     profiler.recordNcc(System.nanoTime() - nccStartNs)
@@ -670,7 +709,21 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
 
                 if (chosenMeasurement != null) {
-                    motionTracker.applyVisual(chosenMeasurement, ts)
+                    if (wideRecovered) {
+                        // Full-frame anchor recovery is intentionally allowed to
+                        // bypass the normal innovation gate. The wide matcher has
+                        // already passed strict context + anchor uniqueness checks.
+                        motionTracker.forceLock(chosenMeasurement, ts)
+                        sparseFlow.seed(gray, chosenMeasurement)
+                        currentFlowScore = 0.70f
+                        currentVisualScore = visual?.score ?: currentVisualScore
+                        lightFailStreak = 0
+                        strongLockStreak = 3
+                        wideReacquireFrames = 0
+                        overlay.anchorReacquire = false
+                    } else {
+                        motionTracker.applyVisual(chosenMeasurement, ts)
+                    }
                     gotMeasurement = true
                 }
 
@@ -682,7 +735,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         strongLockStreak = 0
                     }
                 } else if (attemptedMeasurement) {
-                    if (shockActive && shockGraceFrames > 0) {
+                    if ((shockActive || wideActive) && shockGraceFrames > 0) {
                         // Keep the last motion model for the first shock frames.
                         // This prevents a camera jerk from immediately becoming
                         // a normal miss/reacquire sequence.
@@ -764,13 +817,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                 if (shockFrames > 0) shockFrames--
                 if (shockCooldown > 0) shockCooldown--
+                if (wideReacquireFrames > 0) wideReacquireFrames--
+                if (wideReacquireCooldown > 0) wideReacquireCooldown--
                 if (shockFrames == 0) overlay.shockHold = false
+                if (wideReacquireFrames == 0) overlay.anchorReacquire = false
 
                 profiler.recordFusion(System.nanoTime() - fusionStartNs)
             } else {
                 stateLabel = "SEARCH"
                 overlay.softRescue = false
                 overlay.shockHold = false
+                overlay.anchorReacquire = false
                 overlay.losDiagnosticsActive = false
             }
 
@@ -1039,8 +1096,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             shockCooldown = 0
             lastShockYawRate = 0f
             lastShockPitchRate = 0f
+            wideReacquireFrames = 0
+            wideReacquireCooldown = 0
             overlay.softRescue = false
             overlay.shockHold = false
+            overlay.anchorReacquire = false
             outputFps = 0f
             overlay.outputFps = 0f
             lightFailStreak = 0
