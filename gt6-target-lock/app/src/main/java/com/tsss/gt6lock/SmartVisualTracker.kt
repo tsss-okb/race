@@ -123,23 +123,39 @@ class SmartVisualTracker {
         base: Detection
     ): Result? {
         val anchor = anchorTemplate ?: return null
-        val context = contextTemplate ?: return null
+        val context = contextTemplate
 
         val centerX = (base.cx * frame.width).toInt()
         val centerY = (base.cy * frame.height).toInt()
 
         // Stage 1: coarse context-anchor scan across most of the frame.
-        val coarse = nativeNcc.nativeMatchContext(
-            frame.pixels,
-            frame.width,
-            frame.height,
-            centerX,
-            centerY,
-            (frame.width * 0.46f).toInt(),
-            (frame.height * 0.42f).toInt(),
-            8,
-            true
-        )
+        val coarse = if (context != null) {
+            nativeNcc.nativeMatchContext(
+                frame.pixels,
+                frame.width,
+                frame.height,
+                centerX,
+                centerY,
+                (frame.width * 0.46f).toInt(),
+                (frame.height * 0.42f).toInt(),
+                8,
+                true
+            )
+        } else {
+            // Near image borders a large context template may not be buildable.
+            // Fall back to the immutable normal anchor over the same wide ROI.
+            nativeNcc.nativeMatch(
+                frame.pixels,
+                frame.width,
+                frame.height,
+                centerX,
+                centerY,
+                (frame.width * 0.46f).toInt(),
+                (frame.height * 0.42f).toInt(),
+                8,
+                true
+            )
+        }
         if (coarse.size < 6 || coarse[0] < 0.5f) return null
 
         val coarseBest = coarse[3].toDouble()
