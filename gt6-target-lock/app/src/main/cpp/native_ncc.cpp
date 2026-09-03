@@ -195,5 +195,13 @@ NativeNccMatch NativeNccMatcher::match(
     out.bestScore = static_cast<float>(bestScore);
     out.secondScore = static_cast<float>(secondScore);
     out.bestScale = bestScale;
+    const double finalCurrent = correlation(
+        gray, w, h, bestX, bestY, current_, bestScale
+    );
+    const double finalAnchor = sameTemplates_
+        ? finalCurrent
+        : correlation(gray, w, h, bestX, bestY, anchor_, bestScale);
+    out.currentScore = static_cast<float>(finalCurrent);
+    out.anchorScore = static_cast<float>(finalAnchor);
     return out;
 }
