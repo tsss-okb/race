@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.4 Strong Hold + ArduPilot + CPU Breakdown:
+ * Fusion v4.5 Strong Hold + ArduPilot + Camera/Framework Breakdown:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val predictionFrameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!predictionLoopRunning) return
+            val choreoStartNs = System.nanoTime()
 
             val now = SystemClock.elapsedRealtime()
             val mavFresh = updateMavlinkHud(now)
@@ -142,7 +143,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     profiler.loopMaxMs, profiler.frameHeadroomPct
                 )
 
-                val hotPct = (
+                val visionPct = (
                     profiler.lumaMs * cameraFpsEma +
                     profiler.flowMs * profiler.flowHz +
                     profiler.nccMs * profiler.nccHz +
@@ -150,15 +151,31 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 ) / 10f
                 val hudPct =
                     overlay.hudDrawMs * overlay.displayFps.coerceAtLeast(1f) / 10f
-                val restPct =
-                    (profiler.cpuPct - hotPct - hudPct).coerceAtLeast(0f)
+                val choreoPct =
+                    profiler.choreoMs * profiler.choreoHz / 10f
+                val sensorPct =
+                    profiler.sensorMs * profiler.sensorHz / 10f
+                val uiPct =
+                    profiler.uiMs * profiler.uiHz / 10f
+                val measuredPct =
+                    visionPct + hudPct + choreoPct + sensorPct + uiPct
+                val frameworkPct =
+                    (profiler.cpuPct - measuredPct).coerceAtLeast(0f)
 
                 overlay.perfLine3 = String.format(
                     Locale.US,
-                    "STAGE L %.2f  F %.2f  N %.2f  X %.2f  HUD %.2fms | EST HOT %.0f%% REST %.0f%%",
+                    "STAGE L %.2f  F %.2f  N %.2f  X %.2f  HUD %.2fms | VIS %.0f%%",
                     profiler.lumaMs, profiler.flowMs, profiler.nccMs,
-                    profiler.fusionMs, overlay.hudDrawMs,
-                    hotPct + hudPct, restPct
+                    profiler.fusionMs, overlay.hudDrawMs, visionPct
+                )
+                overlay.perfLine4 = String.format(
+                    Locale.US,
+                    "FW CB %.0fHz/%.1fms  CH %.2f/%.0fHz  SNS %.2f/%.0fHz  UI %.2f/%.0fHz | CAMX/PREV EST %.0f%%",
+                    profiler.cameraCallbackHz, profiler.cameraCallbackGapMs,
+                    profiler.choreoMs, profiler.choreoHz,
+                    profiler.sensorMs, profiler.sensorHz,
+                    profiler.uiMs, profiler.uiHz,
+                    frameworkPct
                 )
             }
 
@@ -180,6 +197,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
 
             if (needDraw) overlay.postInvalidateOnAnimation()
+            profiler.recordChoreographer(System.nanoTime() - choreoStartNs)
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -392,7 +410,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     private fun analyzeImage(image: ImageProxy) {
-        val trackStartNs = System.nanoTime()
+        val callbackNowNs = System.nanoTime()
+        profiler.recordCameraCallback(callbackNowNs)
+        val trackStartNs = callbackNowNs
         try {
             if (prioritySet.compareAndSet(false, true)) {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) }
@@ -592,6 +612,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
             val now = SystemClock.elapsedRealtime()
             if (now - lastUiMs >= 65L) {
+                val uiStartNs = System.nanoTime()
                 lastUiMs = now
                 val fused = (
                     0.58f * currentVisualScore +
@@ -605,6 +626,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.jitterPx = jitterEma
                 overlay.detections = if (stateLabel == "LOCK") emptyList() else latestDetections
                 overlay.invalidate()
+                profiler.recordUi(System.nanoTime() - uiStartNs)
             }
         } finally {
             profiler.recordTrack(System.nanoTime() - trackStartNs)
@@ -834,6 +856,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
+        val sensorStartNs = System.nanoTime()
         when (event.sensor.type) {
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
                 val r = FloatArray(9)
@@ -881,6 +904,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.gLoad = sqrt(x*x + y*y + z*z) / 9.80665f
             }
         }
+        profiler.recordSensor(System.nanoTime() - sensorStartNs)
     }
 
     private fun wrap180(v: Float): Float {
