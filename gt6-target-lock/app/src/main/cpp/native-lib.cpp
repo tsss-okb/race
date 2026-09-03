@@ -11,6 +11,8 @@ static NativeSparseFlow gSparseFlow;
 static std::mutex gSparseFlowMutex;
 static NativeNccMatcher gNcc;
 static std::mutex gNccMutex;
+static NativeNccMatcher gNccContext;
+static std::mutex gNccContextMutex;
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tsss_gt6lock_NativeTracker_nativeInit(JNIEnv* env, jobject, jbyteArray y, jint w, jint h, jfloat cx, jfloat cy, jfloat bw, jfloat bh) {
@@ -133,6 +135,69 @@ Java_com_tsss_gt6lock_NativeNccMatcher_nativeSetCurrent(
     }
     env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeClearContext(
+    JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lk(gNccContextMutex);
+    gNccContext.clear();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeSetContext(
+    JNIEnv* env, jobject,
+    jfloatArray samples,
+    jint halfW, jint halfH, jint step,
+    jdouble sum, jdouble sumSq,
+    jfloat widthNorm, jfloat heightNorm
+) {
+    jfloat* p = env->GetFloatArrayElements(samples, nullptr);
+    const int count = env->GetArrayLength(samples);
+    {
+        std::lock_guard<std::mutex> lk(gNccContextMutex);
+        gNccContext.setAnchor(
+            p, count, halfW, halfH, step,
+            sum, sumSq, widthNorm, heightNorm,
+            true
+        );
+    }
+    env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeMatchContext(
+    JNIEnv* env, jobject,
+    jbyteArray y, jint w, jint h,
+    jint predictedX, jint predictedY,
+    jint radiusX, jint radiusY,
+    jint coarseStep, jboolean wideScales
+) {
+    jbyte* p = env->GetByteArrayElements(y, nullptr);
+    NativeNccMatch r;
+    {
+        std::lock_guard<std::mutex> lk(gNccContextMutex);
+        r = gNccContext.match(
+            reinterpret_cast<uint8_t*>(p), w, h,
+            predictedX, predictedY,
+            radiusX, radiusY,
+            coarseStep, wideScales == JNI_TRUE
+        );
+    }
+    env->ReleaseByteArrayElements(y, p, JNI_ABORT);
+
+    float out[6] = {
+        r.valid ? 1.f : 0.f,
+        static_cast<float>(r.bestX),
+        static_cast<float>(r.bestY),
+        r.bestScore,
+        r.secondScore,
+        r.bestScale
+    };
+    jfloatArray arr = env->NewFloatArray(6);
+    env->SetFloatArrayRegion(arr, 0, 6, out);
+    return arr;
+}
+
 
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_tsss_gt6lock_NativeNccMatcher_nativeMatch(
