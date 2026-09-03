@@ -60,6 +60,7 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var bodyCalibrated: Boolean = false
     @Volatile var showAvionics: Boolean = true
     @Volatile var softRescue: Boolean = false
+    @Volatile var shockHold: Boolean = false
 
     @Volatile var mavConnected: Boolean = false
     @Volatile var mavRollDeg: Float = 0f
@@ -292,7 +293,9 @@ class OverlayView(context: Context) : View(context) {
             else -> 0xffd8e1e5.toInt()
         }
         c.drawText(
-            stateLabel + (if (softRescue) " • SR" else "") +
+            stateLabel +
+                (if (softRescue) " • SR" else "") +
+                (if (shockHold) " • SHOCK" else "") +
                 "  " + (trackConf * 100).toInt() + "%",
             28f, 44f, text
         )
