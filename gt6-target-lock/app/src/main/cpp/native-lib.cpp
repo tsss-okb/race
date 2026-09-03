@@ -188,16 +188,18 @@ Java_com_tsss_gt6lock_NativeNccMatcher_nativeMatchContext(
     }
     env->ReleaseByteArrayElements(y, p, JNI_ABORT);
 
-    float out[6] = {
+    float out[8] = {
         r.valid ? 1.f : 0.f,
         static_cast<float>(r.bestX),
         static_cast<float>(r.bestY),
         r.bestScore,
         r.secondScore,
-        r.bestScale
+        r.bestScale,
+        r.currentScore,
+        r.anchorScore
     };
-    jfloatArray arr = env->NewFloatArray(6);
-    env->SetFloatArrayRegion(arr, 0, 6, out);
+    jfloatArray arr = env->NewFloatArray(8);
+    env->SetFloatArrayRegion(arr, 0, 8, out);
     return arr;
 }
 
@@ -223,15 +225,17 @@ Java_com_tsss_gt6lock_NativeNccMatcher_nativeMatch(
     }
     env->ReleaseByteArrayElements(y, p, JNI_ABORT);
 
-    float out[6] = {
+    float out[8] = {
         r.valid ? 1.f : 0.f,
         static_cast<float>(r.bestX),
         static_cast<float>(r.bestY),
         r.bestScore,
         r.secondScore,
-        r.bestScale
+        r.bestScale,
+        r.currentScore,
+        r.anchorScore
     };
-    jfloatArray arr = env->NewFloatArray(6);
-    env->SetFloatArrayRegion(arr, 0, 6, out);
+    jfloatArray arr = env->NewFloatArray(8);
+    env->SetFloatArrayRegion(arr, 0, 8, out);
     return arr;
 }
