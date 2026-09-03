@@ -44,7 +44,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v5.0 Strong Hold + ArduPilot + Anchor Reacquire:
+ * Fusion v5.1 Strong Hold + ArduPilot + Confirmed Reacquire:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -112,6 +112,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var lastShockPitchRate = 0f
     private var wideReacquireFrames = 0
     private var wideReacquireCooldown = 0
+    private var anchorCandidate: SmartVisualTracker.Result? = null
+    private var anchorCandidateHits = 0
+    private var anchorCandidateLastFrame = -100L
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -622,10 +625,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 if (wideTrigger && wideReacquireCooldown == 0) {
                     wideReacquireFrames = 6
                     wideReacquireCooldown = 12
+                    clearAnchorCandidate()
                     if (shockGraceFrames < 3) shockGraceFrames = 3
                 }
 
                 val wideActive = wideReacquireFrames > 0
+                val runWideSearch = wideActive && frameSerial % 2L == 0L
                 overlay.anchorReacquire = wideActive
 
                 if (
@@ -665,20 +670,53 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 var wideRecovered = false
                 val visual =
                     if (runTemplate) {
-                        if (wideActive) {
-                            val recovered = visualTracker.wideReacquire(gray, target)
-                            if (recovered != null) {
-                                wideRecovered = true
-                                recovered
+                        if (runWideSearch) {
+                            val proposal = visualTracker.wideReacquire(gray, target)
+                            if (proposal != null) {
+                                val prev = anchorCandidate
+                                val gap = frameSerial - anchorCandidateLastFrame
+                                val distPx = if (prev != null) {
+                                    hypot(
+                                        ((proposal.detection.cx - prev.detection.cx) * gray.width).toDouble(),
+                                        ((proposal.detection.cy - prev.detection.cy) * gray.height).toDouble()
+                                    ).toFloat()
+                                } else Float.POSITIVE_INFINITY
+                                val scoreStable =
+                                    prev != null && abs(proposal.score - prev.score) <= 0.10f
+                                val confirms =
+                                    prev != null &&
+                                    gap in 1L..3L &&
+                                    distPx <= 48f &&
+                                    scoreStable
+
+                                anchorCandidateHits =
+                                    if (confirms) (anchorCandidateHits + 1).coerceAtMost(2)
+                                    else 1
+                                anchorCandidate = proposal
+                                anchorCandidateLastFrame = frameSerial
+                                overlay.anchorConfirmHits = anchorCandidateHits
+
+                                if (anchorCandidateHits >= 2) {
+                                    visualTracker.acceptWideReacquire(proposal)
+                                    wideRecovered = true
+                                    proposal
+                                } else {
+                                    null
+                                }
                             } else {
-                                visualTracker.track(
-                                    gray,
-                                    visualBase,
-                                    softRescue = true,
-                                    shockRescue = true,
-                                    freezeAdaptive = true
-                                )
+                                clearAnchorCandidate()
+                                null
                             }
+                        } else if (wideActive) {
+                            // Alternate wide search with the proven local tracker.
+                            // Keep its ROI modest and freeze appearance adaptation.
+                            visualTracker.track(
+                                gray,
+                                visualBase,
+                                softRescue = true,
+                                shockRescue = false,
+                                freezeAdaptive = true
+                            )
                         } else {
                             visualTracker.track(
                                 gray,
@@ -703,7 +741,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 // Prefer a confident NCC correction; otherwise use robust flow.
                 val chosenMeasurement = when {
                     visual != null && visual.score >= 0.64f -> visual.detection
-                    flowMeasurement != null -> flowMeasurement
+                    flowMeasurement != null &&
+                        (!wideActive || currentFlowScore >= 0.62f) -> flowMeasurement
                     visual != null && visual.score >= 0.52f -> visual.detection
                     else -> null
                 }
@@ -721,6 +760,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         strongLockStreak = 3
                         wideReacquireFrames = 0
                         overlay.anchorReacquire = false
+                        clearAnchorCandidate()
                     } else {
                         motionTracker.applyVisual(chosenMeasurement, ts)
                     }
@@ -797,7 +837,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         currentFlowScore < 0.34f && currentVisualScore < 0.52f
 
                     stateLabel = when {
-                        shockActive && !gotMeasurement -> "PREDICT"
+                        (shockActive || (wideActive && anchorCandidateHits > 0)) &&
+                            !gotMeasurement -> "PREDICT"
                         lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
                         lightFailStreak >= 2 ||
                             (projected.predicted && strongLockStreak == 0) -> "PREDICT"
@@ -820,7 +861,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 if (wideReacquireFrames > 0) wideReacquireFrames--
                 if (wideReacquireCooldown > 0) wideReacquireCooldown--
                 if (shockFrames == 0) overlay.shockHold = false
-                if (wideReacquireFrames == 0) overlay.anchorReacquire = false
+                if (wideReacquireFrames == 0) {
+                    overlay.anchorReacquire = false
+                    clearAnchorCandidate()
+                }
 
                 profiler.recordFusion(System.nanoTime() - fusionStartNs)
             } else {
@@ -828,6 +872,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.softRescue = false
                 overlay.shockHold = false
                 overlay.anchorReacquire = false
+                clearAnchorCandidate()
                 overlay.losDiagnosticsActive = false
             }
 
@@ -1026,6 +1071,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         strongLockStreak = 2
     }
 
+    private fun clearAnchorCandidate() {
+        anchorCandidate = null
+        anchorCandidateHits = 0
+        anchorCandidateLastFrame = -100L
+        if (::overlay.isInitialized) overlay.anchorConfirmHits = 0
+    }
+
     private fun angleDeltaToNormalized(angleDeg: Float, fovDeg: Float): Float {
         val halfFov = Math.toRadians((fovDeg.coerceIn(10f, 150f) * 0.5).toDouble())
         val angle = Math.toRadians(angleDeg.toDouble())
@@ -1098,6 +1150,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             lastShockPitchRate = 0f
             wideReacquireFrames = 0
             wideReacquireCooldown = 0
+            clearAnchorCandidate()
             overlay.softRescue = false
             overlay.shockHold = false
             overlay.anchorReacquire = false
