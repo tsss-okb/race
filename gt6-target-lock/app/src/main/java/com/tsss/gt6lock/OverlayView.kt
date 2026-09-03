@@ -32,6 +32,8 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var ramMb: Float = 0f
     @Volatile var perfLine: String = "PERF  waiting..."
     @Volatile var perfLine2: String = "LOOP  waiting..."
+    @Volatile var perfLine3: String = "STAGE waiting..."
+    @Volatile var hudDrawMs: Float = 0f
 
     @Volatile var rollDeg: Float = 0f
     @Volatile var pitchDeg: Float = 0f
@@ -115,6 +117,7 @@ class OverlayView(context: Context) : View(context) {
     private fun hudButton() = RectF(width - 100f, 16f, width - 16f, 68f)
 
     override fun onDraw(c: Canvas) {
+        val hudStartNs = System.nanoTime()
         super.onDraw(c)
         val vr = videoRect()
 
@@ -191,7 +194,7 @@ class OverlayView(context: Context) : View(context) {
         }
 
         // Minimal top-left telemetry.
-        val panelBottom = if (showAvionics && mavConnected) 225f else 176f
+        val panelBottom = if (showAvionics && mavConnected) 252f else 202f
         c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 1040f), panelBottom), 12f, 12f, shade)
         text.textSize = 28f
         text.color = when (stateLabel) {
@@ -240,6 +243,7 @@ class OverlayView(context: Context) : View(context) {
         val perfY = if (showAvionics && mavConnected) 194f else 146f
         c.drawText(perfLine, 28f, perfY, text)
         c.drawText(perfLine2, 28f, perfY + 24f, text)
+        c.drawText(perfLine3, 28f, perfY + 48f, text)
 
         c.drawRoundRect(searchButton(), 10f, 10f, button)
         c.drawRoundRect(resetButton(), 10f, 10f, button)
@@ -255,6 +259,13 @@ class OverlayView(context: Context) : View(context) {
         c.drawRoundRect(RectF(14f, height - 42f, min(width - 14f, 760f), height - 10f), 10f, 10f, shade)
         text.textSize = 15f
         c.drawText("ТАП = LOCK  •  ДВОЙНОЙ ТАП = RESET  •  STRONG HOLD • VIDEO/TRACK AXES = CAMERAX", 26f, height - 20f, text)
+
+        val hudMsNow = (System.nanoTime() - hudStartNs) * 1e-6f
+        hudDrawMs = if (hudDrawMs <= 0f) {
+            hudMsNow
+        } else {
+            hudDrawMs + 0.12f * (hudMsNow - hudDrawMs)
+        }
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
