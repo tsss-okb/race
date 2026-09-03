@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.1 Strong Hold + ArduPilot + Benchmark HUD:
+ * Fusion v4.2 Strong Hold + ArduPilot + NCC Scheduler:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -91,6 +91,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var lastTapMs = 0L
     private var currentFlowScore = 0f
     private var currentVisualScore = 0f
+    private var nccRescueFrames = 0
+    private var nccRescueCooldown = 0
     private var lightFailStreak = 0
     private var strongLockStreak = 0
     private var jitterEma = 0f
@@ -445,22 +447,41 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     currentVisualScore >= 0.72f &&
                     lightFailStreak == 0
 
-                val flowWeakThisFrame =
-                    runFlow && (flow == null || flow.targetConsistency < 0.50f)
+                // v4.2 NCC Scheduler:
+                // Native Flow remains ~60 Hz. A merely "not perfect" flow sample
+                // must NOT force an expensive NCC scan on every camera frame.
+                val hardFlowFail =
+                    flow == null || flow.targetConsistency < 0.36f
 
-                // Soft Rescue only after a real failed measurement. No gyro trigger,
-                // no relaxed confidence thresholds and no huge search window.
-                val softRescue = lightFailStreak in 1..3
+                if (
+                    hardFlowFail &&
+                    nccRescueFrames == 0 &&
+                    nccRescueCooldown == 0
+                ) {
+                    // Short 3-frame burst at full camera rate, then cooldown.
+                    nccRescueFrames = 3
+                    nccRescueCooldown = 9
+                }
+
+                val rescueBurst = nccRescueFrames > 0
+                val softRescue = rescueBurst || lightFailStreak in 1..3
                 overlay.softRescue = softRescue
 
+                val nccPeriod = when {
+                    rescueBurst -> 1L                         // ~60 Hz, short burst
+                    stateLabel != "LOCK" -> 2L               // ~30 Hz
+                    hardFlowFail -> 2L                        // ~30 Hz after burst
+                    currentFlowScore < 0.52f -> 2L            // ~30 Hz
+                    currentVisualScore < 0.64f -> 3L          // ~20 Hz
+                    strongHold -> 5L                          // ~12 Hz
+                    else -> 4L                                // ~15 Hz
+                }
+
                 val runTemplate =
-                    softRescue ||
-                    flowWeakThisFrame ||
-                    if (strongHold) {
-                        frameSerial % 6L == 1L
-                    } else {
-                        frameSerial % 2L == 1L
-                    }
+                    rescueBurst || frameSerial % nccPeriod == 1L
+
+                if (nccRescueFrames > 0) nccRescueFrames--
+                if (nccRescueCooldown > 0) nccRescueCooldown--
 
                 val visualBase = flowMeasurement ?: target
                 val nccStartNs = if (runTemplate) System.nanoTime() else 0L
@@ -740,6 +761,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             latestDetections = emptyList()
             currentFlowScore = 0f
             currentVisualScore = 0f
+            nccRescueFrames = 0
+            nccRescueCooldown = 0
             overlay.softRescue = false
             outputFps = 0f
             overlay.outputFps = 0f
