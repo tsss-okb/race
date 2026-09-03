@@ -38,6 +38,7 @@ class SmartVisualTracker {
 
     private var anchorTemplate: Template? = null
     private var currentTemplate: Template? = null
+    private var contextTemplate: Template? = null
     private var badStreak = 0
     private var goodStreak = 0
     private var framesSinceAdaptiveRefresh = 0
@@ -52,6 +53,7 @@ class SmartVisualTracker {
     fun clear() {
         anchorTemplate = null
         currentTemplate = null
+        contextTemplate = null
         nativeNcc.clear()
         badStreak = 0
         goodStreak = 0
@@ -73,6 +75,16 @@ class SmartVisualTracker {
         val built = buildTemplate(frame, detection) ?: return false
         anchorTemplate = built
         currentTemplate = built
+        val context = buildTemplateScaled(
+            frame = frame,
+            detection = detection,
+            coreFactor = 0.72f,
+            minHalf = 8,
+            maxHalf = 42,
+            variancePerSample = 10.0
+        )
+        contextTemplate = context
+
         nativeNcc.setAnchor(
             built.samples,
             built.halfW,
@@ -84,12 +96,105 @@ class SmartVisualTracker {
             built.heightNorm,
             copyToCurrent = true
         )
+        if (context != null) {
+            nativeNcc.setContext(
+                context.samples,
+                context.halfW,
+                context.halfH,
+                context.step,
+                context.sum,
+                context.sumSq,
+                context.widthNorm,
+                context.heightNorm
+            )
+        }
+
         badStreak = 0
         goodStreak = 0
         framesSinceAdaptiveRefresh = 0
         lastScore = 1f
         state = State.LOCK
         return true
+    }
+
+    @Synchronized
+    fun wideReacquire(
+        frame: FastLumaExtractor.GrayFrame,
+        base: Detection
+    ): Result? {
+        val anchor = anchorTemplate ?: return null
+        val context = contextTemplate ?: return null
+
+        val centerX = (base.cx * frame.width).toInt()
+        val centerY = (base.cy * frame.height).toInt()
+
+        // Stage 1: coarse context-anchor scan across most of the frame.
+        val coarse = nativeNcc.nativeMatchContext(
+            frame.pixels,
+            frame.width,
+            frame.height,
+            centerX,
+            centerY,
+            (frame.width * 0.46f).toInt(),
+            (frame.height * 0.42f).toInt(),
+            8,
+            true
+        )
+        if (coarse.size < 6 || coarse[0] < 0.5f) return null
+
+        val coarseBest = coarse[3].toDouble()
+        val coarseSecond = coarse[4].toDouble()
+        val coarseScore =
+            (((coarseBest + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
+        val coarseUnique =
+            ((coarseBest - coarseSecond).coerceIn(0.0, 1.0)).toFloat()
+
+        if (coarseScore < 0.66f || coarseUnique < 0.018f) return null
+
+        // Stage 2: refine around the coarse candidate with the normal immutable
+        // anchor/current matcher. This rejects many background-only context hits.
+        val fine = nativeNcc.nativeMatch(
+            frame.pixels,
+            frame.width,
+            frame.height,
+            coarse[1].toInt(),
+            coarse[2].toInt(),
+            54,
+            42,
+            2,
+            true
+        )
+        if (fine.size < 6 || fine[0] < 0.5f) return null
+
+        val fineBest = fine[3].toDouble()
+        val fineSecond = fine[4].toDouble()
+        val score =
+            (((fineBest + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
+        val uniqueness =
+            ((fineBest - fineSecond).coerceIn(0.0, 1.0)).toFloat()
+
+        // Stricter than local tracking: a full-frame reacquire must be clearly
+        // unique before it is allowed to teleport the lock.
+        if (score < 0.70f || uniqueness < 0.024f) return null
+
+        val result = makeBox(
+            fine[1] / frame.width,
+            fine[2] / frame.height,
+            anchor.widthNorm,
+            anchor.heightNorm,
+            (0.46f + score * 0.50f).coerceIn(0.46f, 0.96f),
+            base.classId,
+            base.label,
+            predicted = false
+        )
+
+        badStreak = 0
+        goodStreak = 3
+        lastScore = score
+        framesSinceAdaptiveRefresh = 0
+        state = State.LOCK
+
+        return Result(result, score, uniqueness, state)
     }
 
     @Synchronized
@@ -257,15 +362,34 @@ class SmartVisualTracker {
     private fun buildTemplate(
         frame: FastLumaExtractor.GrayFrame,
         detection: Detection
+    ): Template? = buildTemplateScaled(
+        frame = frame,
+        detection = detection,
+        coreFactor = 0.30f,
+        minHalf = 5,
+        maxHalf = 24,
+        variancePerSample = 15.0
+    )
+
+    private fun buildTemplateScaled(
+        frame: FastLumaExtractor.GrayFrame,
+        detection: Detection,
+        coreFactor: Float,
+        minHalf: Int,
+        maxHalf: Int,
+        variancePerSample: Double
     ): Template? {
         if (frame.width < 80 || frame.height < 45) return null
 
         val cx = (detection.cx * frame.width).toInt().coerceIn(0, frame.width - 1)
         val cy = (detection.cy * frame.height).toInt().coerceIn(0, frame.height - 1)
 
-        // Use the visual core. A little context remains for texture but not enough to swallow background.
-        val halfW = (detection.width * frame.width * 0.30f).toInt().coerceIn(5, 24)
-        val halfH = (detection.height * frame.height * 0.30f).toInt().coerceIn(5, 24)
+        val halfW = (detection.width * frame.width * coreFactor)
+            .toInt()
+            .coerceIn(minHalf, maxHalf)
+        val halfH = (detection.height * frame.height * coreFactor)
+            .toInt()
+            .coerceIn(minHalf, maxHalf)
         if (!fits(frame, cx, cy, halfW, halfH)) return null
 
         val step = if (halfW * halfH > 220) 2 else 1
@@ -291,7 +415,7 @@ class SmartVisualTracker {
 
         if (i < 20) return null
         val variance = sumSq - (sum * sum / i)
-        if (variance < i * 15.0) return null
+        if (variance < i * variancePerSample) return null
 
         return Template(
             halfW,
