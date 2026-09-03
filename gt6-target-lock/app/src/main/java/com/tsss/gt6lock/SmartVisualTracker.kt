@@ -35,6 +35,7 @@ class SmartVisualTracker {
     )
 
     private val nativeNcc = NativeNccMatcher()
+    private val nativeRescue = NativeRescueEngine()
 
     private var anchorTemplate: Template? = null
     private var currentTemplate: Template? = null
@@ -55,6 +56,7 @@ class SmartVisualTracker {
         currentTemplate = null
         contextTemplate = null
         nativeNcc.clear()
+        nativeRescue.clear()
         badStreak = 0
         goodStreak = 0
         framesSinceAdaptiveRefresh = 0
@@ -96,8 +98,28 @@ class SmartVisualTracker {
             built.heightNorm,
             copyToCurrent = true
         )
+        nativeRescue.nativeSetAnchor(
+            built.samples,
+            built.halfW,
+            built.halfH,
+            built.step,
+            built.sum,
+            built.sumSq,
+            built.widthNorm,
+            built.heightNorm
+        )
         if (context != null) {
             nativeNcc.setContext(
+                context.samples,
+                context.halfW,
+                context.halfH,
+                context.step,
+                context.sum,
+                context.sumSq,
+                context.widthNorm,
+                context.heightNorm
+            )
+            nativeRescue.nativeSetContext(
                 context.samples,
                 context.halfW,
                 context.halfH,
@@ -118,98 +140,6 @@ class SmartVisualTracker {
     }
 
     @Synchronized
-    fun wideReacquire(
-        frame: FastLumaExtractor.GrayFrame,
-        base: Detection
-    ): Result? {
-        val anchor = anchorTemplate ?: return null
-        // v5.1: wide teleport is allowed only when BOTH the larger context
-        // anchor and the immutable core anchor exist and agree.
-        contextTemplate ?: return null
-
-        val centerX = (base.cx * frame.width).toInt()
-        val centerY = (base.cy * frame.height).toInt()
-
-        // Stage 1: coarse context-anchor scan across most of the frame.
-        val coarse = nativeNcc.nativeMatchContext(
-            frame.pixels,
-            frame.width,
-            frame.height,
-            centerX,
-            centerY,
-            (frame.width * 0.46f).toInt(),
-            (frame.height * 0.42f).toInt(),
-            8,
-            true
-        )
-        if (coarse.size < 6 || coarse[0] < 0.5f) return null
-
-        val coarseBest = coarse[3].toDouble()
-        val coarseSecond = coarse[4].toDouble()
-        val coarseScore =
-            (((coarseBest + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
-        val coarseUnique =
-            ((coarseBest - coarseSecond).coerceIn(0.0, 1.0)).toFloat()
-
-        if (coarseScore < 0.70f || coarseUnique < 0.025f) return null
-
-        // Stage 2: refine around the coarse candidate with the normal immutable
-        // anchor/current matcher. This rejects many background-only context hits.
-        val fine = nativeNcc.nativeMatch(
-            frame.pixels,
-            frame.width,
-            frame.height,
-            coarse[1].toInt(),
-            coarse[2].toInt(),
-            54,
-            42,
-            2,
-            true
-        )
-        if (fine.size < 8 || fine[0] < 0.5f) return null
-
-        val fineBest = fine[3].toDouble()
-        val fineSecond = fine[4].toDouble()
-        val score =
-            (((fineBest + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
-        val uniqueness =
-            ((fineBest - fineSecond).coerceIn(0.0, 1.0)).toFloat()
-
-        // v5.2 template bank: context + immutable anchor + last clean adaptive
-        // template must all agree at the same candidate.
-        val currentVote =
-            (((fine[6].toDouble() + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
-        val anchorVote =
-            (((fine[7].toDouble() + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
-
-        if (
-            score < 0.74f ||
-            uniqueness < 0.030f ||
-            currentVote < 0.66f ||
-            anchorVote < 0.68f
-        ) return null
-
-        val bankVote = min(currentVote, anchorVote)
-        val combinedScore = min(min(coarseScore, score), bankVote)
-        val combinedUnique = min(coarseUnique, uniqueness)
-
-        val result = makeBox(
-            fine[1] / frame.width,
-            fine[2] / frame.height,
-            anchor.widthNorm,
-            anchor.heightNorm,
-            (0.46f + combinedScore * 0.50f).coerceIn(0.46f, 0.96f),
-            base.classId,
-            base.label,
-            predicted = true
-        )
-
-        // Proposal only. v5.1 deliberately does NOT change state here.
-        // MainActivity requires two consistent wide proposals before accepting.
-        return Result(result, combinedScore, combinedUnique, State.PREDICT)
-    }
-
-    @Synchronized
     fun acceptWideReacquire(result: Result) {
         val anchor = anchorTemplate ?: return
 
@@ -218,6 +148,16 @@ class SmartVisualTracker {
         // immediately pull the lock toward a neighbouring texture.
         currentTemplate = anchor
         nativeNcc.setCurrent(
+            anchor.samples,
+            anchor.halfW,
+            anchor.halfH,
+            anchor.step,
+            anchor.sum,
+            anchor.sumSq,
+            anchor.widthNorm,
+            anchor.heightNorm
+        )
+        nativeRescue.nativeSetCurrent(
             anchor.samples,
             anchor.halfW,
             anchor.halfH,
@@ -340,6 +280,16 @@ class SmartVisualTracker {
             buildTemplate(frame, result)?.let {
                 currentTemplate = it
                 nativeNcc.setCurrent(
+                    it.samples,
+                    it.halfW,
+                    it.halfH,
+                    it.step,
+                    it.sum,
+                    it.sumSq,
+                    it.widthNorm,
+                    it.heightNorm
+                )
+                nativeRescue.nativeSetCurrent(
                     it.samples,
                     it.halfW,
                     it.halfH,
