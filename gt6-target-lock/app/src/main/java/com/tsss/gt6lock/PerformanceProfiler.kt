@@ -6,7 +6,7 @@ import android.os.SystemClock
 import kotlin.concurrent.thread
 
 /**
- * v4.1 Benchmark profiler.
+ * v4.4 CPU Breakdown profiler.
  *
  * Hot path:
  * - nanoTime is measured by caller
@@ -19,9 +19,13 @@ import kotlin.concurrent.thread
  * - FLOW/NCC invocation rates
  */
 class PerformanceProfiler {
+    @Volatile var lumaMs: Float = 0f
+        private set
     @Volatile var flowMs: Float = 0f
         private set
     @Volatile var nccMs: Float = 0f
+        private set
+    @Volatile var fusionMs: Float = 0f
         private set
     @Volatile var trackMs: Float = 0f
         private set
@@ -56,6 +60,11 @@ class PerformanceProfiler {
     @Volatile private var flowEvents = 0
     @Volatile private var nccEvents = 0
 
+    fun recordLuma(elapsedNs: Long) {
+        val ms = elapsedNs * 1e-6f
+        lumaMs = ema(lumaMs, ms, 0.16f)
+    }
+
     fun recordFlow(elapsedNs: Long) {
         val ms = elapsedNs * 1e-6f
         flowMs = ema(flowMs, ms, 0.16f)
@@ -66,6 +75,11 @@ class PerformanceProfiler {
         val ms = elapsedNs * 1e-6f
         nccMs = ema(nccMs, ms, 0.18f)
         nccEvents++
+    }
+
+    fun recordFusion(elapsedNs: Long) {
+        val ms = elapsedNs * 1e-6f
+        fusionMs = ema(fusionMs, ms, 0.16f)
     }
 
     fun recordTrack(elapsedNs: Long) {
