@@ -24,7 +24,6 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -43,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.5 Strong Hold + ArduPilot + Camera/Framework Breakdown:
+ * Fusion v4.6 Strong Hold + ArduPilot + Lean Camera Pipeline:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -376,8 +375,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         return runCatching {
             provider.unbindAll()
 
+            // Lean preview: cap preview work at 1280x720.
+            // Tracking remains on the independent 640x360 ImageAnalysis stream.
             val previewBuilder = Preview.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setTargetResolution(Size(1280, 720))
             if (!request60) previewBuilder.setTargetFrameRate(Range(30, 60))
             val preview = previewBuilder.build().also {
                 it.surfaceProvider = previewView.surfaceProvider
@@ -625,6 +626,26 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 overlay.trackConf = fused
                 overlay.jitterPx = jitterEma
                 overlay.detections = if (stateLabel == "LOCK") emptyList() else latestDetections
+
+                // Cache all formatted HUD strings here (~15 Hz), never in onDraw().
+                overlay.statusLine1 = String.format(
+                    Locale.US,
+                    "CAM %.1f  MEAS %.1f  OUT %.1f  JIT %.1fpx  YOLO %s",
+                    cameraFpsEma, trackFps, outputFps, jitterEma, overlay.yoloMode
+                )
+                overlay.statusLine2 = String.format(
+                    Locale.US,
+                    "DISP %.1f/MAX %.0f  • REQ120 • PREV720  • %s %.1fms",
+                    overlay.displayFps, overlay.maxDisplayFps,
+                    overlay.yoloBackend, overlay.yoloMs
+                )
+                overlay.phoneImuLine = String.format(
+                    Locale.US,
+                    "PHONE IMU  R %+.1f  P %+.1f  HDG %03d  G %.2f  rates %+.0f/%+.0f/%+.0f",
+                    overlay.rollDeg, overlay.pitchDeg, overlay.headingDeg.toInt(),
+                    overlay.gLoad, overlay.pDeg, overlay.qDeg, overlay.rDeg
+                )
+
                 overlay.invalidate()
                 profiler.recordUi(System.nanoTime() - uiStartNs)
             }
