@@ -35,6 +35,9 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var perfLine3: String = "STAGE waiting..."
     @Volatile var perfLine4: String = "FW waiting..."
     @Volatile var hudDrawMs: Float = 0f
+    @Volatile var statusLine1: String = "CAM --  MEAS --  OUT --  JIT --"
+    @Volatile var statusLine2: String = "DISP --  • PREV720"
+    @Volatile var phoneImuLine: String = "PHONE IMU --"
 
     @Volatile var rollDeg: Float = 0f
     @Volatile var pitchDeg: Float = 0f
@@ -212,16 +215,8 @@ class OverlayView(context: Context) : View(context) {
 
         text.color = Color.WHITE
         text.textSize = 18f
-        c.drawText(
-            "CAM " + "%.1f".format(cameraFps) + "  MEAS " + "%.1f".format(trackFps) +
-                "  OUT " + "%.1f".format(outputFps) + "  JIT " + "%.1f".format(jitterPx) + "px  YOLO " + yoloMode,
-            28f, 72f, text
-        )
-        c.drawText(
-            "DISP " + "%.1f".format(displayFps) + "/MAX " + "%.0f".format(maxDisplayFps) +
-                "  •  REQ120  •  " + yoloBackend + "  " + "%.1f".format(yoloMs) + "ms",
-            28f, 97f, text
-        )
+        c.drawText(statusLine1, 28f, 72f, text)
+        c.drawText(statusLine2, 28f, 97f, text)
         if (showAvionics) {
             if (mavConnected) {
                 text.color = 0xff8ff0a4.toInt()
@@ -230,12 +225,7 @@ class OverlayView(context: Context) : View(context) {
                 c.drawText(mavLine2, 28f, 145f, text)
                 c.drawText(mavLine3, 28f, 169f, text)
             } else {
-                c.drawText(
-                    "PHONE IMU  R " + "%+.1f".format(rollDeg) + "  P " + "%+.1f".format(pitchDeg) +
-                        "  HDG " + "%03d".format(headingDeg.toInt()) + "  G " + "%.2f".format(gLoad) +
-                        "  rates " + "%+.0f/%+.0f/%+.0f".format(pDeg, qDeg, rDeg),
-                    28f, 121f, text
-                )
+                c.drawText(phoneImuLine, 28f, 121f, text)
             }
         }
 
