@@ -96,7 +96,9 @@ class SmartVisualTracker {
     fun track(
         frame: FastLumaExtractor.GrayFrame,
         base: Detection,
-        softRescue: Boolean = false
+        softRescue: Boolean = false,
+        shockRescue: Boolean = false,
+        freezeAdaptive: Boolean = false
     ): Result? {
         val anchor = anchorTemplate ?: return null
         val current = currentTemplate ?: anchor
@@ -108,17 +110,21 @@ class SmartVisualTracker {
         // Strong LOCK = tiny ROI. Only uncertainty is allowed to grow search cost.
         val stable = state == State.LOCK && goodStreak >= 4 && badStreak == 0
         val radiusGain = when {
+            shockRescue -> 2.25f
             softRescue -> 1.34f
             badStreak >= 4 -> 1.70f
             badStreak >= 2 -> 1.28f
             stable -> 0.66f
             else -> 0.92f
         }
-        val radiusX = ((12f + boxPx * 0.34f) * radiusGain).toInt().coerceIn(10, 92)
-        val radiusY = ((9f + boxPx * 0.28f) * radiusGain).toInt().coerceIn(8, 70)
+        val radiusX = ((12f + boxPx * 0.34f) * radiusGain).toInt()
+            .coerceIn(10, if (shockRescue) 150 else 92)
+        val radiusY = ((9f + boxPx * 0.28f) * radiusGain).toInt()
+            .coerceIn(8, if (shockRescue) 112 else 70)
 
         // Scale set remains identical to v4.2; C++ executes the coarse-to-fine scan.
         val coarseStep = when {
+            shockRescue -> 4
             softRescue -> 2
             badStreak >= 3 -> 3
             stable -> 3
@@ -134,10 +140,10 @@ class SmartVisualTracker {
             radiusX,
             radiusY,
             coarseStep,
-            badStreak >= 2
+            shockRescue || badStreak >= 2
         )
 
-        if (native.size < 6 || native[0] < 0.5f) return lost(base)
+        if (native.size < 6 || native[0] < 0.5f) return lost(base, shockRescue)
 
         val bestX = native[1].toInt()
         val bestY = native[2].toInt()
@@ -151,7 +157,7 @@ class SmartVisualTracker {
         // Hysteresis: one weak frame does not drop LOCK.
         val strong = score >= 0.69f && uniqueness >= 0.018f
         val usable = score >= 0.56f
-        if (!usable) return lost(base)
+        if (!usable) return lost(base, shockRescue)
 
         badStreak = 0
         goodStreak = (goodStreak + 1).coerceAtMost(30)
@@ -181,6 +187,8 @@ class SmartVisualTracker {
         framesSinceAdaptiveRefresh++
         // Update only adaptive template, never the anchor, and only on very clean LOCK.
         if (
+            !freezeAdaptive &&
+            !shockRescue &&
             state == State.LOCK &&
             score >= 0.82f &&
             uniqueness >= 0.032f &&
@@ -205,7 +213,25 @@ class SmartVisualTracker {
         return Result(result, score, uniqueness, state)
     }
 
-    private fun lost(base: Detection): Result? {
+    private fun lost(base: Detection, shockRescue: Boolean = false): Result? {
+        if (shockRescue) {
+            // A short camera jerk must not poison the state machine or replace
+            // the adaptive template with motion blur. Hold the prior briefly
+            // while the widened NCC search tries to recover the same target.
+            goodStreak = max(0, goodStreak - 1)
+            lastScore *= 0.90f
+            state = State.PREDICT
+            return Result(
+                base.copy(
+                    confidence = (base.confidence * 0.96f).coerceAtLeast(0.20f),
+                    predicted = true
+                ),
+                lastScore,
+                0f,
+                state
+            )
+        }
+
         badStreak++
         goodStreak = max(0, goodStreak - 2)
         lastScore *= 0.78f
