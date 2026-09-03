@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var detectorExecutor: ExecutorService
 
     private val luma = FastLumaExtractor(maxOutputWidth = 640, ringSize = 4)
-    private val sparseFlow = NativeSparseFlowGmcTracker()
+    private val nativeRescue = NativeRescueEngine()
     private val visualTracker = SmartVisualTracker()
     private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
     private val mavlink = MavlinkTelemetry(port = 14550)
@@ -105,22 +105,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var cameraVfovDeg = 43f
     private var cameraFovEstimated = false
 
-    private var shockFrames = 0
-    private var shockGraceFrames = 0
-    private var shockCooldown = 0
-    private var lastShockYawRate = 0f
-    private var lastShockPitchRate = 0f
-    private var wideReacquireFrames = 0
-    private var wideReacquireCooldown = 0
-    private var anchorCandidate: SmartVisualTracker.Result? = null
-    private var anchorCandidateHits = 0
-    private var anchorCandidateLastFrame = -100L
     private var currentBlurRisk = 0f
-    private var currentGlobalDxNorm = 0f
-    private var currentGlobalDyNorm = 0f
     private var currentGlobalShiftPx = 0f
     private var currentPyramidUsed = false
-    private var blurGuardFrames = 0
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -520,107 +507,65 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var target = motionTracker.locked
 
             if (target != null) {
-                val mavFreshForShock = mavlink.ageMs() <= 1200L
-                val ownYawRate = if (mavFreshForShock) mavlink.yawRateDeg else overlay.rDeg
-                val ownPitchRate = if (mavFreshForShock) mavlink.pitchRateDeg else overlay.qDeg
-
-                val ownRateMag = hypot(
-                    ownYawRate.toDouble(),
-                    ownPitchRate.toDouble()
-                ).toFloat()
-                val rateJerk = hypot(
-                    (ownYawRate - lastShockYawRate).toDouble(),
-                    (ownPitchRate - lastShockPitchRate).toDouble()
-                ).toFloat() / frameDtSec.coerceAtLeast(1f / 240f)
+                val mavFreshForRescue = mavlink.ageMs() <= 1200L
+                val ownYawRate =
+                    if (mavFreshForRescue) mavlink.yawRateDeg else overlay.rDeg
+                val ownPitchRate =
+                    if (mavFreshForRescue) mavlink.pitchRateDeg else overlay.qDeg
                 val previousLosJitter = losDiagnostics.current().jitterDegS
 
-                val shockEvent =
-                    ownRateMag >= 45f ||
-                    rateJerk >= 850f ||
-                    (previousLosJitter >= 10f && ownRateMag >= 16f)
+                // v5.2: pyramid GMC, blur guard, shock detection, wide search,
+                // template-bank voting and two-frame confirmation all live in C++.
+                val rescueStartNs = System.nanoTime()
+                val rescue = nativeRescue.process(
+                    frame = gray,
+                    target = target,
+                    yawRateDegS = ownYawRate,
+                    pitchRateDegS = ownPitchRate,
+                    dtSec = frameDtSec,
+                    losJitterDegS = previousLosJitter,
+                    visualScore = currentVisualScore
+                )
+                profiler.recordFlow(System.nanoTime() - rescueStartNs)
 
-                if (shockEvent && shockCooldown == 0) {
-                    shockFrames = 6
-                    shockGraceFrames = 2
-                    shockCooldown = 12
-                }
+                currentBlurRisk = rescue.blurRisk
+                currentGlobalShiftPx = hypot(
+                    (rescue.globalDxNorm * gray.width).toDouble(),
+                    (rescue.globalDyNorm * gray.height).toDouble()
+                ).toFloat()
+                currentPyramidUsed = rescue.pyramidUsed
 
-                val shockActive = shockFrames > 0
+                val blurHigh = rescue.blurHigh
+                val shockActive = rescue.shockActive
+                val wideActive = rescue.wideActive
                 overlay.shockHold = shockActive
-                lastShockYawRate = ownYawRate
-                lastShockPitchRate = ownPitchRate
+                overlay.anchorReacquire = wideActive
+                overlay.anchorConfirmHits = rescue.confirmHits
 
-                // Gyro prior is used only as the center of the widened rescue
-                // search. It is never emitted as a flight-control command.
-                val gyroDx = if (shockActive) {
-                    -angleDeltaToNormalized(
-                        ownYawRate * frameDtSec,
-                        cameraHfovDeg
-                    ).coerceIn(-0.10f, 0.10f)
-                } else 0f
-                val gyroDy = if (shockActive) {
-                    angleDeltaToNormalized(
-                        ownPitchRate * frameDtSec,
-                        cameraVfovDeg
-                    ).coerceIn(-0.10f, 0.10f)
-                } else 0f
-                val gyroPrior = if (shockActive) {
-                    shiftDetection(
-                        target,
-                        gyroDx,
-                        gyroDy,
-                        (target.confidence * 0.97f).coerceAtLeast(0.25f),
-                        predicted = true
-                    )
-                } else target
+                currentFlowScore =
+                    if (rescue.flowValid) {
+                        (
+                            0.72f * rescue.targetConsistency +
+                                0.28f * rescue.globalConsistency
+                            ).coerceIn(0f, 1f)
+                    } else {
+                        currentFlowScore * 0.92f
+                    }
 
-                // v3.8: native sparse flow/GMC runs on every camera frame.
-                // NCC cadence stays equivalent to v3.7.
-                val runFlow = true
-                val flowStartNs = System.nanoTime()
-                val flow = sparseFlow.track(gray, target)
-                profiler.recordFlow(System.nanoTime() - flowStartNs)
-
-                currentBlurRisk = flow?.blurRisk ?: (currentBlurRisk * 0.90f)
-                currentGlobalDxNorm = flow?.globalDxNorm ?: 0f
-                currentGlobalDyNorm = flow?.globalDyNorm ?: 0f
-                currentGlobalShiftPx = if (flow != null) {
-                    hypot(
-                        (flow.globalDxNorm * gray.width).toDouble(),
-                        (flow.globalDyNorm * gray.height).toDouble()
-                    ).toFloat()
-                } else 0f
-                currentPyramidUsed = flow?.pyramidUsed == true
-
-                if (currentBlurRisk >= 0.38f) {
-                    blurGuardFrames = 3
-                    if (shockGraceFrames < 2) shockGraceFrames = 2
-                } else if (blurGuardFrames > 0) {
-                    blurGuardFrames--
-                }
-                val blurHigh = blurGuardFrames > 0
-
-                if (runFlow) {
-                    currentFlowScore = flow?.let {
-                        (0.72f * it.targetConsistency + 0.28f * it.globalConsistency)
-                            .coerceIn(0f, 1f)
-                    } ?: currentFlowScore * 0.92f
-                }
-
-                var attemptedMeasurement = runFlow
+                var attemptedMeasurement = true
                 val flowMeasurement =
                     if (
-                        flow != null &&
-                        flow.targetConsistency >= 0.36f &&
-                        abs(flow.dxNorm) + abs(flow.dyNorm) < 0.16f
+                        rescue.flowValid &&
+                        rescue.targetConsistency >= 0.36f &&
+                        abs(rescue.dxNorm) + abs(rescue.dyNorm) < 0.16f
                     ) {
                         shiftDetection(
                             target,
-                            flow.dxNorm,
-                            flow.dyNorm,
-                            (0.50f + 0.46f * flow.targetConsistency)
+                            rescue.dxNorm,
+                            rescue.dyNorm,
+                            (0.50f + 0.46f * rescue.targetConsistency)
                                 .coerceIn(0.50f, 0.96f),
-                            predicted = flow.targetConsistency < 0.60f
+                            predicted = rescue.targetConsistency < 0.60f
                         )
                     } else null
 
@@ -628,14 +573,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                 val gmcPrior =
                     if (
-                        flow != null &&
-                        flow.globalConsistency >= 0.42f &&
+                        rescue.globalConsistency >= 0.42f &&
                         currentGlobalShiftPx >= 5f
                     ) {
                         shiftDetection(
                             target,
-                            flow.globalDxNorm.coerceIn(-0.20f, 0.20f),
-                            flow.globalDyNorm.coerceIn(-0.20f, 0.20f),
+                            rescue.globalDxNorm.coerceIn(-0.20f, 0.20f),
+                            rescue.globalDyNorm.coerceIn(-0.20f, 0.20f),
                             (target.confidence * 0.96f).coerceAtLeast(0.25f),
                             predicted = true
                         )
@@ -647,189 +591,139 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     currentVisualScore >= 0.72f &&
                     lightFailStreak == 0
 
-                // v4.2 NCC Scheduler:
-                // Native Flow remains ~60 Hz. A merely "not perfect" flow sample
-                // must NOT force an expensive NCC scan on every camera frame.
                 val hardFlowFail =
-                    flow == null || flow.targetConsistency < 0.36f
-
-                val flowJump =
-                    flow == null ||
-                    abs(flow.dxNorm) + abs(flow.dyNorm) > 0.050f ||
-                    flow.targetConsistency < 0.44f
-
-                val wideTrigger =
-                    shockEvent ||
-                    (currentPyramidUsed && currentGlobalShiftPx >= 10f) ||
-                    (previousLosJitter >= 7.5f && flowJump) ||
-                    (hardFlowFail && currentVisualScore < 0.62f)
-
-                if (wideTrigger && wideReacquireCooldown == 0) {
-                    wideReacquireFrames = 6
-                    wideReacquireCooldown = 12
-                    clearAnchorCandidate()
-                    if (shockGraceFrames < 3) shockGraceFrames = 3
-                }
-
-                val wideActive = wideReacquireFrames > 0
-                val runWideSearch =
-                    wideActive && !blurHigh && frameSerial % 2L == 0L
-                overlay.anchorReacquire = wideActive
+                    !rescue.flowValid || rescue.targetConsistency < 0.36f
 
                 if (
                     hardFlowFail &&
                     nccRescueFrames == 0 &&
                     nccRescueCooldown == 0
                 ) {
-                    // Short 3-frame burst at full camera rate, then cooldown.
                     nccRescueFrames = 3
                     nccRescueCooldown = 9
                 }
 
-                val rescueBurst = nccRescueFrames > 0 || shockActive || wideActive
-                val softRescue = rescueBurst || lightFailStreak in 1..3
+                val rescueBurst =
+                    nccRescueFrames > 0 || shockActive || wideActive
+                val softRescue =
+                    rescueBurst || lightFailStreak in 1..3
                 overlay.softRescue = softRescue
 
                 val nccPeriod = when {
-                    wideActive -> 1L
+                    wideActive -> 2L
                     shockActive -> 1L
-                    rescueBurst -> 1L                         // ~60 Hz, short burst
-                    stateLabel != "LOCK" -> 2L               // ~30 Hz
-                    hardFlowFail -> 2L                        // ~30 Hz after burst
-                    currentFlowScore < 0.52f -> 2L            // ~30 Hz
-                    currentVisualScore < 0.64f -> 3L          // ~20 Hz
-                    strongHold -> 5L                          // ~12 Hz
-                    else -> 4L                                // ~15 Hz
+                    nccRescueFrames > 0 -> 1L
+                    stateLabel != "LOCK" -> 2L
+                    hardFlowFail -> 2L
+                    currentFlowScore < 0.52f -> 2L
+                    currentVisualScore < 0.64f -> 3L
+                    strongHold -> 5L
+                    else -> 4L
                 }
 
-                val runTemplate =
-                    rescueBurst || frameSerial % nccPeriod == 1L
+                // C++ wide search runs on even frames. Local NCC uses odd frames
+                // while ANCHOR is active, avoiding the v5.0/v5.1 CPU spike.
+                val runTemplate = when {
+                    wideActive -> frameSerial % 2L == 1L
+                    rescueBurst -> true
+                    else -> frameSerial % nccPeriod == 1L
+                }
 
                 if (nccRescueFrames > 0) nccRescueFrames--
                 if (nccRescueCooldown > 0) nccRescueCooldown--
 
-                val visualBase = flowMeasurement ?: gmcPrior ?: gyroPrior
+                val visualBase = flowMeasurement ?: gmcPrior ?: target
                 val runNcc = runTemplate && !blurHigh
                 val nccStartNs = if (runNcc) System.nanoTime() else 0L
-                var wideRecovered = false
                 val visual =
                     if (runNcc) {
-                        if (runWideSearch) {
-                            val proposal = visualTracker.wideReacquire(gray, target)
-                            if (proposal != null) {
-                                val prev = anchorCandidate
-                                val gap = frameSerial - anchorCandidateLastFrame
-                                val distPx = if (prev != null) {
-                                    hypot(
-                                        ((proposal.detection.cx - prev.detection.cx) * gray.width).toDouble(),
-                                        ((proposal.detection.cy - prev.detection.cy) * gray.height).toDouble()
-                                    ).toFloat()
-                                } else Float.POSITIVE_INFINITY
-                                val scoreStable =
-                                    prev != null && abs(proposal.score - prev.score) <= 0.10f
-                                val confirms =
-                                    prev != null &&
-                                    gap in 1L..3L &&
-                                    distPx <= 48f &&
-                                    scoreStable
-
-                                anchorCandidateHits =
-                                    if (confirms) (anchorCandidateHits + 1).coerceAtMost(2)
-                                    else 1
-                                anchorCandidate = proposal
-                                anchorCandidateLastFrame = frameSerial
-                                overlay.anchorConfirmHits = anchorCandidateHits
-
-                                if (anchorCandidateHits >= 2) {
-                                    visualTracker.acceptWideReacquire(proposal)
-                                    wideRecovered = true
-                                    proposal
-                                } else {
-                                    null
-                                }
-                            } else {
-                                clearAnchorCandidate()
-                                null
-                            }
-                        } else if (wideActive) {
-                            // Alternate wide search with the proven local tracker.
-                            // Keep its ROI modest and freeze appearance adaptation.
-                            visualTracker.track(
-                                gray,
-                                visualBase,
-                                softRescue = true,
-                                shockRescue = false,
-                                freezeAdaptive = true
-                            )
-                        } else {
-                            visualTracker.track(
-                                gray,
-                                visualBase,
-                                softRescue = softRescue,
-                                shockRescue = shockActive,
-                                freezeAdaptive = shockActive || blurHigh
-                            )
-                        }
+                        visualTracker.track(
+                            gray,
+                            visualBase,
+                            softRescue = softRescue,
+                            shockRescue = shockActive,
+                            freezeAdaptive =
+                                shockActive || wideActive || blurHigh
+                        )
                     } else null
+
                 if (runNcc) {
                     profiler.recordNcc(System.nanoTime() - nccStartNs)
                     attemptedMeasurement = true
-                    currentVisualScore = visual?.score ?: visualTracker.score
+                    currentVisualScore =
+                        visual?.score ?: visualTracker.score
                 }
 
                 val fusionStartNs = System.nanoTime()
 
-                // Never move the box twice in one camera frame.
-                // Prefer a confident NCC correction; otherwise use robust flow.
-                val chosenMeasurement = when {
-                    blurHigh &&
-                        flowMeasurement != null &&
-                        (flow?.globalConsistency ?: 0f) >= 0.42f -> flowMeasurement
-                    blurHigh -> null
-                    visual != null && visual.score >= 0.64f -> visual.detection
-                    flowMeasurement != null &&
-                        (!wideActive || currentFlowScore >= 0.62f) -> flowMeasurement
-                    visual != null && visual.score >= 0.52f -> visual.detection
-                    else -> null
-                }
-
-                if (chosenMeasurement != null) {
-                    if (wideRecovered) {
-                        // Full-frame anchor recovery is intentionally allowed to
-                        // bypass the normal innovation gate. The wide matcher has
-                        // already passed strict context + anchor uniqueness checks.
-                        motionTracker.forceLock(chosenMeasurement, ts)
-                        sparseFlow.seed(gray, chosenMeasurement)
-                        currentFlowScore = 0.70f
-                        currentVisualScore = visual?.score ?: currentVisualScore
-                        lightFailStreak = 0
-                        strongLockStreak = 3
-                        wideReacquireFrames = 0
-                        overlay.anchorReacquire = false
-                        clearAnchorCandidate()
-                    } else {
-                        motionTracker.applyVisual(chosenMeasurement, ts)
-                    }
+                if (rescue.accept) {
+                    val recovered = boxAt(
+                        rescue.candidateCx,
+                        rescue.candidateCy,
+                        target.width,
+                        target.height,
+                        rescue.candidateScore.coerceIn(0.45f, 0.97f),
+                        target.classId,
+                        target.label,
+                        predicted = false
+                    )
+                    val nativeResult = SmartVisualTracker.Result(
+                        recovered,
+                        rescue.candidateScore,
+                        rescue.candidateUnique,
+                        SmartVisualTracker.State.LOCK
+                    )
+                    visualTracker.acceptWideReacquire(nativeResult)
+                    motionTracker.forceLock(recovered, ts)
+                    currentFlowScore = 0.70f
+                    currentVisualScore = rescue.candidateScore
+                    lightFailStreak = 0
+                    strongLockStreak = 3
+                    overlay.anchorReacquire = false
+                    overlay.anchorConfirmHits = 0
                     gotMeasurement = true
+                } else {
+                    // Never move the box twice in one camera frame.
+                    val chosenMeasurement = when {
+                        blurHigh &&
+                            flowMeasurement != null &&
+                            rescue.globalConsistency >= 0.42f ->
+                            flowMeasurement
+                        blurHigh -> null
+                        visual != null && visual.score >= 0.64f ->
+                            visual.detection
+                        flowMeasurement != null &&
+                            (!wideActive || currentFlowScore >= 0.62f) ->
+                            flowMeasurement
+                        visual != null && visual.score >= 0.52f ->
+                            visual.detection
+                        else -> null
+                    }
+
+                    if (chosenMeasurement != null) {
+                        motionTracker.applyVisual(chosenMeasurement, ts)
+                        gotMeasurement = true
+                    }
                 }
 
                 if (gotMeasurement) {
                     lightFailStreak = 0
-                    if (currentFlowScore >= 0.62f || currentVisualScore >= 0.70f) {
-                        strongLockStreak = (strongLockStreak + 1).coerceAtMost(30)
+                    if (
+                        currentFlowScore >= 0.62f ||
+                        currentVisualScore >= 0.70f
+                    ) {
+                        strongLockStreak =
+                            (strongLockStreak + 1).coerceAtMost(30)
                     } else {
                         strongLockStreak = 0
                     }
                 } else if (attemptedMeasurement) {
-                    if ((shockActive || wideActive || blurHigh) && shockGraceFrames > 0) {
-                        // Keep the last motion model for the first shock frames.
-                        // This prevents a camera jerk from immediately becoming
-                        // a normal miss/reacquire sequence.
-                        shockGraceFrames--
+                    if (shockActive || wideActive || blurHigh) {
+                        // Native rescue state owns the temporary hold window.
                         strongLockStreak = 0
                     } else {
-                        // Only a real failed tracker attempt counts as a miss.
-                        lightFailStreak = (lightFailStreak + 1).coerceAtMost(30)
+                        lightFailStreak =
+                            (lightFailStreak + 1).coerceAtMost(30)
                         strongLockStreak = 0
                         motionTracker.miss(ts)
                     }
@@ -838,27 +732,24 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val current = motionTracker.locked
                 if (current == null) {
                     visualTracker.clear()
-                    sparseFlow.clear()
+                    nativeRescue.clear()
                     lightFailStreak = 0
                     strongLockStreak = 0
                     stateLabel = "SEARCH"
                     overlay.locked = null
                 } else {
-                    val projected = motionTracker.predict(ts) ?: current
+                    val projected =
+                        motionTracker.predict(ts) ?: current
                     overlay.locked = projected
                     updateJitter(projected, gray.width, gray.height)
 
                     val mavFreshForLos = mavlink.ageMs() <= 1200L
-                    val ownYawRate = if (mavFreshForLos) {
-                        mavlink.yawRateDeg
-                    } else {
-                        overlay.rDeg
-                    }
-                    val ownPitchRate = if (mavFreshForLos) {
-                        mavlink.pitchRateDeg
-                    } else {
-                        overlay.qDeg
-                    }
+                    val ownYawRateLos =
+                        if (mavFreshForLos) mavlink.yawRateDeg
+                        else overlay.rDeg
+                    val ownPitchRateLos =
+                        if (mavFreshForLos) mavlink.pitchRateDeg
+                        else overlay.qDeg
 
                     val los = losDiagnostics.update(
                         targetCx = current.cx,
@@ -866,8 +757,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         timestampNs = ts,
                         horizontalFovDeg = cameraHfovDeg,
                         verticalFovDeg = cameraVfovDeg,
-                        ownYawRateDegS = ownYawRate,
-                        ownPitchRateDegS = ownPitchRate
+                        ownYawRateDegS = ownYawRateLos,
+                        ownPitchRateDegS = ownPitchRateLos
                     )
                     overlay.losErrorXDeg = los.losXDeg
                     overlay.losErrorYDeg = los.losYDeg
@@ -877,49 +768,52 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     overlay.losDeadZoneNormX = los.deadZoneNormX
                     overlay.losDeadZoneNormY = los.deadZoneNormY
                     overlay.losDiagnosticsActive = true
-                    overlay.losCompSource = if (mavFreshForLos) "MAV" else "PHONE"
+                    overlay.losCompSource =
+                        if (mavFreshForLos) "MAV" else "PHONE"
 
                     val bothLightTrackersWeak =
-                        currentFlowScore < 0.34f && currentVisualScore < 0.52f
+                        currentFlowScore < 0.34f &&
+                            currentVisualScore < 0.52f
 
                     stateLabel = when {
                         blurHigh && !gotMeasurement -> "PREDICT"
-                        (shockActive || (wideActive && anchorCandidateHits > 0)) &&
-                            !gotMeasurement -> "PREDICT"
-                        lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
+                        (
+                            shockActive ||
+                                (wideActive && rescue.confirmHits > 0)
+                            ) && !gotMeasurement -> "PREDICT"
+                        lightFailStreak >= 4 &&
+                            bothLightTrackersWeak -> "REACQUIRE"
                         lightFailStreak >= 2 ||
-                            (projected.predicted && strongLockStreak == 0) -> "PREDICT"
-                        strongLockStreak >= 2 || gotMeasurement -> "LOCK"
+                            (
+                                projected.predicted &&
+                                    strongLockStreak == 0
+                                ) -> "PREDICT"
+                        strongLockStreak >= 2 || gotMeasurement ->
+                            "LOCK"
                         else -> "PREDICT"
                     }
 
                     trackCounter++
                     val nowTrack = SystemClock.elapsedRealtime()
                     if (nowTrack - trackWindowStart >= 1000L) {
-                        trackFps = trackCounter * 1000f /
-                            (nowTrack - trackWindowStart).coerceAtLeast(1L)
+                        trackFps =
+                            trackCounter * 1000f /
+                                (nowTrack - trackWindowStart)
+                                    .coerceAtLeast(1L)
                         trackCounter = 0
                         trackWindowStart = nowTrack
                     }
                 }
 
-                if (shockFrames > 0) shockFrames--
-                if (shockCooldown > 0) shockCooldown--
-                if (wideReacquireFrames > 0) wideReacquireFrames--
-                if (wideReacquireCooldown > 0) wideReacquireCooldown--
-                if (shockFrames == 0) overlay.shockHold = false
-                if (wideReacquireFrames == 0) {
-                    overlay.anchorReacquire = false
-                    clearAnchorCandidate()
-                }
-
-                profiler.recordFusion(System.nanoTime() - fusionStartNs)
+                profiler.recordFusion(
+                    System.nanoTime() - fusionStartNs
+                )
             } else {
                 stateLabel = "SEARCH"
                 overlay.softRescue = false
                 overlay.shockHold = false
                 overlay.anchorReacquire = false
-                clearAnchorCandidate()
+                overlay.anchorConfirmHits = 0
                 overlay.losDiagnosticsActive = false
             }
 
@@ -1099,7 +993,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
         if (visualTracker.refreshTemplate(gray, d)) {
             motionTracker.forceLock(d, gray.timestampNs)
-            sparseFlow.seed(gray, d)
+            nativeRescue.seed(gray, d)
             overlay.locked = d
             stateLabel = "LOCK"
             currentVisualScore = 1f
@@ -1113,26 +1007,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun initAtTap(gray: FastLumaExtractor.GrayFrame, nx: Float, ny: Float) {
         val d = visualTracker.seedAt(gray, nx, ny) ?: return
         motionTracker.forceLock(d, gray.timestampNs)
-        sparseFlow.seed(gray, d)
+        nativeRescue.seed(gray, d)
         overlay.locked = d
         stateLabel = "LOCK"
         currentVisualScore = 1f
         currentFlowScore = 0.7f
         lightFailStreak = 0
         strongLockStreak = 2
-    }
-
-    private fun clearAnchorCandidate() {
-        anchorCandidate = null
-        anchorCandidateHits = 0
-        anchorCandidateLastFrame = -100L
-        if (::overlay.isInitialized) overlay.anchorConfirmHits = 0
-    }
-
-    private fun angleDeltaToNormalized(angleDeg: Float, fovDeg: Float): Float {
-        val halfFov = Math.toRadians((fovDeg.coerceIn(10f, 150f) * 0.5).toDouble())
-        val angle = Math.toRadians(angleDeg.toDouble())
-        return (Math.tan(angle) / (2.0 * Math.tan(halfFov))).toFloat()
     }
 
     private fun shiftDetection(
@@ -1186,7 +1067,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         cameraExecutor.execute {
             motionTracker.clear()
             visualTracker.clear()
-            sparseFlow.clear()
+            nativeRescue.clear()
             pendingTap = null
             pendingReacquire = null
             latestDetections = emptyList()
@@ -1194,20 +1075,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             currentVisualScore = 0f
             nccRescueFrames = 0
             nccRescueCooldown = 0
-            shockFrames = 0
-            shockGraceFrames = 0
-            shockCooldown = 0
-            lastShockYawRate = 0f
-            lastShockPitchRate = 0f
-            wideReacquireFrames = 0
-            wideReacquireCooldown = 0
-            clearAnchorCandidate()
             currentBlurRisk = 0f
-            currentGlobalDxNorm = 0f
-            currentGlobalDyNorm = 0f
             currentGlobalShiftPx = 0f
             currentPyramidUsed = false
-            blurGuardFrames = 0
             overlay.softRescue = false
             overlay.shockHold = false
             overlay.anchorReacquire = false
