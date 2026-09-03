@@ -38,6 +38,17 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var statusLine1: String = "CAM --  MEAS --  OUT --  JIT --"
     @Volatile var statusLine2: String = "DISP --  • PREV720"
     @Volatile var phoneImuLine: String = "PHONE IMU --"
+    @Volatile var losLine1: String = "LOS --"
+    @Volatile var losLine2: String = "MOTION/JITTER --"
+    @Volatile var losDiagnosticsActive: Boolean = false
+    @Volatile var losErrorXDeg: Float = 0f
+    @Volatile var losErrorYDeg: Float = 0f
+    @Volatile var losRateXDegS: Float = 0f
+    @Volatile var losRateYDegS: Float = 0f
+    @Volatile var losInsideDeadZone: Boolean = true
+    @Volatile var losDeadZoneNormX: Float = 0f
+    @Volatile var losDeadZoneNormY: Float = 0f
+    @Volatile var losCompSource: String = "--"
 
     @Volatile var rollDeg: Float = 0f
     @Volatile var pitchDeg: Float = 0f
@@ -99,6 +110,21 @@ class OverlayView(context: Context) : View(context) {
         strokeWidth = 3f
         color = 0xCCB7F8C5.toInt()
     }
+    private val losVector = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = 0xCC77D7FF.toInt()
+    }
+    private val losRateVector = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = 0xCCFFD166.toInt()
+    }
+    private val deadZonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = 0x7797E7A5.toInt()
+    }
 
     private fun videoRect(): RectF {
         val w = width.toFloat().coerceAtLeast(1f)
@@ -133,6 +159,64 @@ class OverlayView(context: Context) : View(context) {
         c.drawLine(cx + 10f, cy, cx + 38f, cy, center)
         c.drawLine(cx, cy - 38f, cx, cy - 10f, center)
         c.drawLine(cx, cy + 10f, cx, cy + 38f, center)
+
+        if (losDiagnosticsActive) {
+            val dzX = vr.width() * losDeadZoneNormX
+            val dzY = vr.height() * losDeadZoneNormY
+            if (dzX > 1f && dzY > 1f) {
+                deadZonePaint.color = if (losInsideDeadZone) {
+                    0xAA62E88A.toInt()
+                } else {
+                    0x6688CFA0.toInt()
+                }
+                c.drawOval(
+                    RectF(cx - dzX, cy - dzY, cx + dzX, cy + dzY),
+                    deadZonePaint
+                )
+            }
+
+            locked?.let { d ->
+                val tx = vr.left + d.cx * vr.width()
+                val ty = vr.top + d.cy * vr.height()
+
+                losVector.color = if (losInsideDeadZone) {
+                    0x8877D7FF.toInt()
+                } else {
+                    0xDD77D7FF.toInt()
+                }
+                c.drawLine(cx, cy, tx, ty, losVector)
+
+                val dx = tx - cx
+                val dy = ty - cy
+                val len = kotlin.math.sqrt(dx * dx + dy * dy)
+                if (len > 12f) {
+                    val ux = dx / len
+                    val uy = dy / len
+                    val px = -uy
+                    val py = ux
+                    val ah = 13f
+                    c.drawLine(
+                        tx, ty,
+                        tx - ux * ah + px * 6f,
+                        ty - uy * ah + py * 6f,
+                        losVector
+                    )
+                    c.drawLine(
+                        tx, ty,
+                        tx - ux * ah - px * 6f,
+                        ty - uy * ah - py * 6f,
+                        losVector
+                    )
+                }
+
+                // LOS motion vector: positive Y LOS is up, Canvas Y is down.
+                val rateScale = 4f
+                val rx = (losRateXDegS * rateScale).coerceIn(-100f, 100f)
+                val ry = (-losRateYDegS * rateScale).coerceIn(-100f, 100f)
+                c.drawLine(tx, ty, tx + rx, ty + ry, losRateVector)
+                c.drawCircle(tx + rx, ty + ry, 4f, losRateVector)
+            }
+        }
 
         if (showAvionics && mavConnected) {
             // Very cheap Canvas-only artificial horizon. No bitmap/shader allocation.
@@ -198,7 +282,7 @@ class OverlayView(context: Context) : View(context) {
         }
 
         // Minimal top-left telemetry.
-        val panelBottom = if (showAvionics && mavConnected) 278f else 228f
+        val panelBottom = if (showAvionics && mavConnected) 326f else 278f
         c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 1040f), panelBottom), 12f, 12f, shade)
         text.textSize = 28f
         text.color = when (stateLabel) {
@@ -236,6 +320,10 @@ class OverlayView(context: Context) : View(context) {
         c.drawText(perfLine2, 28f, perfY + 24f, text)
         c.drawText(perfLine3, 28f, perfY + 48f, text)
         c.drawText(perfLine4, 28f, perfY + 72f, text)
+        text.color = 0xff9fe8ff.toInt()
+        text.textSize = 16f
+        c.drawText(losLine1, 28f, perfY + 96f, text)
+        c.drawText(losLine2, 28f, perfY + 120f, text)
 
         c.drawRoundRect(searchButton(), 10f, 10f, button)
         c.drawRoundRect(resetButton(), 10f, 10f, button)
