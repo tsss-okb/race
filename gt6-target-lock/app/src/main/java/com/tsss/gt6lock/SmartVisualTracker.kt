@@ -166,7 +166,7 @@ class SmartVisualTracker {
             2,
             true
         )
-        if (fine.size < 6 || fine[0] < 0.5f) return null
+        if (fine.size < 8 || fine[0] < 0.5f) return null
 
         val fineBest = fine[3].toDouble()
         val fineSecond = fine[4].toDouble()
@@ -175,11 +175,22 @@ class SmartVisualTracker {
         val uniqueness =
             ((fineBest - fineSecond).coerceIn(0.0, 1.0)).toFloat()
 
-        // Stricter than local tracking: a full-frame reacquire must be clearly
-        // unique before it is allowed to teleport the lock.
-        if (score < 0.74f || uniqueness < 0.030f) return null
+        // v5.2 template bank: context + immutable anchor + last clean adaptive
+        // template must all agree at the same candidate.
+        val currentVote =
+            (((fine[6].toDouble() + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
+        val anchorVote =
+            (((fine[7].toDouble() + 1.0) * 0.5).coerceIn(0.0, 1.0)).toFloat()
 
-        val combinedScore = min(coarseScore, score)
+        if (
+            score < 0.74f ||
+            uniqueness < 0.030f ||
+            currentVote < 0.66f ||
+            anchorVote < 0.68f
+        ) return null
+
+        val bankVote = min(currentVote, anchorVote)
+        val combinedScore = min(min(coarseScore, score), bankVote)
         val combinedUnique = min(coarseUnique, uniqueness)
 
         val result = makeBox(
