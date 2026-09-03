@@ -10,6 +10,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -42,7 +44,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.7 Strong Hold + ArduPilot + Lean Preview Axis Safe:
+ * Fusion v4.8 Strong Hold + ArduPilot + LOS/Range Diagnostics:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -61,6 +63,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private val motionTracker = TargetMotionTracker(maxLostFrames = 10)
     private val mavlink = MavlinkTelemetry(port = 14550)
     private val profiler = PerformanceProfiler()
+    private val losDiagnostics = LosDiagnostics()
 
     private val inferenceBusy = AtomicBoolean(false)
     private val prioritySet = AtomicBoolean(false)
@@ -97,6 +100,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var jitterEma = 0f
     private var lastCenterX = Float.NaN
     private var lastCenterY = Float.NaN
+
+    private var cameraHfovDeg = 70f
+    private var cameraVfovDeg = 43f
+    private var cameraFovEstimated = false
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -227,6 +234,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        estimateBackCameraFov()
 
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         previewView = PreviewView(this).apply {
@@ -361,6 +369,36 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         overlay.displayFps = d.refreshRate
         overlay.maxDisplayFps =
             d.supportedModes.maxOfOrNull { it.refreshRate } ?: d.refreshRate
+    }
+
+    private fun estimateBackCameraFov() {
+        runCatching {
+            val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val id = manager.cameraIdList.firstOrNull { cameraId ->
+                manager.getCameraCharacteristics(cameraId)
+                    .get(CameraCharacteristics.LENS_FACING) ==
+                    CameraCharacteristics.LENS_FACING_BACK
+            } ?: return@runCatching
+
+            val c = manager.getCameraCharacteristics(id)
+            val sensor = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.firstOrNull()
+
+            if (sensor != null && focal != null && focal > 0f) {
+                cameraHfovDeg = (
+                    2.0 * Math.toDegrees(
+                        Math.atan(sensor.width.toDouble() / (2.0 * focal))
+                    )
+                ).toFloat().coerceIn(20f, 140f)
+                cameraVfovDeg = (
+                    2.0 * Math.toDegrees(
+                        Math.atan(sensor.height.toDouble() / (2.0 * focal))
+                    )
+                ).toFloat().coerceIn(15f, 110f)
+                cameraFovEstimated = true
+            }
+        }
     }
 
     private fun displayRotationDegrees(): Int = when (display?.rotation ?: Surface.ROTATION_0) {
@@ -593,6 +631,37 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     overlay.locked = projected
                     updateJitter(projected, gray.width, gray.height)
 
+                    val mavFreshForLos = mavlink.ageMs() <= 1200L
+                    val ownYawRate = if (mavFreshForLos) {
+                        mavlink.yawRateDeg
+                    } else {
+                        overlay.rDeg
+                    }
+                    val ownPitchRate = if (mavFreshForLos) {
+                        mavlink.pitchRateDeg
+                    } else {
+                        overlay.qDeg
+                    }
+
+                    val los = losDiagnostics.update(
+                        targetCx = current.cx,
+                        targetCy = current.cy,
+                        timestampNs = ts,
+                        horizontalFovDeg = cameraHfovDeg,
+                        verticalFovDeg = cameraVfovDeg,
+                        ownYawRateDegS = ownYawRate,
+                        ownPitchRateDegS = ownPitchRate
+                    )
+                    overlay.losErrorXDeg = los.losXDeg
+                    overlay.losErrorYDeg = los.losYDeg
+                    overlay.losRateXDegS = los.compRateXDegS
+                    overlay.losRateYDegS = los.compRateYDegS
+                    overlay.losInsideDeadZone = los.insideDeadZone
+                    overlay.losDeadZoneNormX = los.deadZoneNormX
+                    overlay.losDeadZoneNormY = los.deadZoneNormY
+                    overlay.losDiagnosticsActive = true
+                    overlay.losCompSource = if (mavFreshForLos) "MAV" else "PHONE"
+
                     val bothLightTrackersWeak =
                         currentFlowScore < 0.34f && currentVisualScore < 0.52f
 
@@ -618,6 +687,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             } else {
                 stateLabel = "SEARCH"
                 overlay.softRescue = false
+                overlay.losDiagnosticsActive = false
             }
 
             maybeRunYolo(image)
@@ -656,6 +726,36 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     "PHONE IMU  R %+.1f  P %+.1f  HDG %03d  G %.2f  rates %+.0f/%+.0f/%+.0f",
                     overlay.rollDeg, overlay.pitchDeg, overlay.headingDeg.toInt(),
                     overlay.gLoad, overlay.pDeg, overlay.qDeg, overlay.rDeg
+                )
+
+                val los = losDiagnostics.current()
+                val rangeAge = mavlink.rangeAgeMs(now)
+                val rangeFresh = mavlink.rangeValid && rangeAge <= 700L
+                val rangeText = if (rangeFresh) {
+                    String.format(
+                        Locale.US,
+                        "%.2fm/%dms/%s",
+                        mavlink.rangeM, rangeAge, mavlink.rangeTypeName()
+                    )
+                } else {
+                    "--"
+                }
+                val fovTag = if (cameraFovEstimated) "EST" else "APPROX"
+                overlay.losLine1 = String.format(
+                    Locale.US,
+                    "LOS X %+.2f° Y %+.2f° | RAW %+.1f/%+.1f°/s | COMP(%s) %+.1f/%+.1f°/s",
+                    los.losXDeg, los.losYDeg,
+                    los.rawRateXDegS, los.rawRateYDegS,
+                    overlay.losCompSource,
+                    los.compRateXDegS, los.compRateYDegS
+                )
+                overlay.losLine2 = String.format(
+                    Locale.US,
+                    "MOTION %.2f°/s  JITTER %.2f°/s  DZ %s | RANGE %s | FOV %.1fx%.1f° %s",
+                    los.motionDegS, los.jitterDegS,
+                    if (los.insideDeadZone) "IN" else "OUT",
+                    rangeText,
+                    cameraHfovDeg, cameraVfovDeg, fovTag
                 )
 
                 overlay.invalidate()
@@ -850,6 +950,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             lightFailStreak = 0
             strongLockStreak = 0
             jitterEma = 0f
+            losDiagnostics.clear()
+            overlay.losDiagnosticsActive = false
             lastCenterX = Float.NaN
             lastCenterY = Float.NaN
             stateLabel = "SEARCH"
