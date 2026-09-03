@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(gt6lock)
-add_library(gt6lock SHARED native-lib.cpp tracker_core.cpp native_sparse_flow.cpp native_ncc.cpp)
+add_library(gt6lock SHARED native-lib.cpp tracker_core.cpp native_sparse_flow.cpp native_ncc.cpp native_rescue.cpp)
 target_compile_features(gt6lock PRIVATE cxx_std_17)
 find_library(log-lib log)
 target_link_libraries(gt6lock ${log-lib})
