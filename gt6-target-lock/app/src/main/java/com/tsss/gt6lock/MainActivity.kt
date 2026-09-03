@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.3 Strong Hold + ArduPilot + Native NCC:
+ * Fusion v4.4 Strong Hold + ArduPilot + CPU Breakdown:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -140,6 +140,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     "LOOP A %.2f  P95 %.2f  MAX %.2fms  HEAD %+.0f%% @60",
                     profiler.loopAvgMs, profiler.loopP95Ms,
                     profiler.loopMaxMs, profiler.frameHeadroomPct
+                )
+
+                val hotPct = (
+                    profiler.lumaMs * cameraFpsEma +
+                    profiler.flowMs * profiler.flowHz +
+                    profiler.nccMs * profiler.nccHz +
+                    profiler.fusionMs * trackFps
+                ) / 10f
+                val hudPct =
+                    overlay.hudDrawMs * overlay.displayFps.coerceAtLeast(1f) / 10f
+                val restPct =
+                    (profiler.cpuPct - hotPct - hudPct).coerceAtLeast(0f)
+
+                overlay.perfLine3 = String.format(
+                    Locale.US,
+                    "STAGE L %.2f  F %.2f  N %.2f  X %.2f  HUD %.2fms | EST HOT %.0f%% REST %.0f%%",
+                    profiler.lumaMs, profiler.flowMs, profiler.nccMs,
+                    profiler.fusionMs, overlay.hudDrawMs,
+                    hotPct + hudPct, restPct
                 )
             }
 
@@ -389,7 +408,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
             lastCameraTs = ts
 
-            val gray = luma.extract(image) ?: return
+            val lumaStartNs = System.nanoTime()
+            val gray = luma.extract(image)
+            profiler.recordLuma(System.nanoTime() - lumaStartNs)
+            if (gray == null) return
             frameSerial++
             overlay.sourceAspectRatio = gray.width.toFloat() / gray.height.toFloat()
 
@@ -496,6 +518,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     currentVisualScore = visual?.score ?: visualTracker.score
                 }
 
+                val fusionStartNs = System.nanoTime()
+
                 // Never move the box twice in one camera frame.
                 // Prefer a confident NCC correction; otherwise use robust flow.
                 val chosenMeasurement = when {
@@ -557,6 +581,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         trackWindowStart = nowTrack
                     }
                 }
+
+                profiler.recordFusion(System.nanoTime() - fusionStartNs)
             } else {
                 stateLabel = "SEARCH"
                 overlay.softRescue = false
