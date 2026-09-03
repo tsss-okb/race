@@ -32,6 +32,8 @@ public:
         float widthNorm, float heightNorm
     );
 
+    void resetCurrentToAnchor();
+
     NativeNccMatch match(
         const uint8_t* gray, int w, int h,
         int predictedX, int predictedY,
