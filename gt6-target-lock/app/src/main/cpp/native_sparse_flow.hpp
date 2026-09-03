@@ -6,6 +6,9 @@ struct NativeFlowResult {
     bool valid=false;
     float dxNorm=0.f, dyNorm=0.f;
     float targetConsistency=0.f, globalConsistency=0.f;
+    float globalDxNorm=0.f, globalDyNorm=0.f;
+    float blurRisk=0.f;
+    bool pyramidUsed=false;
     int targetPoints=0, backgroundPoints=0;
 };
 
@@ -25,6 +28,7 @@ private:
     int w_=0,h_=0,frameCount_=0;
     std::vector<P> targetPts_, bgPts_;
     float lastDx_=0.f,lastDy_=0.f;
+    float sharpRef_=0.f;
 
     static int pix(const uint8_t* g,int w,int x,int y){ return g[y*w+x]; }
     static float median(std::vector<float> v);
@@ -46,4 +50,12 @@ private:
                                 int sx,int sy,int ex,int ey,int radius,int& bx,int& by);
     static std::vector<Move> trackFb(const uint8_t* prev,const uint8_t* cur,
                                      int w,int h,const std::vector<P>& pts,int radius);
+    static std::vector<Move> trackFbPrior(const uint8_t* prev,const uint8_t* cur,
+                                          int w,int h,const std::vector<P>& pts,
+                                          int priorDx,int priorDy,int radius);
+    static float sharpness(const uint8_t* g,int w,int h);
+    static bool coarseGlobalShift(const uint8_t* prev,const uint8_t* cur,
+                                  int w,int h,
+                                  float x1n,float y1n,float x2n,float y2n,
+                                  int& dx,int& dy,float& quality);
 };
