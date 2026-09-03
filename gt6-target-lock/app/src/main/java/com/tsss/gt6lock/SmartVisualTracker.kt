@@ -123,39 +123,25 @@ class SmartVisualTracker {
         base: Detection
     ): Result? {
         val anchor = anchorTemplate ?: return null
-        val context = contextTemplate
+        // v5.1: wide teleport is allowed only when BOTH the larger context
+        // anchor and the immutable core anchor exist and agree.
+        contextTemplate ?: return null
 
         val centerX = (base.cx * frame.width).toInt()
         val centerY = (base.cy * frame.height).toInt()
 
         // Stage 1: coarse context-anchor scan across most of the frame.
-        val coarse = if (context != null) {
-            nativeNcc.nativeMatchContext(
-                frame.pixels,
-                frame.width,
-                frame.height,
-                centerX,
-                centerY,
-                (frame.width * 0.46f).toInt(),
-                (frame.height * 0.42f).toInt(),
-                8,
-                true
-            )
-        } else {
-            // Near image borders a large context template may not be buildable.
-            // Fall back to the immutable normal anchor over the same wide ROI.
-            nativeNcc.nativeMatch(
-                frame.pixels,
-                frame.width,
-                frame.height,
-                centerX,
-                centerY,
-                (frame.width * 0.46f).toInt(),
-                (frame.height * 0.42f).toInt(),
-                8,
-                true
-            )
-        }
+        val coarse = nativeNcc.nativeMatchContext(
+            frame.pixels,
+            frame.width,
+            frame.height,
+            centerX,
+            centerY,
+            (frame.width * 0.46f).toInt(),
+            (frame.height * 0.42f).toInt(),
+            8,
+            true
+        )
         if (coarse.size < 6 || coarse[0] < 0.5f) return null
 
         val coarseBest = coarse[3].toDouble()
@@ -165,7 +151,7 @@ class SmartVisualTracker {
         val coarseUnique =
             ((coarseBest - coarseSecond).coerceIn(0.0, 1.0)).toFloat()
 
-        if (coarseScore < 0.66f || coarseUnique < 0.018f) return null
+        if (coarseScore < 0.70f || coarseUnique < 0.025f) return null
 
         // Stage 2: refine around the coarse candidate with the normal immutable
         // anchor/current matcher. This rejects many background-only context hits.
@@ -191,26 +177,51 @@ class SmartVisualTracker {
 
         // Stricter than local tracking: a full-frame reacquire must be clearly
         // unique before it is allowed to teleport the lock.
-        if (score < 0.70f || uniqueness < 0.024f) return null
+        if (score < 0.74f || uniqueness < 0.030f) return null
+
+        val combinedScore = min(coarseScore, score)
+        val combinedUnique = min(coarseUnique, uniqueness)
 
         val result = makeBox(
             fine[1] / frame.width,
             fine[2] / frame.height,
             anchor.widthNorm,
             anchor.heightNorm,
-            (0.46f + score * 0.50f).coerceIn(0.46f, 0.96f),
+            (0.46f + combinedScore * 0.50f).coerceIn(0.46f, 0.96f),
             base.classId,
             base.label,
-            predicted = false
+            predicted = true
+        )
+
+        // Proposal only. v5.1 deliberately does NOT change state here.
+        // MainActivity requires two consistent wide proposals before accepting.
+        return Result(result, combinedScore, combinedUnique, State.PREDICT)
+    }
+
+    @Synchronized
+    fun acceptWideReacquire(result: Result) {
+        val anchor = anchorTemplate ?: return
+
+        // Reset adaptive appearance back to the immutable anchor after a
+        // confirmed long jump so a pre-shock or drifted current template cannot
+        // immediately pull the lock toward a neighbouring texture.
+        currentTemplate = anchor
+        nativeNcc.setCurrent(
+            anchor.samples,
+            anchor.halfW,
+            anchor.halfH,
+            anchor.step,
+            anchor.sum,
+            anchor.sumSq,
+            anchor.widthNorm,
+            anchor.heightNorm
         )
 
         badStreak = 0
         goodStreak = 3
-        lastScore = score
+        lastScore = result.score
         framesSinceAdaptiveRefresh = 0
         state = State.LOCK
-
-        return Result(result, score, uniqueness, state)
     }
 
     @Synchronized
