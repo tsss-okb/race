@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.2 Strong Hold + ArduPilot + NCC Scheduler:
+ * Fusion v4.3 Strong Hold + ArduPilot + Native NCC:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -364,9 +364,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
 
             overlay.yoloMode = if (request60)
-                "IDLE / CAM60 / NATIVE-FLOW"
+                "IDLE / CAM60 / NATIVE-FLOW+NCC"
             else
-                "IDLE / MAX / NATIVE-FLOW"
+                "IDLE / MAX / NATIVE-FLOW+NCC"
             overlay.invalidate()
             true
         }.getOrElse { false }
