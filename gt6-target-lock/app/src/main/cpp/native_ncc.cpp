@@ -57,6 +57,12 @@ void NativeNccMatcher::setCurrent(
     sameTemplates_ = false;
 }
 
+void NativeNccMatcher::resetCurrentToAnchor() {
+    if (!anchor_.valid) return;
+    current_ = anchor_;
+    sameTemplates_ = true;
+}
+
 bool NativeNccMatcher::fitsScaled(
     int w, int h, int cx, int cy,
     const TemplateData& t, float scale
