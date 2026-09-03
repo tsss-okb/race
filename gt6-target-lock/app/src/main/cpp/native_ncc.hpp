@@ -9,6 +9,8 @@ struct NativeNccMatch {
     float bestScore = -2.f;
     float secondScore = -2.f;
     float bestScale = 1.f;
+    float currentScore = -2.f;
+    float anchorScore = -2.f;
 };
 
 class NativeNccMatcher {
