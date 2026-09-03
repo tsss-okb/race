@@ -31,6 +31,7 @@ class OverlayView(context: Context) : View(context) {
     @Volatile var cpuPct: Float = 0f
     @Volatile var ramMb: Float = 0f
     @Volatile var perfLine: String = "PERF  waiting..."
+    @Volatile var perfLine2: String = "LOOP  waiting..."
 
     @Volatile var rollDeg: Float = 0f
     @Volatile var pitchDeg: Float = 0f
@@ -190,7 +191,7 @@ class OverlayView(context: Context) : View(context) {
         }
 
         // Minimal top-left telemetry.
-        val panelBottom = if (showAvionics && mavConnected) 200f else 151f
+        val panelBottom = if (showAvionics && mavConnected) 225f else 176f
         c.drawRoundRect(RectF(14f, 14f, min(width - 430f, 1040f), panelBottom), 12f, 12f, shade)
         text.textSize = 28f
         text.color = when (stateLabel) {
@@ -238,6 +239,7 @@ class OverlayView(context: Context) : View(context) {
         text.textSize = 17f
         val perfY = if (showAvionics && mavConnected) 194f else 146f
         c.drawText(perfLine, 28f, perfY, text)
+        c.drawText(perfLine2, 28f, perfY + 24f, text)
 
         c.drawRoundRect(searchButton(), 10f, 10f, button)
         c.drawRoundRect(resetButton(), 10f, 10f, button)
