@@ -50,6 +50,15 @@ class MavlinkTelemetry(private val port: Int = 14550) {
     @Volatile var latitude = 0.0
     @Volatile var longitude = 0.0
 
+    @Volatile var rangeM = 0f
+    @Volatile var rangeMinM = 0f
+    @Volatile var rangeMaxM = 0f
+    @Volatile var rangeType = -1
+    @Volatile var rangeId = -1
+    @Volatile var rangeValid = false
+    @Volatile var lastRangeMs = 0L
+        private set
+
     @Volatile private var running = false
     private var socket: DatagramSocket? = null
     private var worker: Thread? = null
@@ -73,6 +82,18 @@ class MavlinkTelemetry(private val port: Int = 14550) {
 
     fun ageMs(now: Long = SystemClock.elapsedRealtime()): Long =
         if (lastRxMs == 0L) Long.MAX_VALUE else max(0L, now - lastRxMs)
+
+    fun rangeAgeMs(now: Long = SystemClock.elapsedRealtime()): Long =
+        if (lastRangeMs == 0L) Long.MAX_VALUE else max(0L, now - lastRangeMs)
+
+    fun rangeTypeName(): String = when (rangeType) {
+        0 -> "LASER"
+        1 -> "US"
+        2 -> "IR"
+        3 -> "RADAR"
+        100 -> "RF"
+        else -> "--"
+    }
 
     fun modeName(): String {
         val m = customMode.toInt()
@@ -218,6 +239,40 @@ class MavlinkTelemetry(private val port: Int = 14550) {
                 throttlePct = u16(b, p + 10).coerceIn(0, 100)
                 altitudeM = f32(b, p + 12)
                 climbMs = f32(b, p + 16)
+            }
+            132 -> if (n >= 14) { // DISTANCE_SENSOR
+                val minCm = u16(b, p + 4)
+                val maxCm = u16(b, p + 6)
+                val curCm = u16(b, p + 8)
+                val type = u8(b, p + 10)
+                val idSensor = u8(b, p + 11)
+
+                rangeMinM = minCm / 100f
+                rangeMaxM = maxCm / 100f
+                rangeType = type
+                rangeId = idSensor
+
+                val valid =
+                    curCm != 0 && curCm != 0xFFFF &&
+                    (minCm == 0 || curCm >= minCm) &&
+                    (maxCm == 0 || curCm <= maxCm)
+                if (valid) {
+                    rangeM = curCm / 100f
+                    rangeValid = true
+                    lastRangeMs = SystemClock.elapsedRealtime()
+                } else {
+                    rangeValid = false
+                }
+            }
+            173 -> if (n >= 8) { // RANGEFINDER (legacy ArduPilot)
+                val dist = f32(b, p)
+                if (dist.isFinite() && dist > 0f && dist < 10000f) {
+                    rangeM = dist
+                    rangeType = 100
+                    rangeId = -1
+                    rangeValid = true
+                    lastRangeMs = SystemClock.elapsedRealtime()
+                }
             }
         }
     }
