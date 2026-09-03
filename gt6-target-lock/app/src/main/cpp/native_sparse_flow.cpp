@@ -2,10 +2,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 void NativeSparseFlow::clear(){
     prev_.clear(); w_=h_=frameCount_=0;
     targetPts_.clear(); bgPts_.clear(); lastDx_=lastDy_=0.f;
+    sharpRef_=0.f;
 }
 
 float NativeSparseFlow::median(std::vector<float> v){
@@ -26,7 +28,7 @@ std::vector<NativeSparseFlow::Move> NativeSparseFlow::robust(std::vector<Move> m
     std::vector<float> dev; dev.reserve(m.size());
     for(const auto& q:m) dev.push_back(std::fabs(q.dx-mdx)+std::fabs(q.dy-mdy));
     float mad=std::max(0.75f,median(dev));
-    float gate=std::clamp(2.8f*mad+1.f,2.f,7.f);
+    float gate=std::clamp(2.8f*mad+1.f,2.f,8.f);
     m.erase(std::remove_if(m.begin(),m.end(),[&](const Move& q){
         return std::fabs(q.dx-mdx)+std::fabs(q.dy-mdy)>gate;
     }),m.end());
@@ -151,6 +153,100 @@ std::vector<NativeSparseFlow::Move> NativeSparseFlow::trackFb(
     return out;
 }
 
+std::vector<NativeSparseFlow::Move> NativeSparseFlow::trackFbPrior(
+    const uint8_t*prev,const uint8_t*cur,int w,int h,const std::vector<P>&pts,
+    int priorDx,int priorDy,int r){
+    std::vector<Move> out; out.reserve(pts.size());
+    for(const auto&p:pts){
+        if(p.x<5||p.x>=w-5||p.y<5||p.y>=h-5) continue;
+        const int ex=p.x+priorDx, ey=p.y+priorDy;
+        if(ex<5||ex>=w-5||ey<5||ey>=h-5) continue;
+        int cx=ex,cy=ey;
+        if(!bestMatchAround(prev,cur,w,h,p.x,p.y,ex,ey,r,cx,cy)) continue;
+        int bx=p.x,by=p.y;
+        if(!bestMatchAround(cur,prev,w,h,cx,cy,p.x,p.y,2,bx,by)) continue;
+        if(std::abs(bx-p.x)+std::abs(by-p.y)>2) continue;
+        out.push_back({p,(float)(cx-p.x),(float)(cy-p.y)});
+    }
+    return out;
+}
+
+float NativeSparseFlow::sharpness(const uint8_t* g,int w,int h){
+    if(!g||w<16||h<16) return 0.f;
+    double sum=0.0; int n=0;
+    for(int y=6;y<h-6;y+=8){
+        for(int x=6;x<w-6;x+=8){
+            int gx=std::abs((int)g[y*w+x+2]-(int)g[y*w+x-2]);
+            int gy=std::abs((int)g[(y+2)*w+x]-(int)g[(y-2)*w+x]);
+            sum += gx + gy;
+            ++n;
+        }
+    }
+    return n>0 ? (float)(sum/n) : 0.f;
+}
+
+bool NativeSparseFlow::coarseGlobalShift(
+    const uint8_t* prev,const uint8_t* cur,int w,int h,
+    float x1n,float y1n,float x2n,float y2n,
+    int& odx,int& ody,float& quality){
+    if(!prev||!cur||w<160||h<90) return false;
+
+    const int factor=4;
+    const int tx1=(int)(x1n*w)-18, ty1=(int)(y1n*h)-18;
+    const int tx2=(int)(x2n*w)+18, ty2=(int)(y2n*h)+18;
+
+    auto scoreShift = [&](int dx,int dy)->float{
+        long long sad=0; int n=0;
+        for(int y=20;y<h-20;y+=24){
+            const int yy=y+dy;
+            if(yy<4||yy>=h-4) continue;
+            for(int x=20;x<w-20;x+=24){
+                if(x>=tx1&&x<=tx2&&y>=ty1&&y<=ty2) continue;
+                const int xx=x+dx;
+                if(xx<4||xx>=w-4) continue;
+                const int a=prev[y*w+x];
+                const int b=cur[yy*w+xx];
+                const int a2=prev[(y+2)*w+x+2];
+                const int b2=cur[(yy+2)*w+xx+2];
+                sad += std::abs(a-b) + std::abs(a2-b2);
+                n += 2;
+            }
+        }
+        return n>=28 ? (float)sad/n : 1e9f;
+    };
+
+    float best=1e9f, second=1e9f;
+    int bx=0,by=0;
+    for(int sy=-24;sy<=24;sy+=2){
+        for(int sx=-24;sx<=24;sx+=2){
+            const int dx=sx*factor, dy=sy*factor;
+            const float s=scoreShift(dx,dy);
+            if(s<best){
+                second=best; best=s; bx=dx; by=dy;
+            }else if(s<second && std::abs(dx-bx)+std::abs(dy-by)>16){
+                second=s;
+            }
+        }
+    }
+
+    int fineX=bx,fineY=by;
+    for(int dy=by-8;dy<=by+8;dy+=4){
+        for(int dx=bx-8;dx<=bx+8;dx+=4){
+            const float s=scoreShift(dx,dy);
+            if(s<best){ best=s; fineX=dx; fineY=dy; }
+        }
+    }
+
+    const float absQuality=std::clamp((42.f-best)/30.f,0.f,1.f);
+    const float uniq=second<1e8f
+        ? std::clamp((second-best)/std::max(6.f,best)*2.0f,0.f,1.f)
+        : 0.f;
+    quality=std::clamp(0.78f*absQuality+0.22f*uniq,0.f,1.f);
+    if(best>34.f || quality<0.32f) return false;
+    odx=fineX; ody=fineY;
+    return true;
+}
+
 void NativeSparseFlow::seed(const uint8_t*g,int w,int h,
                             float x1,float y1,float x2,float y2){
     if(!g||w<32||h<24){ clear(); return; }
@@ -158,6 +254,7 @@ void NativeSparseFlow::seed(const uint8_t*g,int w,int h,
     targetPts_=chooseTarget(g,w,h,x1,y1,x2,y2,42);
     bgPts_=chooseBg(g,w,h,x1,y1,x2,y2,56);
     lastDx_=lastDy_=0.f;
+    sharpRef_=sharpness(g,w,h);
 }
 
 NativeFlowResult NativeSparseFlow::track(const uint8_t*g,int w,int h,
@@ -167,14 +264,70 @@ NativeFlowResult NativeSparseFlow::track(const uint8_t*g,int w,int h,
         seed(g,w,h,x1,y1,x2,y2); return r;
     }
 
+    const float sharp=sharpness(g,w,h);
+    if(sharpRef_<=0.f) sharpRef_=sharp;
+    else sharpRef_=std::max(sharpRef_*0.997f,sharp);
+    r.blurRisk = sharpRef_>6.f
+        ? std::clamp((sharpRef_-sharp)/sharpRef_,0.f,1.f)
+        : 0.f;
+
     float lastMag=std::hypot(lastDx_,lastDy_);
     int tr=std::clamp(4+(int)std::lround(lastMag*0.8f),4,10);
     int br=std::clamp(tr+1,5,11);
 
     auto tm=robust(trackFb(prev_.data(),g,w,h,targetPts_,tr));
     auto bm=robust(trackFb(prev_.data(),g,w,h,bgPts_,br));
+
+    float initialGc=0.f;
+    if(bm.size()>=7){
+        std::vector<float> bx,by;
+        bx.reserve(bm.size()); by.reserve(bm.size());
+        for(auto&q:bm){bx.push_back(q.dx);by.push_back(q.dy);}
+        initialGc=consistency(bm,median(bx),median(by));
+    }
+
+    int priorDx=0,priorDy=0; float coarseQ=0.f;
+    const bool needPyramid =
+        tm.size()<5 || bm.size()<7 || initialGc<0.50f || lastMag>8.f;
+    bool pyramid=false;
+    if(needPyramid && coarseGlobalShift(
+            prev_.data(),g,w,h,x1,y1,x2,y2,priorDx,priorDy,coarseQ)){
+        pyramid=true;
+        auto t2=robust(trackFbPrior(prev_.data(),g,w,h,targetPts_,priorDx,priorDy,4));
+        auto b2=robust(trackFbPrior(prev_.data(),g,w,h,bgPts_,priorDx,priorDy,5));
+        if(t2.size()>=tm.size()) tm=std::move(t2);
+        if(b2.size()>=bm.size()) bm=std::move(b2);
+    }
+    r.pyramidUsed=pyramid;
+
     if(tm.size()<5||bm.size()<7){
-        seed(g,w,h,x1,y1,x2,y2); return r;
+        if(pyramid && coarseQ>=0.42f){
+            const float dx=(float)priorDx, dy=(float)priorDy;
+            const float dxn=dx/w, dyn=dy/h;
+            prev_.assign(g,g+(size_t)w*h);
+
+            const float sx1=std::clamp(x1+dxn,0.f,0.98f);
+            const float sy1=std::clamp(y1+dyn,0.f,0.98f);
+            const float sx2=std::clamp(x2+dxn,sx1+0.005f,1.f);
+            const float sy2=std::clamp(y2+dyn,sy1+0.005f,1.f);
+            targetPts_=chooseTarget(g,w,h,sx1,sy1,sx2,sy2,42);
+            bgPts_=chooseBg(g,w,h,sx1,sy1,sx2,sy2,56);
+
+            lastDx_=dx; lastDy_=dy;
+            r.valid=true;
+            r.dxNorm=dxn; r.dyNorm=dyn;
+            r.globalDxNorm=dxn; r.globalDyNorm=dyn;
+            r.globalConsistency=coarseQ;
+            r.targetConsistency=std::clamp(0.38f+0.22f*coarseQ,0.f,0.62f);
+            r.targetPoints=(int)tm.size();
+            r.backgroundPoints=(int)bm.size();
+            return r;
+        }
+        seed(g,w,h,x1,y1,x2,y2);
+        r.blurRisk = sharpRef_>6.f
+            ? std::clamp((sharpRef_-sharp)/sharpRef_,0.f,1.f)
+            : 0.f;
+        return r;
     }
 
     std::vector<float> tx,ty,bx,by;
@@ -206,6 +359,7 @@ NativeFlowResult NativeSparseFlow::track(const uint8_t*g,int w,int h,
 
     lastDx_=dx; lastDy_=dy;
     r.valid=true; r.dxNorm=dx/w; r.dyNorm=dy/h;
+    r.globalDxNorm=gdx/w; r.globalDyNorm=gdy/h;
     r.targetConsistency=trust; r.globalConsistency=gc;
     r.targetPoints=(int)tm.size(); r.backgroundPoints=(int)bm.size();
     return r;
