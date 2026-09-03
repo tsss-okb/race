@@ -6,7 +6,7 @@ import android.os.SystemClock
 import kotlin.concurrent.thread
 
 /**
- * v4.4 CPU Breakdown profiler.
+ * v4.5 Camera / framework breakdown profiler.
  *
  * Hot path:
  * - nanoTime is measured by caller
@@ -29,10 +29,26 @@ class PerformanceProfiler {
         private set
     @Volatile var trackMs: Float = 0f
         private set
+    @Volatile var choreoMs: Float = 0f
+        private set
+    @Volatile var sensorMs: Float = 0f
+        private set
+    @Volatile var uiMs: Float = 0f
+        private set
+    @Volatile var cameraCallbackGapMs: Float = 0f
+        private set
 
     @Volatile var flowHz: Float = 0f
         private set
     @Volatile var nccHz: Float = 0f
+        private set
+    @Volatile var cameraCallbackHz: Float = 0f
+        private set
+    @Volatile var choreoHz: Float = 0f
+        private set
+    @Volatile var sensorHz: Float = 0f
+        private set
+    @Volatile var uiHz: Float = 0f
         private set
 
     @Volatile var loopAvgMs: Float = 0f
@@ -59,6 +75,21 @@ class PerformanceProfiler {
 
     @Volatile private var flowEvents = 0
     @Volatile private var nccEvents = 0
+    @Volatile private var cameraEvents = 0
+    @Volatile private var choreoEvents = 0
+    @Volatile private var sensorEvents = 0
+    @Volatile private var uiEvents = 0
+    @Volatile private var lastCameraCallbackNs = 0L
+
+    fun recordCameraCallback(nowNs: Long) {
+        val last = lastCameraCallbackNs
+        if (last != 0L && nowNs > last) {
+            val gapMs = (nowNs - last) * 1e-6f
+            cameraCallbackGapMs = ema(cameraCallbackGapMs, gapMs, 0.12f)
+        }
+        lastCameraCallbackNs = nowNs
+        cameraEvents++
+    }
 
     fun recordLuma(elapsedNs: Long) {
         val ms = elapsedNs * 1e-6f
@@ -82,6 +113,24 @@ class PerformanceProfiler {
         fusionMs = ema(fusionMs, ms, 0.16f)
     }
 
+    fun recordChoreographer(elapsedNs: Long) {
+        val ms = elapsedNs * 1e-6f
+        choreoMs = ema(choreoMs, ms, 0.14f)
+        choreoEvents++
+    }
+
+    fun recordSensor(elapsedNs: Long) {
+        val ms = elapsedNs * 1e-6f
+        sensorMs = ema(sensorMs, ms, 0.12f)
+        sensorEvents++
+    }
+
+    fun recordUi(elapsedNs: Long) {
+        val ms = elapsedNs * 1e-6f
+        uiMs = ema(uiMs, ms, 0.16f)
+        uiEvents++
+    }
+
     fun recordTrack(elapsedNs: Long) {
         val ms = elapsedNs * 1e-6f
         trackMs = ema(trackMs, ms, 0.12f)
@@ -102,6 +151,10 @@ class PerformanceProfiler {
             var lastCpu = Process.getElapsedCpuTime()
             var lastFlowEvents = flowEvents
             var lastNccEvents = nccEvents
+            var lastCameraEvents = cameraEvents
+            var lastChoreoEvents = choreoEvents
+            var lastSensorEvents = sensorEvents
+            var lastUiEvents = uiEvents
 
             while (running) {
                 try {
@@ -121,10 +174,24 @@ class PerformanceProfiler {
 
                 val fNow = flowEvents
                 val nNow = nccEvents
+                val cNow = cameraEvents
+                val chNow = choreoEvents
+                val sNow = sensorEvents
+                val uNow = uiEvents
+
                 flowHz = ((fNow - lastFlowEvents).coerceAtLeast(0) * 1000f / wall)
                 nccHz = ((nNow - lastNccEvents).coerceAtLeast(0) * 1000f / wall)
+                cameraCallbackHz = ((cNow - lastCameraEvents).coerceAtLeast(0) * 1000f / wall)
+                choreoHz = ((chNow - lastChoreoEvents).coerceAtLeast(0) * 1000f / wall)
+                sensorHz = ((sNow - lastSensorEvents).coerceAtLeast(0) * 1000f / wall)
+                uiHz = ((uNow - lastUiEvents).coerceAtLeast(0) * 1000f / wall)
+
                 lastFlowEvents = fNow
                 lastNccEvents = nNow
+                lastCameraEvents = cNow
+                lastChoreoEvents = chNow
+                lastSensorEvents = sNow
+                lastUiEvents = uNow
 
                 updateLoopStats()
 
