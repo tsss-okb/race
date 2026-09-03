@@ -44,7 +44,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v5.1 Strong Hold + ArduPilot + Confirmed Reacquire:
+ * Fusion v5.2 Strong Hold + Pyramid GMC + Blur Guard:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -115,6 +115,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var anchorCandidate: SmartVisualTracker.Result? = null
     private var anchorCandidateHits = 0
     private var anchorCandidateLastFrame = -100L
+    private var currentBlurRisk = 0f
+    private var currentGlobalDxNorm = 0f
+    private var currentGlobalDyNorm = 0f
+    private var currentGlobalShiftPx = 0f
+    private var currentPyramidUsed = false
+    private var blurGuardFrames = 0
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -575,6 +581,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 val flow = sparseFlow.track(gray, target)
                 profiler.recordFlow(System.nanoTime() - flowStartNs)
 
+                currentBlurRisk = flow?.blurRisk ?: (currentBlurRisk * 0.90f)
+                currentGlobalDxNorm = flow?.globalDxNorm ?: 0f
+                currentGlobalDyNorm = flow?.globalDyNorm ?: 0f
+                currentGlobalShiftPx = if (flow != null) {
+                    hypot(
+                        (flow.globalDxNorm * gray.width).toDouble(),
+                        (flow.globalDyNorm * gray.height).toDouble()
+                    ).toFloat()
+                } else 0f
+                currentPyramidUsed = flow?.pyramidUsed == true
+
+                if (currentBlurRisk >= 0.38f) {
+                    blurGuardFrames = 3
+                    if (shockGraceFrames < 2) shockGraceFrames = 2
+                } else if (blurGuardFrames > 0) {
+                    blurGuardFrames--
+                }
+                val blurHigh = blurGuardFrames > 0
+
                 if (runFlow) {
                     currentFlowScore = flow?.let {
                         (0.72f * it.targetConsistency + 0.28f * it.globalConsistency)
@@ -600,6 +625,22 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     } else null
 
                 target = motionTracker.locked ?: target
+
+                val gmcPrior =
+                    if (
+                        flow != null &&
+                        flow.globalConsistency >= 0.42f &&
+                        currentGlobalShiftPx >= 5f
+                    ) {
+                        shiftDetection(
+                            target,
+                            flow.globalDxNorm.coerceIn(-0.20f, 0.20f),
+                            flow.globalDyNorm.coerceIn(-0.20f, 0.20f),
+                            (target.confidence * 0.96f).coerceAtLeast(0.25f),
+                            predicted = true
+                        )
+                    } else null
+
                 val strongHold =
                     stateLabel == "LOCK" &&
                     currentFlowScore >= 0.68f &&
@@ -619,6 +660,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
                 val wideTrigger =
                     shockEvent ||
+                    (currentPyramidUsed && currentGlobalShiftPx >= 10f) ||
                     (previousLosJitter >= 7.5f && flowJump) ||
                     (hardFlowFail && currentVisualScore < 0.62f)
 
@@ -630,7 +672,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
 
                 val wideActive = wideReacquireFrames > 0
-                val runWideSearch = wideActive && frameSerial % 2L == 0L
+                val runWideSearch =
+                    wideActive && !blurHigh && frameSerial % 2L == 0L
                 overlay.anchorReacquire = wideActive
 
                 if (
@@ -665,11 +708,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 if (nccRescueFrames > 0) nccRescueFrames--
                 if (nccRescueCooldown > 0) nccRescueCooldown--
 
-                val visualBase = flowMeasurement ?: gyroPrior
-                val nccStartNs = if (runTemplate) System.nanoTime() else 0L
+                val visualBase = flowMeasurement ?: gmcPrior ?: gyroPrior
+                val runNcc = runTemplate && !blurHigh
+                val nccStartNs = if (runNcc) System.nanoTime() else 0L
                 var wideRecovered = false
                 val visual =
-                    if (runTemplate) {
+                    if (runNcc) {
                         if (runWideSearch) {
                             val proposal = visualTracker.wideReacquire(gray, target)
                             if (proposal != null) {
@@ -723,14 +767,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                                 visualBase,
                                 softRescue = softRescue,
                                 shockRescue = shockActive,
-                                freezeAdaptive = shockActive
+                                freezeAdaptive = shockActive || blurHigh
                             )
                         }
                     } else null
-                if (runTemplate) {
+                if (runNcc) {
                     profiler.recordNcc(System.nanoTime() - nccStartNs)
-                }
-                if (runTemplate) {
                     attemptedMeasurement = true
                     currentVisualScore = visual?.score ?: visualTracker.score
                 }
@@ -740,6 +782,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 // Never move the box twice in one camera frame.
                 // Prefer a confident NCC correction; otherwise use robust flow.
                 val chosenMeasurement = when {
+                    blurHigh &&
+                        flowMeasurement != null &&
+                        (flow?.globalConsistency ?: 0f) >= 0.42f -> flowMeasurement
+                    blurHigh -> null
                     visual != null && visual.score >= 0.64f -> visual.detection
                     flowMeasurement != null &&
                         (!wideActive || currentFlowScore >= 0.62f) -> flowMeasurement
@@ -775,7 +821,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         strongLockStreak = 0
                     }
                 } else if (attemptedMeasurement) {
-                    if ((shockActive || wideActive) && shockGraceFrames > 0) {
+                    if ((shockActive || wideActive || blurHigh) && shockGraceFrames > 0) {
                         // Keep the last motion model for the first shock frames.
                         // This prevents a camera jerk from immediately becoming
                         // a normal miss/reacquire sequence.
@@ -837,6 +883,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         currentFlowScore < 0.34f && currentVisualScore < 0.52f
 
                     stateLabel = when {
+                        blurHigh && !gotMeasurement -> "PREDICT"
                         (shockActive || (wideActive && anchorCandidateHits > 0)) &&
                             !gotMeasurement -> "PREDICT"
                         lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
@@ -897,8 +944,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 // Cache all formatted HUD strings here (~15 Hz), never in onDraw().
                 overlay.statusLine1 = String.format(
                     Locale.US,
-                    "CAM %.1f  MEAS %.1f  OUT %.1f  JIT %.1fpx  YOLO %s",
-                    cameraFpsEma, trackFps, outputFps, jitterEma, overlay.yoloMode
+                    "CAM %.1f  MEAS %.1f  OUT %.1f  JIT %.1fpx  BLR %.0f%%  GMC %.0f%s  YOLO %s",
+                    cameraFpsEma, trackFps, outputFps, jitterEma,
+                    currentBlurRisk * 100f,
+                    currentGlobalShiftPx,
+                    if (currentPyramidUsed) "P" else "",
+                    overlay.yoloMode
                 )
                 overlay.statusLine2 = String.format(
                     Locale.US,
@@ -1151,6 +1202,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             wideReacquireFrames = 0
             wideReacquireCooldown = 0
             clearAnchorCandidate()
+            currentBlurRisk = 0f
+            currentGlobalDxNorm = 0f
+            currentGlobalDyNorm = 0f
+            currentGlobalShiftPx = 0f
+            currentPyramidUsed = false
+            blurGuardFrames = 0
             overlay.softRescue = false
             overlay.shockHold = false
             overlay.anchorReacquire = false
