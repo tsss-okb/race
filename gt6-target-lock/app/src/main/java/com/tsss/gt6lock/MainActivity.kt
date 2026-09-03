@@ -42,7 +42,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.6 Strong Hold + ArduPilot + Lean Camera Pipeline:
+ * Fusion v4.7 Strong Hold + ArduPilot + Lean Preview Axis Safe:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -363,6 +363,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             d.supportedModes.maxOfOrNull { it.refreshRate } ?: d.refreshRate
     }
 
+    private fun displayRotationDegrees(): Int = when (display?.rotation ?: Surface.ROTATION_0) {
+        Surface.ROTATION_90 -> 90
+        Surface.ROTATION_180 -> 180
+        Surface.ROTATION_270 -> 270
+        else -> 0
+    }
+
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -375,9 +382,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         return runCatching {
             provider.unbindAll()
 
-            // Lean preview: cap preview work at 1280x720.
-            // Tracking remains on the independent 640x360 ImageAnalysis stream.
+            // Axis-safe lean preview:
+            // keep the 720p cap from v4.6, but explicitly bind Preview rotation
+            // to the current display orientation. ImageAnalysis stays untouched,
+            // preserving the proven v4.5/v4.6 tracking coordinate system.
+            val previewRotation = display?.rotation ?: Surface.ROTATION_0
             val previewBuilder = Preview.Builder()
+                .setTargetRotation(previewRotation)
                 .setTargetResolution(Size(1280, 720))
             if (!request60) previewBuilder.setTargetFrameRate(Range(30, 60))
             val preview = previewBuilder.build().also {
@@ -635,8 +646,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 )
                 overlay.statusLine2 = String.format(
                     Locale.US,
-                    "DISP %.1f/MAX %.0f  • REQ120 • PREV720  • %s %.1fms",
+                    "DISP %.1f/MAX %.0f  • REQ120 • PREV720/R%d  • %s %.1fms",
                     overlay.displayFps, overlay.maxDisplayFps,
+                    displayRotationDegrees(),
                     overlay.yoloBackend, overlay.yoloMs
                 )
                 overlay.phoneImuLine = String.format(
