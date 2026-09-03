@@ -43,7 +43,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.0 Strong Hold + ArduPilot + Performance Profiler:
+ * Fusion v4.1 Strong Hold + ArduPilot + Benchmark HUD:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -123,13 +123,21 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             overlay.trackLoopMs = profiler.trackMs
             overlay.cpuPct = profiler.cpuPct
             overlay.ramMb = profiler.ramMb
+
             if (now - lastPerfHudMs >= 250L) {
                 lastPerfHudMs = now
                 overlay.perfLine = String.format(
                     Locale.US,
-                    "PERF  FLOW %.2fms  NCC %.2fms  LOOP %.2fms  CPU %.0f%%  RAM %.0fMB",
-                    profiler.flowMs, profiler.nccMs, profiler.trackMs,
+                    "PERF F %.2fms/%.0fHz  N %.2fms/%.0fHz  CPU %.0f%%  RAM %.0fMB",
+                    profiler.flowMs, profiler.flowHz,
+                    profiler.nccMs, profiler.nccHz,
                     profiler.cpuPct, profiler.ramMb
+                )
+                overlay.perfLine2 = String.format(
+                    Locale.US,
+                    "LOOP A %.2f  P95 %.2f  MAX %.2fms  HEAD %+.0f%% @60",
+                    profiler.loopAvgMs, profiler.loopP95Ms,
+                    profiler.loopMaxMs, profiler.frameHeadroomPct
                 )
             }
 
