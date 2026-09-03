@@ -44,7 +44,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /**
- * Fusion v4.8 Strong Hold + ArduPilot + LOS/Range Diagnostics:
+ * Fusion v4.9 Strong Hold + ArduPilot + Shock Hold:
  * - CameraX 60 fps + 640x360 luma path from PlaneAimPhone
  * - robust FB-checked sparse flow/GMC + dual-template multi-scale NCC
  * - constant-acceleration image-space motion filter
@@ -104,6 +104,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var cameraHfovDeg = 70f
     private var cameraVfovDeg = 43f
     private var cameraFovEstimated = false
+
+    private var shockFrames = 0
+    private var shockGraceFrames = 0
+    private var shockCooldown = 0
+    private var lastShockYawRate = 0f
+    private var lastShockPitchRate = 0f
 
     private lateinit var sensorManager: SensorManager
     private var rotationSensor: Sensor? = null
@@ -469,9 +475,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
 
             val ts = image.imageInfo.timestamp
+            var frameDtSec = 1f / 60f
             if (lastCameraTs != 0L) {
                 val dt = (ts - lastCameraTs) / 1e9
                 if (dt in 0.004..0.1) {
+                    frameDtSec = dt.toFloat()
                     val f = (1.0 / dt).toFloat()
                     cameraFpsEma = if (cameraFpsEma == 0f) f else 0.90f * cameraFpsEma + 0.10f * f
                 }
@@ -501,6 +509,60 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var target = motionTracker.locked
 
             if (target != null) {
+                val mavFreshForShock = mavlink.ageMs() <= 1200L
+                val ownYawRate = if (mavFreshForShock) mavlink.yawRateDeg else overlay.rDeg
+                val ownPitchRate = if (mavFreshForShock) mavlink.pitchRateDeg else overlay.qDeg
+
+                val ownRateMag = hypot(
+                    ownYawRate.toDouble(),
+                    ownPitchRate.toDouble()
+                ).toFloat()
+                val rateJerk = hypot(
+                    (ownYawRate - lastShockYawRate).toDouble(),
+                    (ownPitchRate - lastShockPitchRate).toDouble()
+                ).toFloat() / frameDtSec.coerceAtLeast(1f / 240f)
+                val previousLosJitter = losDiagnostics.current().jitterDegS
+
+                val shockEvent =
+                    ownRateMag >= 45f ||
+                    rateJerk >= 850f ||
+                    (previousLosJitter >= 10f && ownRateMag >= 16f)
+
+                if (shockEvent && shockCooldown == 0) {
+                    shockFrames = 6
+                    shockGraceFrames = 2
+                    shockCooldown = 12
+                }
+
+                val shockActive = shockFrames > 0
+                overlay.shockHold = shockActive
+                lastShockYawRate = ownYawRate
+                lastShockPitchRate = ownPitchRate
+
+                // Gyro prior is used only as the center of the widened rescue
+                // search. It is never emitted as a flight-control command.
+                val gyroDx = if (shockActive) {
+                    -angleDeltaToNormalized(
+                        ownYawRate * frameDtSec,
+                        cameraHfovDeg
+                    ).coerceIn(-0.10f, 0.10f)
+                } else 0f
+                val gyroDy = if (shockActive) {
+                    angleDeltaToNormalized(
+                        ownPitchRate * frameDtSec,
+                        cameraVfovDeg
+                    ).coerceIn(-0.10f, 0.10f)
+                } else 0f
+                val gyroPrior = if (shockActive) {
+                    shiftDetection(
+                        target,
+                        gyroDx,
+                        gyroDy,
+                        (target.confidence * 0.97f).coerceAtLeast(0.25f),
+                        predicted = true
+                    )
+                } else target
+
                 // v3.8: native sparse flow/GMC runs on every camera frame.
                 // NCC cadence stays equivalent to v3.7.
                 val runFlow = true
@@ -555,11 +617,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     nccRescueCooldown = 9
                 }
 
-                val rescueBurst = nccRescueFrames > 0
+                val rescueBurst = nccRescueFrames > 0 || shockActive
                 val softRescue = rescueBurst || lightFailStreak in 1..3
                 overlay.softRescue = softRescue
 
                 val nccPeriod = when {
+                    shockActive -> 1L
                     rescueBurst -> 1L                         // ~60 Hz, short burst
                     stateLabel != "LOCK" -> 2L               // ~30 Hz
                     hardFlowFail -> 2L                        // ~30 Hz after burst
@@ -575,11 +638,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 if (nccRescueFrames > 0) nccRescueFrames--
                 if (nccRescueCooldown > 0) nccRescueCooldown--
 
-                val visualBase = flowMeasurement ?: target
+                val visualBase = flowMeasurement ?: gyroPrior
                 val nccStartNs = if (runTemplate) System.nanoTime() else 0L
                 val visual =
-                    if (runTemplate) visualTracker.track(gray, visualBase, softRescue)
-                    else null
+                    if (runTemplate) {
+                        visualTracker.track(
+                            gray,
+                            visualBase,
+                            softRescue = softRescue,
+                            shockRescue = shockActive,
+                            freezeAdaptive = shockActive
+                        )
+                    } else null
                 if (runTemplate) {
                     profiler.recordNcc(System.nanoTime() - nccStartNs)
                 }
@@ -612,10 +682,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         strongLockStreak = 0
                     }
                 } else if (attemptedMeasurement) {
-                    // Only a real failed tracker attempt counts as a miss.
-                    lightFailStreak = (lightFailStreak + 1).coerceAtMost(30)
-                    strongLockStreak = 0
-                    motionTracker.miss(ts)
+                    if (shockActive && shockGraceFrames > 0) {
+                        // Keep the last motion model for the first shock frames.
+                        // This prevents a camera jerk from immediately becoming
+                        // a normal miss/reacquire sequence.
+                        shockGraceFrames--
+                        strongLockStreak = 0
+                    } else {
+                        // Only a real failed tracker attempt counts as a miss.
+                        lightFailStreak = (lightFailStreak + 1).coerceAtMost(30)
+                        strongLockStreak = 0
+                        motionTracker.miss(ts)
+                    }
                 }
 
                 val current = motionTracker.locked
@@ -666,6 +744,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                         currentFlowScore < 0.34f && currentVisualScore < 0.52f
 
                     stateLabel = when {
+                        shockActive && !gotMeasurement -> "PREDICT"
                         lightFailStreak >= 4 && bothLightTrackersWeak -> "REACQUIRE"
                         lightFailStreak >= 2 ||
                             (projected.predicted && strongLockStreak == 0) -> "PREDICT"
@@ -683,10 +762,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     }
                 }
 
+                if (shockFrames > 0) shockFrames--
+                if (shockCooldown > 0) shockCooldown--
+                if (shockFrames == 0) overlay.shockHold = false
+
                 profiler.recordFusion(System.nanoTime() - fusionStartNs)
             } else {
                 stateLabel = "SEARCH"
                 overlay.softRescue = false
+                overlay.shockHold = false
                 overlay.losDiagnosticsActive = false
             }
 
@@ -885,6 +969,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         strongLockStreak = 2
     }
 
+    private fun angleDeltaToNormalized(angleDeg: Float, fovDeg: Float): Float {
+        val halfFov = Math.toRadians((fovDeg.coerceIn(10f, 150f) * 0.5).toDouble())
+        val angle = Math.toRadians(angleDeg.toDouble())
+        return (Math.tan(angle) / (2.0 * Math.tan(halfFov))).toFloat()
+    }
+
     private fun shiftDetection(
         d: Detection,
         dx: Float,
@@ -944,7 +1034,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             currentVisualScore = 0f
             nccRescueFrames = 0
             nccRescueCooldown = 0
+            shockFrames = 0
+            shockGraceFrames = 0
+            shockCooldown = 0
+            lastShockYawRate = 0f
+            lastShockPitchRate = 0f
             overlay.softRescue = false
+            overlay.shockHold = false
             outputFps = 0f
             overlay.outputFps = 0f
             lightFailStreak = 0
