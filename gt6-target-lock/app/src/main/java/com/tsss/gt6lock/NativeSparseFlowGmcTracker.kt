@@ -12,7 +12,11 @@ class NativeSparseFlowGmcTracker {
         val targetConsistency: Float,
         val globalConsistency: Float,
         val targetPoints: Int,
-        val backgroundPoints: Int
+        val backgroundPoints: Int,
+        val globalDxNorm: Float,
+        val globalDyNorm: Float,
+        val blurRisk: Float,
+        val pyramidUsed: Boolean
     )
 
     init { System.loadLibrary("gt6lock") }
@@ -44,10 +48,12 @@ class NativeSparseFlowGmcTracker {
             frame.pixels, frame.width, frame.height,
             target.x1, target.y1, target.x2, target.y2
         )
-        if (r.size < 7 || r[0] < 0.5f) return null
+        if (r.size < 11 || r[0] < 0.5f) return null
         return FlowResult(
             r[1], r[2], r[3], r[4],
-            r[5].toInt(), r[6].toInt()
+            r[5].toInt(), r[6].toInt(),
+            r[7], r[8], r[9].coerceIn(0f, 1f),
+            r[10] >= 0.5f
         )
     }
 }
