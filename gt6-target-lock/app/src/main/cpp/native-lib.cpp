@@ -3,11 +3,14 @@
 #include <mutex>
 #include "tracker_core.hpp"
 #include "native_sparse_flow.hpp"
+#include "native_ncc.hpp"
 
 static TrackerCore gTracker;
 static std::mutex gMutex;
 static NativeSparseFlow gSparseFlow;
 static std::mutex gSparseFlowMutex;
+static NativeNccMatcher gNcc;
+static std::mutex gNccMutex;
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tsss_gt6lock_NativeTracker_nativeInit(JNIEnv* env, jobject, jbyteArray y, jint w, jint h, jfloat cx, jfloat cy, jfloat bw, jfloat bh) {
@@ -78,5 +81,89 @@ Java_com_tsss_gt6lock_NativeSparseFlowGmcTracker_nativeTrack(
     };
     jfloatArray arr = env->NewFloatArray(7);
     env->SetFloatArrayRegion(arr, 0, 7, out);
+    return arr;
+}
+
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeClear(
+    JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> lk(gNccMutex);
+    gNcc.clear();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeSetAnchor(
+    JNIEnv* env, jobject,
+    jfloatArray samples,
+    jint halfW, jint halfH, jint step,
+    jdouble sum, jdouble sumSq,
+    jfloat widthNorm, jfloat heightNorm,
+    jboolean copyToCurrent
+) {
+    jfloat* p = env->GetFloatArrayElements(samples, nullptr);
+    const int count = env->GetArrayLength(samples);
+    {
+        std::lock_guard<std::mutex> lk(gNccMutex);
+        gNcc.setAnchor(
+            p, count, halfW, halfH, step,
+            sum, sumSq, widthNorm, heightNorm,
+            copyToCurrent == JNI_TRUE
+        );
+    }
+    env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeSetCurrent(
+    JNIEnv* env, jobject,
+    jfloatArray samples,
+    jint halfW, jint halfH, jint step,
+    jdouble sum, jdouble sumSq,
+    jfloat widthNorm, jfloat heightNorm
+) {
+    jfloat* p = env->GetFloatArrayElements(samples, nullptr);
+    const int count = env->GetArrayLength(samples);
+    {
+        std::lock_guard<std::mutex> lk(gNccMutex);
+        gNcc.setCurrent(
+            p, count, halfW, halfH, step,
+            sum, sumSq, widthNorm, heightNorm
+        );
+    }
+    env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_tsss_gt6lock_NativeNccMatcher_nativeMatch(
+    JNIEnv* env, jobject,
+    jbyteArray y, jint w, jint h,
+    jint predictedX, jint predictedY,
+    jint radiusX, jint radiusY,
+    jint coarseStep, jboolean wideScales
+) {
+    jbyte* p = env->GetByteArrayElements(y, nullptr);
+    NativeNccMatch r;
+    {
+        std::lock_guard<std::mutex> lk(gNccMutex);
+        r = gNcc.match(
+            reinterpret_cast<uint8_t*>(p), w, h,
+            predictedX, predictedY,
+            radiusX, radiusY,
+            coarseStep, wideScales == JNI_TRUE
+        );
+    }
+    env->ReleaseByteArrayElements(y, p, JNI_ABORT);
+
+    float out[6] = {
+        r.valid ? 1.f : 0.f,
+        static_cast<float>(r.bestX),
+        static_cast<float>(r.bestY),
+        r.bestScore,
+        r.secondScore,
+        r.bestScale
+    };
+    jfloatArray arr = env->NewFloatArray(6);
+    env->SetFloatArrayRegion(arr, 0, 6, out);
     return arr;
 }
