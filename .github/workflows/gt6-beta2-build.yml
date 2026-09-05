@@ -39,11 +39,11 @@ jobs:
               assert old in s, f'missing pattern in {rel}: {old[:80]!r}'
               p.write_text(s.replace(old, new, 1))
 
+          rep('app/build.gradle.kts', 'applicationId = "com.tsss.gt6v6.nativeapp"', 'applicationId = "com.tsss.gt6v6.fix621"')
           rep('app/build.gradle.kts', 'versionCode = 6020001', 'versionCode = 6020101')
           rep('app/build.gradle.kts', 'versionName = "6.2.0-beta2-real-device-calibration"', 'versionName = "6.2.1-beta2-fix"')
           rep('app/src/main/AndroidManifest.xml', 'android:label="GT6 v6 Beta1"', 'android:label="GT6 v6.2.1 FIX"')
           rep('app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt', 'YOLO26n 320x320 detector adapter', 'YOLO26n 640x640 detector adapter')
-          # CI source already has the model tensor at 640; keep and verify it.
           onnx = root / 'app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt'
           assert 'private const val S = 640' in onnx.read_text()
 
@@ -80,6 +80,7 @@ jobs:
               '''    const bool flowOk=e->flow.seed(f,b);\n    const bool trackerOk=flowOk && e->tracker.seed(f,b);\n    const bool ok=flowOk && trackerOk;\n    if(!ok){ e->tracker.reset(); e->flow.reset(); e->detector.reset(); }\n    return ok?JNI_TRUE:JNI_FALSE;''')
           print('Beta2.1 source fix applied')
           PY
+          grep -q 'applicationId = "com.tsss.gt6v6.fix621"' gt6-beta2/app/build.gradle.kts
           grep -q 'versionName = "6.2.1-beta2-fix"' gt6-beta2/app/build.gradle.kts
           grep -q 'android:label="GT6 v6.2.1 FIX"' gt6-beta2/app/src/main/AndroidManifest.xml
           grep -q 'val size = 640' gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt
@@ -133,10 +134,10 @@ jobs:
           sha256sum "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           unzip -t "$APK" >/dev/null
-          cp "$APK" GT6-Target-Lock-v6.2.1-FIX.apk
+          cp "$APK" GT6-Target-Lock-v6.2.1-FIX-SIDEBYSIDE.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gt6-v6.2.1-fix-apk
-          path: GT6-Target-Lock-v6.2.1-FIX.apk
+          name: gt6-v6.2.1-fix-sidebyside-apk
+          path: GT6-Target-Lock-v6.2.1-FIX-SIDEBYSIDE.apk
           if-no-files-found: error
