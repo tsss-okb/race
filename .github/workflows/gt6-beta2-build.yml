@@ -1,0 +1,76 @@
+name: GT6 Beta2 APK
+
+on:
+  push:
+    branches: [ "ci/gt6-v6-beta2-apk" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          cat gt6-ci/part_* > /tmp/gt6.b64
+          base64 -d /tmp/gt6.b64 > /tmp/gt6.zip
+          unzip -t /tmp/gt6.zip
+          mkdir -p /tmp/gt6src
+          unzip -q /tmp/gt6.zip -d /tmp/gt6src
+          mv /tmp/gt6src/gt6_beta2_ci ./gt6-beta2
+
+      - name: Download YOLO26n ONNX
+        shell: bash
+        run: |
+          mkdir -p gt6-beta2/app/src/main/assets
+          curl -L --fail --retry 3 \
+            https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx \
+            -o gt6-beta2/app/src/main/assets/yolo26n.onnx
+          test -s gt6-beta2/app/src/main/assets/yolo26n.onnx
+          ls -lh gt6-beta2/app/src/main/assets/yolo26n.onnx
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: gt6-beta2
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK=gt6-beta2/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          sha256sum "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          cp "$APK" GT6-Target-Lock-v6.2-Beta2.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gt6-v6-beta2-apk
+          path: GT6-Target-Lock-v6.2-Beta2.apk
+          if-no-files-found: error
