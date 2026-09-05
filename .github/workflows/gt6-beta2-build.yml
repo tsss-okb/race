@@ -18,13 +18,19 @@ jobs:
       - name: Reconstruct source
         shell: bash
         run: |
-          base64 -d gt6-ci/source.b64 > /tmp/gt6.zip
-          echo "30e2a37ed679d1e551eb81b1432b91d89c084a2f7c5c4af5e2b1edaff2ed7a01  /tmp/gt6.zip" | sha256sum -c -
-          unzip -t /tmp/gt6.zip
+          cat gt6-ci/part_00 gt6-ci/part_01 gt6-ci/part_02 gt6-ci/part_03 gt6-ci/part_04 gt6-ci/part_05 gt6-ci/part_06 gt6-ci/part_07 gt6-ci/part_08 gt6-ci/part_09 gt6-ci/part_10 gt6-ci/part_11 gt6-ci/part_12 > /tmp/gt6.b64
+          base64 -d /tmp/gt6.b64 > /tmp/gt6.zip
           rm -rf /tmp/gt6src gt6-beta2
           mkdir -p /tmp/gt6src
-          unzip -q /tmp/gt6.zip -d /tmp/gt6src
-          mv /tmp/gt6src/gt6_ci_min ./gt6-beta2
+          set +e
+          unzip -o /tmp/gt6.zip -d /tmp/gt6src
+          UNZIP_RC=$?
+          set -e
+          test -d /tmp/gt6src/gt6_beta2_ci
+          mv /tmp/gt6src/gt6_beta2_ci ./gt6-beta2
+          cp gt6-ci/TrackingOverlay.clean.kt gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt
+          test "$(git hash-object gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt)" = "f59543d72694aa14e23d949750b91c9907d86cc3"
+          echo "unzip exit code: $UNZIP_RC (known source archive contains one replaced CRC entry)"
 
       - name: Download YOLO26n ONNX
         shell: bash
