@@ -1,0 +1,163 @@
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -11,8 +11,8 @@
+         applicationId = "com.tsss.gt6v6.nativeapp"
+         minSdk = 29
+         targetSdk = 35
+-        versionCode = 6020001
+-        versionName = "6.2.0-beta2-real-device-calibration"
++        versionCode = 6020101
++        versionName = "6.2.1-beta2-fix"
+ 
+         ndk {
+             abiFilters += listOf("arm64-v8a")
+--- a/app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt
++++ b/app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt
+@@ -13,7 +13,7 @@
+ import kotlin.math.min
+ 
+ /**
+- * YOLO26n 320x320 detector adapter for the model carried by the v5.x APK.
++ * YOLO26n 640x640 detector adapter for the model carried by the v5.x APK.
+  * The exported model is end-to-end (NMS inside the graph), so output0 is expected
+  * to end in six values: x1,y1,x2,y2,score,class. If another export is supplied,
+  * replace parseEndToEnd() while leaving DetectorPort/TrackerEngine unchanged.
+@@ -22,7 +22,7 @@
+     context: Context,
+     private val confidenceThreshold: Float = 0.25f,
+ ) : DetectorPort, AutoCloseable {
+-    companion object { private const val TAG = "GT6-YOLO"; private const val S = 320 }
++    companion object { private const val TAG = "GT6-YOLO"; private const val S = 640 }
+ 
+     private val env = OrtEnvironment.getEnvironment()
+     private val session: OrtSession
+--- a/app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt
++++ b/app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt
+@@ -5,6 +5,7 @@
+ import com.tsss.gt6v6.V6DetectorCommand
+ import java.util.concurrent.Executors
+ import java.util.concurrent.atomic.AtomicReference
++import android.util.Log
+ 
+ /** Compact grayscale detector input copied only when Detector Authority requests it. */
+ data class DetectorFrame(
+@@ -45,6 +46,9 @@
+         worker.execute {
+             try {
+                 latest.set(port.detect(frame))
++            } catch (t: Throwable) {
++                Log.e("GT6-DETECTOR", "Detector request ${command.requestId} failed", t)
++                latest.set(emptyList())
+             } finally {
+                 engine.detectorFinished(command.requestId, System.nanoTime())
+             }
+--- a/app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt
++++ b/app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt
+@@ -6,6 +6,7 @@
+ import android.graphics.Color
+ import android.os.Bundle
+ import android.os.Environment
++import android.util.Range
+ import android.provider.MediaStore
+ import android.view.Gravity
+ import android.view.MotionEvent
+@@ -153,9 +154,14 @@
+         future.addListener({
+             val provider = future.get()
+             val rotation = preview.display?.rotation ?: android.view.Surface.ROTATION_0
+-            val p = Preview.Builder().setTargetRotation(rotation).build().also { it.setSurfaceProvider(preview.surfaceProvider) }
++            val fps60 = Range(60, 60)
++            val p = Preview.Builder()
++                .setTargetRotation(rotation)
++                .setTargetFrameRate(fps60)
++                .build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+             val analysis = ImageAnalysis.Builder()
+                 .setTargetRotation(rotation)
++                .setTargetFrameRate(fps60)
+                 .setTargetResolution(android.util.Size(1280, 720))
+                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                 .build()
+@@ -271,7 +277,7 @@
+     }
+ 
+     private fun copyDetectorFrame(image: ImageProxy): DetectorFrame {
+-        // Copy only a 320x320 luminance thumbnail on detector wake. This keeps
++        // Copy a 640x640 luminance frame only on detector wake. This keeps
+         // CameraX -> v6 tracking zero-copy at 60 Hz and moves the expensive model
+         // off the hot path.
+         val plane = image.planes[0]
+@@ -280,7 +286,7 @@
+         val rawH = image.height
+         val rowStride = plane.rowStride
+         val pixelStride = plane.pixelStride
+-        val size = 320
++        val size = 640
+         val dst = ByteArray(size * size)
+         for (oy in 0 until size) {
+             val iy = min(rawH - 1, oy * rawH / size)
+--- a/app/src/main/cpp/engine/src/sparse_lk_gmc.cpp
++++ b/app/src/main/cpp/engine/src/sparse_lk_gmc.cpp
+@@ -278,7 +278,7 @@
+         const float inlierRatio=static_cast<float>(in)/std::max(1,n), photo=1.0f-clampf((in?phot/in:40.0f)/32.0f,0.0f,1.0f);
+         const float coverage=clampf(static_cast<float>(in)/18.0f,0.0f,1.0f);
+         o.dx=mdx/width_;o.dy=mdy/height_;o.scale=estimate_scale(target_matches_,tm,mdx,mdy);
+-        o.quality=clampf(0.45f*inlierRatio+0.35f*photo+0.20f*coverage,0.0f,1.0f);
++        o.quality=clampf(0.55f*inlierRatio+0.15f*photo+0.30f*coverage,0.0f,1.0f);
+         o.consistency=clampf(0.62f*inlierRatio+0.38f*(1.0f-clampf(status_.target_residual_px/6.0f,0.0f,1.0f)),0.0f,1.0f);
+         o.tracked_points=in;o.valid=in>=5&&o.quality>0.34f;
+     }
+--- a/app/src/main/cpp/engine/src/tracker_engine.cpp
++++ b/app/src/main/cpp/engine/src/tracker_engine.cpp
+@@ -153,7 +153,15 @@
+ }
+ 
+ void TrackerEngine::classify_motion(float dx,float dy,float quality){
+-    float sp=sqrt_pos(dx*dx+dy*dy),c=cosine(last_dx_,last_dy_,dx,dy); float ratio=(last_speed_>1e-4f)?sp/last_speed_:1.0f;
++    float sp=sqrt_pos(dx*dx+dy*dy);
++    // Tiny LK/GMC residuals have unstable direction. Never turn sub-pixel
++    // direction noise into TURN/SHOCK/reversal state.
++    constexpr float kMotionDeadband = 0.0020f;
++    if(sp<kMotionDeadband){
++        motion_mode_=MotionMode::Straight; shock_enter_=shock_exit_=0;
++        last_speed_=sp; last_dx_=dx; last_dy_=dy; return;
++    }
++    float c=cosine(last_dx_,last_dy_,dx,dy); float ratio=(last_speed_>kMotionDeadband)?sp/last_speed_:1.0f;
+     MotionMode detected=MotionMode::Straight;
+     if(quality>0.45f&&sp>cfg_.shock_speed_norm)detected=MotionMode::Shock;
+     else if(quality>0.45f&&c<cfg_.turn_cos)detected=MotionMode::Turn;
+@@ -161,7 +169,7 @@
+     if(detected==MotionMode::Shock)shock_enter_++;else shock_enter_=i_max(0,shock_enter_-1);
+     if(motion_mode_==MotionMode::Shock){if(detected==MotionMode::Straight)shock_exit_++;else shock_exit_=0;if(shock_exit_<2)detected=MotionMode::Shock;}
+     if(detected==MotionMode::Shock&&shock_enter_<2&&c>cfg_.reversal_cos)detected=motion_mode_;
+-    if(c<cfg_.reversal_cos&&quality>0.62f)detected=MotionMode::Shock;
++    if(c<cfg_.reversal_cos&&quality>0.62f&&last_speed_>kMotionDeadband)detected=MotionMode::Shock;
+     motion_mode_=detected;last_speed_=sp;last_dx_=dx;last_dy_=dy;
+ }
+ 
+--- a/app/src/main/cpp/gt6_jni.cpp
++++ b/app/src/main/cpp/gt6_jni.cpp
+@@ -109,7 +109,12 @@
+     FrameView f{p,width,height,stride,static_cast<gt6::i64>(timestampNs)};
+     BBox b{x,y,w,h};
+     e->detector.reset(); e->metrics.reset(); e->adaptive.reset(); e->tracker.set_config(e->adaptive.effective_config()); e->detector_start_ns=0;
+-    const bool ok=e->tracker.seed(f,b) && e->flow.seed(f,b);
++    // Seed must be atomic: do not leave the tracker in LOCK if the motion
++    // backend could not seed the same ROI.
++    const bool flowOk=e->flow.seed(f,b);
++    const bool trackerOk=flowOk && e->tracker.seed(f,b);
++    const bool ok=flowOk && trackerOk;
++    if(!ok){ e->tracker.reset(); e->flow.reset(); e->detector.reset(); }
+     return ok?JNI_TRUE:JNI_FALSE;
+ }
+ 
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -6,7 +6,7 @@
+ 
+     <application
+         android:allowBackup="false"
+-        android:label="GT6 v6 Beta1"
++        android:label="GT6 v6.2.1 FIX"
+         android:theme="@style/Theme.GT6Native"
+         android:usesCleartextTraffic="false">
+         <activity
