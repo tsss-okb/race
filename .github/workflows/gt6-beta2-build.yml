@@ -30,6 +30,8 @@ jobs:
           mv /tmp/gt6src/gt6_beta2_ci ./gt6-beta2
           cp gt6-ci/TrackingOverlay.clean.kt gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt
           test "$(git hash-object gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt)" = "f59543d72694aa14e23d949750b91c9907d86cc3"
+          sed -i 's/android:label="GT6 v6 Beta1"/android:label="GT6 v6 Beta2"/' gt6-beta2/app/src/main/AndroidManifest.xml
+          grep -q 'android:label="GT6 v6 Beta2"' gt6-beta2/app/src/main/AndroidManifest.xml
           echo "unzip exit code: $UNZIP_RC (known source archive contains one replaced CRC entry)"
 
       - name: Download YOLO26n ONNX
