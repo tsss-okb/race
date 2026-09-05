@@ -55,11 +55,6 @@ jobs:
               '''        worker.execute {\n            try {\n                latest.set(port.detect(frame))\n            } catch (t: Throwable) {\n                Log.e("GT6-DETECTOR", "Detector request ${command.requestId} failed", t)\n                latest.set(emptyList())\n            } finally {\n                engine.detectorFinished(command.requestId, System.nanoTime())\n            }\n        }''')
 
           rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
-              'import android.os.Environment', 'import android.os.Environment\nimport android.util.Range')
-          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
-              '''            val p = Preview.Builder().setTargetRotation(rotation).build().also { it.setSurfaceProvider(preview.surfaceProvider) }\n            val analysis = ImageAnalysis.Builder()\n                .setTargetRotation(rotation)\n                .setTargetResolution(android.util.Size(1280, 720))''',
-              '''            val fps60 = Range(60, 60)\n            val p = Preview.Builder()\n                .setTargetRotation(rotation)\n                .setTargetFrameRate(fps60)\n                .build().also { it.setSurfaceProvider(preview.surfaceProvider) }\n            val analysis = ImageAnalysis.Builder()\n                .setTargetRotation(rotation)\n                .setTargetFrameRate(fps60)\n                .setTargetResolution(android.util.Size(1280, 720))''')
-          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
               '// Copy only a 320x320 luminance thumbnail on detector wake.',
               '// Copy a 640x640 luminance frame only on detector wake.')
           rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt', 'val size = 320', 'val size = 640')
