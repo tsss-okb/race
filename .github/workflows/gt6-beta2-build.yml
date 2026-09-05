@@ -1,4 +1,4 @@
-name: GT6 Beta2 APK
+name: GT6 Beta2.1 FIX APK
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct source
+      - name: Reconstruct source and apply Beta2.1 fix
         shell: bash
         run: |
           cat gt6-ci/part_00 gt6-ci/part_01 gt6-ci/part_02 gt6-ci/part_03 gt6-ci/part_04 gt6-ci/part_05 gt6-ci/part_06 gt6-ci/part_07 gt6-ci/part_08 gt6-ci/part_09 gt6-ci/part_10 gt6-ci/part_11 gt6-ci/part_12 > /tmp/gt6.b64
@@ -30,11 +30,13 @@ jobs:
           mv /tmp/gt6src/gt6_beta2_ci ./gt6-beta2
           cp gt6-ci/TrackingOverlay.clean.kt gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt
           test "$(git hash-object gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt)" = "f59543d72694aa14e23d949750b91c9907d86cc3"
-          sed -i 's/android:label="GT6 v6 Beta1"/android:label="GT6 v6 Beta2"/' gt6-beta2/app/src/main/AndroidManifest.xml
-          grep -q 'android:label="GT6 v6 Beta2"' gt6-beta2/app/src/main/AndroidManifest.xml
-          echo "unzip exit code: $UNZIP_RC (known source archive contains one replaced CRC entry)"
+          (cd gt6-beta2 && patch -p1 < ../gt6-ci/beta2.1-fix.patch)
+          grep -q 'versionName = "6.2.1-beta2-fix"' gt6-beta2/app/build.gradle.kts
+          grep -q 'android:label="GT6 v6.2.1 FIX"' gt6-beta2/app/src/main/AndroidManifest.xml
+          grep -q 'private const val S = 640' gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt
+          echo "unzip exit code: $UNZIP_RC (known archive CRC entry replaced before patch)"
 
-      - name: Download YOLO26n ONNX
+      - name: Download and verify YOLO26n ONNX
         shell: bash
         run: |
           mkdir -p gt6-beta2/app/src/main/assets
@@ -42,7 +44,12 @@ jobs:
             https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.onnx \
             -o gt6-beta2/app/src/main/assets/yolo26n.onnx
           test -s gt6-beta2/app/src/main/assets/yolo26n.onnx
-          ls -lh gt6-beta2/app/src/main/assets/yolo26n.onnx
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('gt6-beta2/app/src/main/assets/yolo26n.onnx')
+          print('YOLO bytes', p.stat().st_size)
+          assert p.stat().st_size > 9_000_000
+          PY
 
       - uses: actions/setup-java@v4
         with:
@@ -65,7 +72,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build APK
         working-directory: gt6-beta2
         run: gradle :app:assembleDebug --stacktrace
 
@@ -76,10 +83,11 @@ jobs:
           test -f "$APK"
           sha256sum "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" GT6-Target-Lock-v6.2-Beta2.apk
+          unzip -t "$APK" >/dev/null
+          cp "$APK" GT6-Target-Lock-v6.2.1-FIX.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gt6-v6-beta2-apk
-          path: GT6-Target-Lock-v6.2-Beta2.apk
+          name: gt6-v6.2.1-fix-apk
+          path: GT6-Target-Lock-v6.2.1-FIX.apk
           if-no-files-found: error
