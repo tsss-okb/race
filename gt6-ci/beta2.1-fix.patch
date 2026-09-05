@@ -22,15 +22,6 @@
   * The exported model is end-to-end (NMS inside the graph), so output0 is expected
   * to end in six values: x1,y1,x2,y2,score,class. If another export is supplied,
   * replace parseEndToEnd() while leaving DetectorPort/TrackerEngine unchanged.
-@@ -22,7 +22,7 @@
-     context: Context,
-     private val confidenceThreshold: Float = 0.25f,
- ) : DetectorPort, AutoCloseable {
--    companion object { private const val TAG = "GT6-YOLO"; private const val S = 320 }
-+    companion object { private const val TAG = "GT6-YOLO"; private const val S = 640 }
- 
-     private val env = OrtEnvironment.getEnvironment()
-     private val session: OrtSession
 --- a/app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt
 +++ b/app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt
 @@ -5,6 +5,7 @@
@@ -136,13 +127,11 @@
  
 --- a/app/src/main/cpp/gt6_jni.cpp
 +++ b/app/src/main/cpp/gt6_jni.cpp
-@@ -109,7 +109,12 @@
+@@ -109,7 +109,11 @@
      FrameView f{p,width,height,stride,static_cast<gt6::i64>(timestampNs)};
      BBox b{x,y,w,h};
      e->detector.reset(); e->metrics.reset(); e->adaptive.reset(); e->tracker.set_config(e->adaptive.effective_config()); e->detector_start_ns=0;
 -    const bool ok=e->tracker.seed(f,b) && e->flow.seed(f,b);
-+    // Seed must be atomic: do not leave the tracker in LOCK if the motion
-+    // backend could not seed the same ROI.
 +    const bool flowOk=e->flow.seed(f,b);
 +    const bool trackerOk=flowOk && e->tracker.seed(f,b);
 +    const bool ok=flowOk && trackerOk;
