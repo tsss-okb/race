@@ -30,11 +30,60 @@ jobs:
           mv /tmp/gt6src/gt6_beta2_ci ./gt6-beta2
           cp gt6-ci/TrackingOverlay.clean.kt gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt
           test "$(git hash-object gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/TrackingOverlay.kt)" = "f59543d72694aa14e23d949750b91c9907d86cc3"
-          (cd gt6-beta2 && patch -p1 < ../gt6-ci/beta2.1-fix.patch)
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('gt6-beta2')
+          def rep(rel, old, new):
+              p = root / rel
+              s = p.read_text()
+              assert old in s, f'missing pattern in {rel}: {old[:80]!r}'
+              p.write_text(s.replace(old, new, 1))
+
+          rep('app/build.gradle.kts', 'versionCode = 6020001', 'versionCode = 6020101')
+          rep('app/build.gradle.kts', 'versionName = "6.2.0-beta2-real-device-calibration"', 'versionName = "6.2.1-beta2-fix"')
+          rep('app/src/main/AndroidManifest.xml', 'android:label="GT6 v6 Beta1"', 'android:label="GT6 v6.2.1 FIX"')
+          rep('app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt', 'YOLO26n 320x320 detector adapter', 'YOLO26n 640x640 detector adapter')
+          # CI source already has the model tensor at 640; keep and verify it.
+          onnx = root / 'app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt'
+          assert 'private const val S = 640' in onnx.read_text()
+
+          rep('app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt',
+              'import java.util.concurrent.atomic.AtomicReference',
+              'import java.util.concurrent.atomic.AtomicReference\nimport android.util.Log')
+          rep('app/src/main/java/com/tsss/gt6v6/app/DetectorPipeline.kt',
+              '''        worker.execute {\n            try {\n                latest.set(port.detect(frame))\n            } finally {\n                engine.detectorFinished(command.requestId, System.nanoTime())\n            }\n        }''',
+              '''        worker.execute {\n            try {\n                latest.set(port.detect(frame))\n            } catch (t: Throwable) {\n                Log.e("GT6-DETECTOR", "Detector request ${command.requestId} failed", t)\n                latest.set(emptyList())\n            } finally {\n                engine.detectorFinished(command.requestId, System.nanoTime())\n            }\n        }''')
+
+          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
+              'import android.os.Environment', 'import android.os.Environment\nimport android.util.Range')
+          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
+              '''            val p = Preview.Builder().setTargetRotation(rotation).build().also { it.setSurfaceProvider(preview.surfaceProvider) }\n            val analysis = ImageAnalysis.Builder()\n                .setTargetRotation(rotation)\n                .setTargetResolution(android.util.Size(1280, 720))''',
+              '''            val fps60 = Range(60, 60)\n            val p = Preview.Builder()\n                .setTargetRotation(rotation)\n                .setTargetFrameRate(fps60)\n                .build().also { it.setSurfaceProvider(preview.surfaceProvider) }\n            val analysis = ImageAnalysis.Builder()\n                .setTargetRotation(rotation)\n                .setTargetFrameRate(fps60)\n                .setTargetResolution(android.util.Size(1280, 720))''')
+          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt',
+              '// Copy only a 320x320 luminance thumbnail on detector wake.',
+              '// Copy a 640x640 luminance frame only on detector wake.')
+          rep('app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt', 'val size = 320', 'val size = 640')
+
+          rep('app/src/main/cpp/engine/src/sparse_lk_gmc.cpp',
+              'o.quality=clampf(0.45f*inlierRatio+0.35f*photo+0.20f*coverage,0.0f,1.0f);',
+              'o.quality=clampf(0.55f*inlierRatio+0.15f*photo+0.30f*coverage,0.0f,1.0f);')
+
+          rep('app/src/main/cpp/engine/src/tracker_engine.cpp',
+              '''void TrackerEngine::classify_motion(float dx,float dy,float quality){\n    float sp=sqrt_pos(dx*dx+dy*dy),c=cosine(last_dx_,last_dy_,dx,dy); float ratio=(last_speed_>1e-4f)?sp/last_speed_:1.0f;\n    MotionMode detected=MotionMode::Straight;''',
+              '''void TrackerEngine::classify_motion(float dx,float dy,float quality){\n    float sp=sqrt_pos(dx*dx+dy*dy);\n    constexpr float kMotionDeadband = 0.0020f;\n    if(sp<kMotionDeadband){\n        motion_mode_=MotionMode::Straight; shock_enter_=shock_exit_=0;\n        last_speed_=sp; last_dx_=dx; last_dy_=dy; return;\n    }\n    float c=cosine(last_dx_,last_dy_,dx,dy); float ratio=(last_speed_>kMotionDeadband)?sp/last_speed_:1.0f;\n    MotionMode detected=MotionMode::Straight;''')
+          rep('app/src/main/cpp/engine/src/tracker_engine.cpp',
+              'if(c<cfg_.reversal_cos&&quality>0.62f)detected=MotionMode::Shock;',
+              'if(c<cfg_.reversal_cos&&quality>0.62f&&last_speed_>kMotionDeadband)detected=MotionMode::Shock;')
+
+          rep('app/src/main/cpp/gt6_jni.cpp',
+              '''    const bool ok=e->tracker.seed(f,b) && e->flow.seed(f,b);\n    return ok?JNI_TRUE:JNI_FALSE;''',
+              '''    const bool flowOk=e->flow.seed(f,b);\n    const bool trackerOk=flowOk && e->tracker.seed(f,b);\n    const bool ok=flowOk && trackerOk;\n    if(!ok){ e->tracker.reset(); e->flow.reset(); e->detector.reset(); }\n    return ok?JNI_TRUE:JNI_FALSE;''')
+          print('Beta2.1 source fix applied')
+          PY
           grep -q 'versionName = "6.2.1-beta2-fix"' gt6-beta2/app/build.gradle.kts
           grep -q 'android:label="GT6 v6.2.1 FIX"' gt6-beta2/app/src/main/AndroidManifest.xml
-          grep -q 'private const val S = 640' gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/OnnxYoloDetectorPort.kt
-          echo "unzip exit code: $UNZIP_RC (known archive CRC entry replaced before patch)"
+          grep -q 'val size = 640' gt6-beta2/app/src/main/java/com/tsss/gt6v6/app/MainActivity.kt
+          echo "unzip exit code: $UNZIP_RC (known archive CRC entry replaced)"
 
       - name: Download and verify YOLO26n ONNX
         shell: bash
