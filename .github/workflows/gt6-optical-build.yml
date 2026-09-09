@@ -23,11 +23,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Unpack GT6 v2.3
+      - name: Reconstruct GT6 v2.3 source
         run: |
           rm -rf /tmp/gt6-v23
           mkdir -p /tmp/gt6-v23
-          unzip -q gt6-optical/GT6OpticalLensTest-v2.3-TRACKER-SOURCE.zip -d /tmp/gt6-v23
+          cat gt6-optical/v23chunks/chunk-* | base64 -d > /tmp/GT6-v2.3.zip
+          unzip -t /tmp/GT6-v2.3.zip
+          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v23
           test -f /tmp/gt6-v23/GT6OpticalLensTest/app/src/main/jniLibs/arm64-v8a/libgt6lock.so
       - name: Build debug APK
         working-directory: /tmp/gt6-v23/GT6OpticalLensTest
