@@ -1,0 +1,304 @@
+--- a/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt
++++ b/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt
+@@ -9,9 +9,9 @@
+ import kotlin.math.sqrt
+ 
+ /**
+- * GT6 Visual Tracker v2.6.1 — FAST LOCK
++ * GT6 Visual Tracker v2.6.2 — 10MS LOCK
+  *
+- * Design goal: keep the 60 FPS camera useful by keeping the per-frame tracker cheap.
++ * Design goal: keep the healthy LOCK path around 10 ms on Realme GT6.
+  * Heavy identity/reacquire work is moved off the normal LOCK path.
+  *
+  * Normal frame:
+@@ -79,7 +79,7 @@
+         val startedNs = System.nanoTime()
+         frameIndex++
+ 
+-        val frame = extractOrientedLumaFast(image, targetWidth = 480)
++        val frame = extractOrientedLumaFast(image, targetWidth = 320)
+         frameW = frame.width
+         frameH = frame.height
+ 
+@@ -113,13 +113,13 @@
+             lostFrames >= 20 -> min(150, max(55, (bwPx * 3.0f).roundToInt()))
+             lostFrames >= 8 -> min(105, max(42, (bwPx * 2.1f).roundToInt()))
+             lostFrames >= 3 -> min(72, max(30, (bwPx * 1.45f).roundToInt()))
+-            else -> min(42, max(14, (bwPx * 0.70f + 7f).roundToInt()))
++            else -> min(28, max(10, (bwPx * 0.52f + 5f).roundToInt()))
+         }
+         val radiusY = when {
+             lostFrames >= 20 -> min(105, max(42, (bhPx * 2.4f).roundToInt()))
+             lostFrames >= 8 -> min(80, max(34, (bhPx * 1.8f).roundToInt()))
+             lostFrames >= 3 -> min(58, max(24, (bhPx * 1.25f).roundToInt()))
+-            else -> min(34, max(12, (bhPx * 0.62f + 6f).roundToInt()))
++            else -> min(22, max(9, (bhPx * 0.48f + 4f).roundToInt()))
+         }
+ 
+         val step = when {
+@@ -131,7 +131,7 @@
+         val baseScale = (r.width() / t.widthNorm.coerceAtLeast(0.001f)).coerceIn(0.62f, 1.60f)
+         val scaleFactors = when {
+             lostFrames > 0 -> floatArrayOf(0.90f, 1.00f, 1.10f)
+-            frameIndex % 6 == 0 -> floatArrayOf(0.96f, 1.00f, 1.04f)
++            frameIndex % 12 == 0 -> floatArrayOf(0.96f, 1.00f, 1.04f)
+             else -> floatArrayOf(1.00f)
+         }
+         val scales = FloatArray(scaleFactors.size) { i ->
+@@ -151,7 +151,7 @@
+         )
+ 
+         // Anchor verification is periodic in LOCK, immediate when uncertain/lost.
+-        val needAnchorCheck = lostFrames > 0 || frameIndex % 7 == 0 || result == null || result.best.ncc < 0.70f
++        val needAnchorCheck = lostFrames > 0 || frameIndex % 15 == 0 || result == null || result.best.ncc < 0.70f
+         var anchorScore = 1f
+         if (result != null && needAnchorCheck) {
+             val targetWidth = t.widthNorm * result.best.scale
+@@ -366,7 +366,7 @@
+         scales: FloatArray,
+         motionWeight: Float
+     ): SearchResult? {
+-        val coarse = ArrayList<Candidate>(14)
++        val coarse = ArrayList<Candidate>(8)
+ 
+         for (scaleRaw in scales) {
+             val scale = scaleRaw.coerceIn(0.50f, 1.90f)
+@@ -387,9 +387,10 @@
+                     if (n >= 0.42f) {
+                         val dx = (x - predictedX).toFloat() / max(8f, radiusX.toFloat())
+                         val dy = (y - predictedY).toFloat() / max(8f, radiusY.toFloat())
+-                        val motion = (1f - min(1f, sqrt(dx * dx + dy * dy))).coerceIn(0f, 1f)
++                        val d2 = dx * dx + dy * dy
++                        val motion = (1f - min(1f, d2)).coerceIn(0f, 1f)
+                         val rank = n * (1f - motionWeight) + motion * motionWeight
+-                        addTop(coarse, Candidate(x, y, scale, n, rank, template), 14)
++                        addTop(coarse, Candidate(x, y, scale, n, rank, template), 8)
+                     }
+                     x += step
+                 }
+@@ -399,39 +400,37 @@
+ 
+         if (coarse.isEmpty()) return null
+ 
+-        val refined = ArrayList<Candidate>(22)
+-        coarse.sortedByDescending { it.rank }.take(4).forEach { c ->
+-            for (dy in -2..2) {
+-                for (dx in -2..2) {
++        val refined = ArrayList<Candidate>(12)
++        coarse.sortedByDescending { it.rank }.take(2).forEach { c ->
++            for (dy in -1..1) {
++                for (dx in -1..1) {
+                     val x = c.cx + dx
+                     val y = c.cy + dy
+                     if (!fits(frame, template, x, y, c.scale)) continue
+                     val n = ncc01(frame, template, x, y, c.scale)
+                     val mdx = (x - predictedX).toFloat() / max(8f, radiusX.toFloat())
+                     val mdy = (y - predictedY).toFloat() / max(8f, radiusY.toFloat())
+-                    val motion = (1f - min(1f, sqrt(mdx * mdx + mdy * mdy))).coerceIn(0f, 1f)
++                    val d2 = mdx * mdx + mdy * mdy
++                    val motion = (1f - min(1f, d2)).coerceIn(0f, 1f)
+                     val rank = n * (1f - motionWeight) + motion * motionWeight
+-                    addTop(refined, Candidate(x, y, c.scale, n, rank, template), 22)
++                    addTop(refined, Candidate(x, y, c.scale, n, rank, template), 12)
+                 }
+             }
+         }
+-        coarse.forEach { addTop(refined, it, 22) }
++        coarse.forEach { addTop(refined, it, 12) }
+ 
+         val sorted = refined.sortedByDescending { it.rank }
+         val best = sorted.firstOrNull() ?: return null
+ 
+-        val exclusion = max(
+-            9f,
+-            sqrt(
+-                (template.widthNorm * frame.width) * (template.widthNorm * frame.width) +
+-                    (template.heightNorm * frame.height) * (template.heightNorm * frame.height)
+-            ) * 0.42f
+-        )
++        val boxW = template.widthNorm * frame.width
++        val boxH = template.heightNorm * frame.height
++        val exclusion = max(8f, sqrt(boxW * boxW + boxH * boxH) * 0.42f)
++        val exclusionSq = exclusion * exclusion
+ 
+         val second = sorted.drop(1).firstOrNull { c ->
+             val dx = (c.cx - best.cx).toFloat()
+             val dy = (c.cy - best.cy).toFloat()
+-            sqrt(dx * dx + dy * dy) >= exclusion || abs(c.scale - best.scale) >= 0.14f
++            (dx * dx + dy * dy) >= exclusionSq || abs(c.scale - best.scale) >= 0.14f
+         }
+ 
+         val uniq = if (second == null) {
+@@ -533,8 +532,8 @@
+         ) return null
+ 
+         // Fixed-size sparse grid keeps NCC cost predictable.
+-        val gridX = 13
+-        val gridY = 13
++        val gridX = 9
++        val gridY = 9
+         val ox = IntArray(gridX * gridY)
+         val oy = IntArray(gridX * gridY)
+         val values = FloatArray(gridX * gridY)
+@@ -587,14 +586,26 @@
+         var sumSq = 0f
+         var dot = 0f
+ 
+-        for (i in 0 until n) {
+-            val x = cx + (t.offsetsX[i] * scale).roundToInt()
+-            val y = cy + (t.offsetsY[i] * scale).roundToInt()
+-            if (x !in 0 until frame.width || y !in 0 until frame.height) return -1f
+-            val v = grayAt(frame, x, y).toFloat()
+-            sum += v
+-            sumSq += v * v
+-            dot += v * t.centered[i]
++        if (abs(scale - 1f) <= 0.012f) {
++            for (i in 0 until n) {
++                val x = cx + t.offsetsX[i]
++                val y = cy + t.offsetsY[i]
++                if (x !in 0 until frame.width || y !in 0 until frame.height) return -1f
++                val v = grayAt(frame, x, y).toFloat()
++                sum += v
++                sumSq += v * v
++                dot += v * t.centered[i]
++            }
++        } else {
++            for (i in 0 until n) {
++                val x = cx + (t.offsetsX[i] * scale).roundToInt()
++                val y = cy + (t.offsetsY[i] * scale).roundToInt()
++                if (x !in 0 until frame.width || y !in 0 until frame.height) return -1f
++                val v = grayAt(frame, x, y).toFloat()
++                sum += v
++                sumSq += v * v
++                dot += v * t.centered[i]
++            }
+         }
+ 
+         val variance = sumSq - (sum * sum / n)
+@@ -615,6 +626,20 @@
+ 
+     private data class Gray(val pixels: ByteArray, val width: Int, val height: Int)
+ 
++    private data class LumaMapKey(
++        val srcW: Int,
++        val srcH: Int,
++        val rowStride: Int,
++        val pixelStride: Int,
++        val rotation: Int,
++        val outW: Int,
++        val outH: Int
++    )
++
++    private var lumaMapKey: LumaMapKey? = null
++    private var lumaIndexMap: IntArray = IntArray(0)
++    private var lumaScratch: ByteArray = ByteArray(0)
++
+     private fun extractOrientedLumaFast(image: ImageProxy, targetWidth: Int): Gray {
+         val srcW = image.width
+         val srcH = image.height
+@@ -624,43 +649,54 @@
+ 
+         val outW = min(targetWidth, orientedW).coerceAtLeast(1)
+         val outH = max(1, (orientedH.toFloat() * outW / orientedW.coerceAtLeast(1)).roundToInt())
+-        val out = ByteArray(outW * outH)
+ 
+         val plane = image.planes[0]
+         val buffer = plane.buffer.duplicate()
+         val rowStride = plane.rowStride
+         val pixelStride = plane.pixelStride
+ 
+-        var o = 0
+-        for (y in 0 until outH) {
+-            val oy = ((y + 0.5f) * orientedH / outH).toInt().coerceIn(0, orientedH - 1)
+-            for (x in 0 until outW) {
+-                val ox = ((x + 0.5f) * orientedW / outW).toInt().coerceIn(0, orientedW - 1)
+-
+-                val sx: Int
+-                val sy: Int
+-                when (rotation) {
+-                    90 -> {
+-                        sx = oy
+-                        sy = srcH - 1 - ox
+-                    }
+-                    180 -> {
+-                        sx = srcW - 1 - ox
+-                        sy = srcH - 1 - oy
+-                    }
+-                    270 -> {
+-                        sx = srcW - 1 - oy
+-                        sy = ox
+-                    }
+-                    else -> {
+-                        sx = ox
+-                        sy = oy
++        val key = LumaMapKey(srcW, srcH, rowStride, pixelStride, rotation, outW, outH)
++        if (lumaMapKey != key || lumaIndexMap.size != outW * outH) {
++            val map = IntArray(outW * outH)
++            var o = 0
++            for (y in 0 until outH) {
++                val oy = ((y + 0.5f) * orientedH / outH).toInt().coerceIn(0, orientedH - 1)
++                for (x in 0 until outW) {
++                    val ox = ((x + 0.5f) * orientedW / outW).toInt().coerceIn(0, orientedW - 1)
++
++                    val sx: Int
++                    val sy: Int
++                    when (rotation) {
++                        90 -> {
++                            sx = oy
++                            sy = srcH - 1 - ox
++                        }
++                        180 -> {
++                            sx = srcW - 1 - ox
++                            sy = srcH - 1 - oy
++                        }
++                        270 -> {
++                            sx = srcW - 1 - oy
++                            sy = ox
++                        }
++                        else -> {
++                            sx = ox
++                            sy = oy
++                        }
+                     }
++                    map[o++] = sy * rowStride + sx * pixelStride
+                 }
+-
+-                val index = sy * rowStride + sx * pixelStride
+-                out[o++] = if (index >= 0 && index < buffer.limit()) buffer.get(index) else 0
+             }
++            lumaIndexMap = map
++            lumaScratch = ByteArray(map.size)
++            lumaMapKey = key
++        }
++
++        val limit = buffer.limit()
++        val out = lumaScratch
++        for (i in lumaIndexMap.indices) {
++            val sourceIndex = lumaIndexMap[i]
++            out[i] = if (sourceIndex in 0 until limit) buffer.get(sourceIndex) else 0
+         }
+ 
+         return Gray(out, outW, outH)
+--- a/app/src/main/java/com/tsss/gt6optical/MainActivity.kt
++++ b/app/src/main/java/com/tsss/gt6optical/MainActivity.kt
+@@ -534,8 +534,18 @@
+                 it.setSurfaceProvider(binding.preview.surfaceProvider)
+             }
+ 
++            val analysisResolutionSelector = ResolutionSelector.Builder()
++                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
++                .setResolutionStrategy(
++                    ResolutionStrategy(
++                        Size(640, 360),
++                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
++                    )
++                )
++                .build()
++
+             val analysisBuilder = ImageAnalysis.Builder()
+-                .setResolutionSelector(resolutionSelector)
++                .setResolutionSelector(analysisResolutionSelector)
+                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+ 
+             Camera2Interop.Extender(analysisBuilder).apply {
