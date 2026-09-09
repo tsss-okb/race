@@ -1,4 +1,4 @@
-name: GT6 Optical Lens Test APK
+name: GT6 Optical + Tracker v2.3 APK
 
 on:
   push:
@@ -23,18 +23,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Unpack GT6 project
+      - name: Unpack GT6 v2.3
         run: |
-          rm -rf /tmp/gt6-src
-          mkdir -p /tmp/gt6-src
-          unzip -q gt6-optical/GT6OpticalLensTest-v2.1-WORKING-SOURCE.zip -d /tmp/gt6-src
-          find /tmp/gt6-src -maxdepth 3 -type f | sort
+          rm -rf /tmp/gt6-v23
+          mkdir -p /tmp/gt6-v23
+          unzip -q gt6-optical/GT6OpticalLensTest-v2.3-TRACKER-SOURCE.zip -d /tmp/gt6-v23
+          test -f /tmp/gt6-v23/GT6OpticalLensTest/app/src/main/jniLibs/arm64-v8a/libgt6lock.so
       - name: Build debug APK
-        working-directory: /tmp/gt6-src/GT6OpticalLensTest
+        working-directory: /tmp/gt6-v23/GT6OpticalLensTest
         run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6OpticalLensTest-v2.1-debug
-          path: /tmp/gt6-src/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          name: GT6OpticalLensTest-v2.3-TRACKER-debug
+          path: /tmp/gt6-v23/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
