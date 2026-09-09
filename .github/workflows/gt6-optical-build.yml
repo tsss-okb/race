@@ -27,7 +27,22 @@ jobs:
         run: |
           rm -rf /tmp/gt6-v23
           mkdir -p /tmp/gt6-v23
-          cat gt6-optical/v23chunks/chunk-* | base64 -d > /tmp/GT6-v2.3.zip
+          cat \
+            gt6-optical/v23chunks/chunk-000 \
+            gt6-optical/v23chunks/fix-001-0 \
+            gt6-optical/v23chunks/fix-001-1 \
+            gt6-optical/v23chunks/fix-001-2 \
+            gt6-optical/v23chunks/fix-001-3 \
+            gt6-optical/v23chunks/chunk-002 \
+            gt6-optical/v23chunks/chunk-003 \
+            gt6-optical/v23chunks/chunk-004 \
+            gt6-optical/v23chunks/fix-005-0 \
+            gt6-optical/v23chunks/fix-005-1 \
+            gt6-optical/v23chunks/fix-005-2 \
+            gt6-optical/v23chunks/fix-005-3 \
+            gt6-optical/v23chunks/chunk-006 \
+            gt6-optical/v23chunks/chunk-007 \
+            | base64 -d > /tmp/GT6-v2.3.zip
           unzip -t /tmp/GT6-v2.3.zip
           unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v23
           test -f /tmp/gt6-v23/GT6OpticalLensTest/app/src/main/jniLibs/arm64-v8a/libgt6lock.so
