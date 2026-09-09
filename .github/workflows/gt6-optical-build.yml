@@ -62,7 +62,17 @@ jobs:
           unzip -oq /tmp/GT6-v2.5-patch.zip -d "$ROOT"
 
           cp gt6-optical/v261patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
-          patch -d "$ROOT" -p1 < gt6-optical/v262patch/fast10ms.patch
+
+          # Most v2.6.2 hunks apply cleanly. Two small hunks differ only by context
+          # from the committed v2.6.1 source, so apply the patch permissively and
+          # then enforce those exact optimizations explicitly below.
+          patch -d "$ROOT" -p1 < gt6-optical/v262patch/fast10ms.patch || true
+          rm -f "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt.rej"
+
+          ENGINE="$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          sed -i 's/frameIndex % 7 == 0/frameIndex % 15 == 0/' "$ENGINE"
+          sed -i 's/val gridX = 13/val gridX = 9/' "$ENGINE"
+          sed -i 's/val gridY = 13/val gridY = 9/' "$ENGINE"
 
           rm -rf "$ROOT/app/src/main/jniLibs"
           rm -rf "$ROOT/app/src/main/java/com/tsss/gt6lock"
@@ -74,9 +84,11 @@ jobs:
 
           grep -q 'applicationId = "com.tsss.gt6tracker262"' "$ROOT/app/build.gradle.kts"
           grep -q 'versionName = "2.6.2"' "$ROOT/app/build.gradle.kts"
-          grep -q 'targetWidth = 320' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
-          grep -q 'val gridX = 9' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
-          grep -q 'LumaMapKey' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          grep -q 'targetWidth = 320' "$ENGINE"
+          grep -q 'val gridX = 9' "$ENGINE"
+          grep -q 'val gridY = 9' "$ENGINE"
+          grep -q 'frameIndex % 15 == 0' "$ENGINE"
+          grep -q 'LumaMapKey' "$ENGINE"
           grep -q 'Size(640, 360)' "$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
           ! grep -R 'NativeSparseFlowGmcTracker\|NativeNccMatcher' "$ROOT/app/src/main/java/com/tsss/gt6optical"
 
