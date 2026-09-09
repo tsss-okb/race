@@ -13,6 +13,7 @@ jobs:
           cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" /tmp/apksigner-tools/
           cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/lib/apksigner.jar" /tmp/apksigner-tools/lib/
           cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" /tmp/apksigner-tools/
+          find "$ANDROID_SDK_ROOT/build-tools/35.0.0" -name 'libc++.so' -type f -print -exec cp {} /tmp/apksigner-tools/ \;
       - uses: actions/upload-artifact@v4
         with:
           name: android-signing-tools-35
