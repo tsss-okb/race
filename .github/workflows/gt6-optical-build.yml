@@ -1,4 +1,4 @@
-name: GT6 Optical + Tracker v2.5 HUD ZOOM APK
+name: GT6 Optical + Tracker v2.6 UNIQUE APK
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -24,11 +24,11 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Reconstruct v2.4 PURE NCC and apply v2.5 HUD/ZOOM
+      - name: Reconstruct v2.5 HUD and apply v2.6 UNIQUE tracker
         run: |
           set -euxo pipefail
-          rm -rf /tmp/gt6-v25
-          mkdir -p /tmp/gt6-v25
+          rm -rf /tmp/gt6-v26
+          mkdir -p /tmp/gt6-v26
           cat \
             gt6-optical/v23chunks/chunk-000 \
             gt6-optical/v23chunks/fix-001-0 \
@@ -46,15 +46,16 @@ jobs:
             gt6-optical/v23chunks/chunk-007 \
             | base64 -d > /tmp/GT6-v2.3.zip
           unzip -t /tmp/GT6-v2.3.zip
-          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v25
+          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v26
 
-          ROOT=/tmp/gt6-v25/GT6OpticalLensTest
+          ROOT=/tmp/gt6-v26/GT6OpticalLensTest
 
-          # Keep the already tested pure Kotlin NCC engine from v2.4.
+          # Start from the tested pure Kotlin tracker line and keep native FLOW out.
           cp gt6-optical/v24patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
           rm -rf "$ROOT/app/src/main/jniLibs"
           rm -rf "$ROOT/app/src/main/java/com/tsss/gt6lock"
 
+          # Apply the v2.5 HUD/zoom package that was tested on the phone.
           cat \
             gt6-optical/v25chunks/chunk-000 \
             gt6-optical/v25chunks/chunk-001 \
@@ -64,35 +65,42 @@ jobs:
           unzip -t /tmp/GT6-v2.5-patch.zip
           unzip -oq /tmp/GT6-v2.5-patch.zip -d "$ROOT"
 
-          sed -i 's/applicationId = "com.tsss.gt6optical"/applicationId = "com.tsss.gt6tracker25"/' "$ROOT/app/build.gradle.kts"
-          sed -i 's/versionCode = 5/versionCode = 25/' "$ROOT/app/build.gradle.kts"
-          sed -i 's/versionName = "2.3"/versionName = "2.5"/' "$ROOT/app/build.gradle.kts"
+          # Replace only the tracker core with v2.6 UNIQUE.
+          cp gt6-optical/v26patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          rm -rf "$ROOT/app/src/main/jniLibs"
+          rm -rf "$ROOT/app/src/main/java/com/tsss/gt6lock"
 
-          grep -q 'applicationId = "com.tsss.gt6tracker25"' "$ROOT/app/build.gradle.kts"
-          grep -q 'versionName = "2.5"' "$ROOT/app/build.gradle.kts"
-          grep -q 'btnZoom10' "$ROOT/app/src/main/res/layout/activity_main.xml"
-          grep -q 'onZoomScale' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerOverlayView.kt"
-          grep -q 'KEYCODE_VOLUME_UP' "$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
-          ! grep -R 'NativeSparseFlowGmcTracker' "$ROOT/app/src/main/java/com/tsss/gt6optical"
+          sed -i -E 's/applicationId = "com\.tsss\.gt6(optical|tracker25)"/applicationId = "com.tsss.gt6tracker26"/' "$ROOT/app/build.gradle.kts"
+          sed -i -E 's/versionCode = (5|25)/versionCode = 26/' "$ROOT/app/build.gradle.kts"
+          sed -i -E 's/versionName = "(2\.3|2\.5)"/versionName = "2.6"/' "$ROOT/app/build.gradle.kts"
+          sed -i 's/OPTICAL HUD · v2.5/UNIQUE HUD · v2.6/' "$ROOT/app/src/main/res/layout/activity_main.xml"
+
+          grep -q 'applicationId = "com.tsss.gt6tracker26"' "$ROOT/app/build.gradle.kts"
+          grep -q 'versionName = "2.6"' "$ROOT/app/build.gradle.kts"
+          grep -q 'computeSpatialUniqueness' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          grep -q 'colorHistogram' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          grep -q 'edgeSimilarity' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          grep -q 'adaptiveBank' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          ! grep -R 'NativeSparseFlowGmcTracker\|NativeNccMatcher' "$ROOT/app/src/main/java/com/tsss/gt6optical"
 
       - name: Build debug APK
-        working-directory: /tmp/gt6-v25/GT6OpticalLensTest
+        working-directory: /tmp/gt6-v26/GT6OpticalLensTest
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK signature and alignment
         run: |
-          APK=/tmp/gt6-v25/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          APK=/tmp/gt6-v26/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
           unzip -l "$APK" | grep -q 'classes.dex'
           if unzip -l "$APK" | grep -q 'libgt6lock.so'; then
-            echo 'Unexpected native tracker in v2.5'
+            echo 'Unexpected native tracker in v2.6'
             exit 1
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6OpticalTracker-v2.5-HUD-ZOOM-debug
-          path: /tmp/gt6-v25/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          name: GT6OpticalTracker-v2.6-UNIQUE-debug
+          path: /tmp/gt6-v26/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
