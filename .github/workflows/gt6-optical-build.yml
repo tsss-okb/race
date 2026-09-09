@@ -1,4 +1,4 @@
-name: GT6 Optical + Tracker v2.3 APK
+name: GT6 Optical + Tracker v2.4 APK
 
 on:
   push:
@@ -23,10 +23,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Reconstruct GT6 v2.3 source
+
+      - name: Reconstruct v2.3 base and apply pure NCC v2.4
         run: |
-          rm -rf /tmp/gt6-v23
-          mkdir -p /tmp/gt6-v23
+          set -euxo pipefail
+          rm -rf /tmp/gt6-v24
+          mkdir -p /tmp/gt6-v24
           cat \
             gt6-optical/v23chunks/chunk-000 \
             gt6-optical/v23chunks/fix-001-0 \
@@ -44,14 +46,44 @@ jobs:
             gt6-optical/v23chunks/chunk-007 \
             | base64 -d > /tmp/GT6-v2.3.zip
           unzip -t /tmp/GT6-v2.3.zip
-          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v23
-          test -f /tmp/gt6-v23/GT6OpticalLensTest/app/src/main/jniLibs/arm64-v8a/libgt6lock.so
+          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v24
+
+          ROOT=/tmp/gt6-v24/GT6OpticalLensTest
+          cp gt6-optical/v24patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          cp gt6-optical/v24patch/TrackerOverlayView.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerOverlayView.kt"
+
+          # v2.4 intentionally has no native tracker dependency.
+          rm -rf "$ROOT/app/src/main/jniLibs"
+          rm -rf "$ROOT/app/src/main/java/com/tsss/gt6lock"
+
+          sed -i 's/applicationId = "com.tsss.gt6optical"/applicationId = "com.tsss.gt6tracker24"/' "$ROOT/app/build.gradle.kts"
+          sed -i 's/versionCode = 5/versionCode = 24/' "$ROOT/app/build.gradle.kts"
+          sed -i 's/versionName = "2.3"/versionName = "2.4"/' "$ROOT/app/build.gradle.kts"
+          sed -i 's/GT6 OPTICAL + TRACKER v2.3/GT6 OPTICAL + TRACKER v2.4 NCC/' "$ROOT/app/src/main/res/layout/activity_main.xml"
+
+          grep -q 'applicationId = "com.tsss.gt6tracker24"' "$ROOT/app/build.gradle.kts"
+          grep -q 'versionName = "2.4"' "$ROOT/app/build.gradle.kts"
+          grep -q 'class TrackerEngine' "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
+          ! grep -R 'NativeSparseFlowGmcTracker' "$ROOT/app/src/main/java/com/tsss/gt6optical"
+
       - name: Build debug APK
-        working-directory: /tmp/gt6-v23/GT6OpticalLensTest
+        working-directory: /tmp/gt6-v24/GT6OpticalLensTest
         run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify APK signature and alignment
+        run: |
+          APK=/tmp/gt6-v24/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
+          unzip -l "$APK" | grep -q 'classes.dex'
+          if unzip -l "$APK" | grep -q 'libgt6lock.so'; then
+            echo 'Unexpected native tracker in v2.4'
+            exit 1
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6OpticalLensTest-v2.3-TRACKER-debug
-          path: /tmp/gt6-v23/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          name: GT6OpticalTracker-v2.4-PURE-NCC-debug
+          path: /tmp/gt6-v24/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
