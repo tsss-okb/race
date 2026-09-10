@@ -90,8 +90,7 @@ accept_re = re.compile(r"""    private fun accept\(
 .*?
     \}
 
-    // -------------------------------------------------------------------------
-    // Search""", re.S)
+    private data class Candidate\(""", re.S)
 m = accept_re.search(s)
 if not m:
     raise SystemExit("v2.6.4 accept block missing")
@@ -149,8 +148,7 @@ s = s[:m.start()] + """    private fun accept(
         return true
     }
 
-    // -------------------------------------------------------------------------
-    // Search""" + s[m.end():]
+    private data class Candidate(""" + s[m.end():]
 
 marker = "    private data class Template(\n"
 idx = s.find(marker)
