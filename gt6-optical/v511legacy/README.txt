@@ -1,0 +1,1 @@
+GT6 legacy 5.11 core build inputs. classes3 chunks are base64 of the exact classes3.dex extracted byte-for-byte from GT6-Target-Lock-v5.11i-OPTICAL-LENS-TEST.apk. TrackerEngine bridge loads the legacy tracker classes without reimplementing SmartVisualTracker/TargetMotionTracker/NativeRescueEngine.
