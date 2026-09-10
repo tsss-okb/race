@@ -64,13 +64,17 @@ jobs:
           cp gt6-optical/v263patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
           cp gt6-optical/v263patch/MainActivity.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
 
+          MAIN="$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
+          sed -i 's/import androidx.camera.core.AspectRatioStrategy/import androidx.camera.core.resolutionselector.AspectRatioStrategy/' "$MAIN"
+          sed -i 's/import androidx.camera.core.ResolutionSelector/import androidx.camera.core.resolutionselector.ResolutionSelector/' "$MAIN"
+          sed -i 's/import androidx.camera.core.ResolutionStrategy/import androidx.camera.core.resolutionselector.ResolutionStrategy/' "$MAIN"
+
           sed -i -E 's/applicationId = "[^"]+"/applicationId = "com.tsss.gt6tracker263"/' "$ROOT/app/build.gradle.kts"
           sed -i -E 's/versionCode = [0-9]+/versionCode = 263/' "$ROOT/app/build.gradle.kts"
           sed -i -E 's/versionName = "[^"]+"/versionName = "2.6.3"/' "$ROOT/app/build.gradle.kts"
           sed -i 's/OPTICAL HUD · v2.5/STABLE 60 · v2.6.3/' "$ROOT/app/src/main/res/layout/activity_main.xml"
 
           ENGINE="$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
-          MAIN="$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
 
           grep -q 'applicationId = "com.tsss.gt6tracker263"' "$ROOT/app/build.gradle.kts"
           grep -q 'versionName = "2.6.3"' "$ROOT/app/build.gradle.kts"
@@ -81,6 +85,7 @@ jobs:
           grep -q 'framesSinceRefresh >= 90' "$ENGINE"
           grep -q 'requestedFpsRange = startupRecord?.let { selectFpsRange(it, 60) }' "$MAIN"
           grep -q 'Size(640, 360)' "$MAIN"
+          grep -q 'androidx.camera.core.resolutionselector.ResolutionSelector' "$MAIN"
           ! grep -R 'NativeSparseFlowGmcTracker\|NativeNccMatcher' "$ROOT/app/src/main/java/com/tsss/gt6optical"
 
       - name: Build debug APK
