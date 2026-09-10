@@ -1,4 +1,4 @@
-name: GT6 Optical + Tracker v2.6.3 STABLE 60 APK
+name: GT6 Optical + Tracker v2.6.4 GEOMETRIC LOCK APK
 
 on:
   push:
@@ -24,11 +24,11 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Reconstruct v2.5 HUD and apply v2.6.3 STABLE 60
+      - name: Reconstruct v2.5 HUD and apply v2.6.4 GEOMETRIC LOCK
         run: |
           set -euxo pipefail
-          rm -rf /tmp/gt6-v263
-          mkdir -p /tmp/gt6-v263
+          rm -rf /tmp/gt6-v264
+          mkdir -p /tmp/gt6-v264
           cat \
             gt6-optical/v23chunks/chunk-000 \
             gt6-optical/v23chunks/fix-001-0 \
@@ -46,9 +46,9 @@ jobs:
             gt6-optical/v23chunks/chunk-007 \
             | base64 -d > /tmp/GT6-v2.3.zip
           unzip -t /tmp/GT6-v2.3.zip
-          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v263
+          unzip -q /tmp/GT6-v2.3.zip -d /tmp/gt6-v264
 
-          ROOT=/tmp/gt6-v263/GT6OpticalLensTest
+          ROOT=/tmp/gt6-v264/GT6OpticalLensTest
           rm -rf "$ROOT/app/src/main/jniLibs"
           rm -rf "$ROOT/app/src/main/java/com/tsss/gt6lock"
 
@@ -64,48 +64,49 @@ jobs:
           cp gt6-optical/v263patch/TrackerEngine.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
           cp gt6-optical/v263patch/MainActivity.kt "$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
 
+          ENGINE="$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
           MAIN="$ROOT/app/src/main/java/com/tsss/gt6optical/MainActivity.kt"
+          python3 gt6-optical/v264patch/apply_v264.py "$ENGINE"
+
           sed -i 's/import androidx.camera.core.AspectRatioStrategy/import androidx.camera.core.resolutionselector.AspectRatioStrategy/' "$MAIN"
           sed -i 's/import androidx.camera.core.ResolutionSelector/import androidx.camera.core.resolutionselector.ResolutionSelector/' "$MAIN"
           sed -i 's/import androidx.camera.core.ResolutionStrategy/import androidx.camera.core.resolutionselector.ResolutionStrategy/' "$MAIN"
 
-          sed -i -E 's/applicationId = "[^"]+"/applicationId = "com.tsss.gt6tracker263"/' "$ROOT/app/build.gradle.kts"
-          sed -i -E 's/versionCode = [0-9]+/versionCode = 263/' "$ROOT/app/build.gradle.kts"
-          sed -i -E 's/versionName = "[^"]+"/versionName = "2.6.3"/' "$ROOT/app/build.gradle.kts"
-          sed -i 's/OPTICAL HUD · v2.5/STABLE 60 · v2.6.3/' "$ROOT/app/src/main/res/layout/activity_main.xml"
+          sed -i -E 's/applicationId = "[^"]+"/applicationId = "com.tsss.gt6tracker264"/' "$ROOT/app/build.gradle.kts"
+          sed -i -E 's/versionCode = [0-9]+/versionCode = 264/' "$ROOT/app/build.gradle.kts"
+          sed -i -E 's/versionName = "[^"]+"/versionName = "2.6.4"/' "$ROOT/app/build.gradle.kts"
+          sed -i 's/OPTICAL HUD · v2.5/GEOMETRIC LOCK · v2.6.4/' "$ROOT/app/src/main/res/layout/activity_main.xml"
 
-          ENGINE="$ROOT/app/src/main/java/com/tsss/gt6optical/TrackerEngine.kt"
-
-          grep -q 'applicationId = "com.tsss.gt6tracker263"' "$ROOT/app/build.gradle.kts"
-          grep -q 'versionName = "2.6.3"' "$ROOT/app/build.gradle.kts"
+          grep -q 'applicationId = "com.tsss.gt6tracker264"' "$ROOT/app/build.gradle.kts"
+          grep -q 'versionName = "2.6.4"' "$ROOT/app/build.gradle.kts"
+          grep -q 'v2.6.4 — GEOMETRIC LOCK' "$ENGINE"
+          grep -q 'supportAnchors' "$ENGINE"
+          grep -q 'val boxW = 0.090f' "$ENGINE"
+          grep -q 'val gridX = 11' "$ENGINE"
           grep -q 'targetWidth = 320' "$ENGINE"
-          grep -q 'contextAnchor' "$ENGINE"
-          grep -q 'motionPxX' "$ENGINE"
-          grep -q 'Immediate wider rescue' "$ENGINE"
-          grep -q 'framesSinceRefresh >= 90' "$ENGINE"
           grep -q 'requestedFpsRange = startupRecord?.let { selectFpsRange(it, 60) }' "$MAIN"
           grep -q 'Size(640, 360)' "$MAIN"
           grep -q 'androidx.camera.core.resolutionselector.ResolutionSelector' "$MAIN"
           ! grep -R 'NativeSparseFlowGmcTracker\|NativeNccMatcher' "$ROOT/app/src/main/java/com/tsss/gt6optical"
 
       - name: Build debug APK
-        working-directory: /tmp/gt6-v263/GT6OpticalLensTest
+        working-directory: /tmp/gt6-v264/GT6OpticalLensTest
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK signature and alignment
         run: |
-          APK=/tmp/gt6-v263/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          APK=/tmp/gt6-v264/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
           unzip -l "$APK" | grep -q 'classes.dex'
           if unzip -l "$APK" | grep -q 'libgt6lock.so'; then
-            echo 'Unexpected native tracker in v2.6.3'
+            echo 'Unexpected native tracker in v2.6.4'
             exit 1
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6OpticalTracker-v2.6.3-STABLE-60-debug
-          path: /tmp/gt6-v263/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
+          name: GT6OpticalTracker-v2.6.4-GEOMETRIC-LOCK-debug
+          path: /tmp/gt6-v264/GT6OpticalLensTest/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
