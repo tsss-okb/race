@@ -1,4 +1,4 @@
-name: GT6 DroidDrone baseline APKs
+name: GT6 DroidDrone legacy511 integration
 
 on:
   push:
@@ -24,6 +24,21 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653" "cmake;3.22.1"
 
+      - name: Reconstruct and inspect exact GT6 5.11 legacy bundle
+        run: |
+          set -euxo pipefail
+          cat gt6-optical/v511legacy/bundle/chunk-* | base64 -d > /tmp/legacy511.zip
+          sha256sum /tmp/legacy511.zip
+          echo "===== LEGACY BUNDLE CONTENTS ====="
+          unzip -l /tmp/legacy511.zip
+          rm -rf /tmp/legacy511
+          mkdir -p /tmp/legacy511
+          unzip -q /tmp/legacy511.zip -d /tmp/legacy511
+          echo "===== EXTRACTED FILES ====="
+          find /tmp/legacy511 -type f -maxdepth 10 -print | sort
+          echo "===== DEX / NATIVE HASHES ====="
+          find /tmp/legacy511 -type f \( -name '*.dex' -o -name '*.so' \) -print0 | xargs -0 -r sha256sum
+
       - name: Checkout DroidDrone upstream
         run: |
           set -euxo pipefail
@@ -33,32 +48,22 @@ jobs:
           printf 'MAPS_API_KEY="DUMMY"\n' > local.defaults.properties
           chmod +x gradlew
 
-      - name: Build Flight and Control debug APKs
+      - name: Build Flight baseline debug APK
         working-directory: /tmp/DroidDrone
-        run: ./gradlew --no-daemon --stacktrace :Flight:assembleDebug :Control:assembleDebug
+        run: ./gradlew --no-daemon --stacktrace :Flight:assembleDebug
 
-      - name: Verify APKs
+      - name: Verify Flight APK
         run: |
           set -euxo pipefail
-          FLIGHT=/tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
-          CONTROL=/tmp/DroidDrone/Control/build/outputs/apk/debug/Control-debug.apk
-          for APK in "$FLIGHT" "$CONTROL"; do
-            test -f "$APK"
-            "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK"
-            "$ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign" -c -v 4 "$APK"
-            unzip -l "$APK" | grep -q 'classes.dex'
-          done
+          APK=/tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
+          test -f "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign" -c -v 4 "$APK"
+          unzip -l "$APK" | grep -q 'classes.dex'
 
       - name: Upload Flight APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6-DroidDrone-Flight-BASELINE-debug
+          name: GT6-DroidDrone-Flight-LEGACY511-DIAG-debug
           path: /tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
-          if-no-files-found: error
-
-      - name: Upload Control APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: GT6-DroidDrone-Control-BASELINE-debug
-          path: /tmp/DroidDrone/Control/build/outputs/apk/debug/Control-debug.apk
           if-no-files-found: error
