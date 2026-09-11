@@ -30,7 +30,7 @@ jobs:
           git clone --recursive --depth 1 https://github.com/IvanSchulz/DroidDrone.git /tmp/DroidDrone
           cd /tmp/DroidDrone
           git submodule update --init --recursive
-          printf 'MAPS_API_KEY=\n' > local.defaults.properties
+          printf 'MAPS_API_KEY="DUMMY"\n' > local.defaults.properties
           chmod +x gradlew
 
       - name: Build Flight and Control debug APKs
