@@ -1,4 +1,4 @@
-name: GT6 DroidDrone Flight baseline
+name: GT6 DroidDrone baseline APKs
 
 on:
   push:
@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-flight:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -33,22 +33,32 @@ jobs:
           printf 'MAPS_API_KEY=\n' > local.defaults.properties
           chmod +x gradlew
 
-      - name: Build Flight debug APK
+      - name: Build Flight and Control debug APKs
         working-directory: /tmp/DroidDrone
-        run: ./gradlew --no-daemon --stacktrace :Flight:assembleDebug
+        run: ./gradlew --no-daemon --stacktrace :Flight:assembleDebug :Control:assembleDebug
 
-      - name: Verify APK
+      - name: Verify APKs
         run: |
           set -euxo pipefail
-          APK=/tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
-          test -f "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign" -c -v 4 "$APK"
-          unzip -l "$APK" | grep -q 'classes.dex'
+          FLIGHT=/tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
+          CONTROL=/tmp/DroidDrone/Control/build/outputs/apk/debug/Control-debug.apk
+          for APK in "$FLIGHT" "$CONTROL"; do
+            test -f "$APK"
+            "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+            "$ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign" -c -v 4 "$APK"
+            unzip -l "$APK" | grep -q 'classes.dex'
+          done
 
       - name: Upload Flight APK
         uses: actions/upload-artifact@v4
         with:
           name: GT6-DroidDrone-Flight-BASELINE-debug
           path: /tmp/DroidDrone/Flight/build/outputs/apk/debug/Flight-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Control APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GT6-DroidDrone-Control-BASELINE-debug
+          path: /tmp/DroidDrone/Control/build/outputs/apk/debug/Control-debug.apk
           if-no-files-found: error
