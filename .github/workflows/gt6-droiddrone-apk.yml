@@ -42,6 +42,7 @@ jobs:
       - name: Apply GT6 v4 patch
         run: |
           python3 .gt6build/v4/apply_v4_patch.py DroidDrone
+          python3 .gt6build/v4/fix_compile.py DroidDrone
           grep -n "applicationId\|versionName\|versionCode\|useLegacyPackaging" DroidDrone/Flight/build.gradle
           ! grep -R "xmaihh\|SerialHelper" DroidDrone/Flight/src/main/java/de/droiddrone/flight/Serial.java
 
