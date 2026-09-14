@@ -102,6 +102,35 @@ jobs:
           sha256sum "$APK" | tee out/SHA256.txt
           echo "GT6_V4_VERIFY_OK" | tee out/VERIFY_OK.txt
 
+      - name: Android 16 launch smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            APK="$GITHUB_WORKSPACE/out/GT6-DroidDrone-Flight-v4-ROBUST-debug.apk"
+            adb install -r "$APK"
+            adb shell pm grant de.droiddrone.flight.gt6v4 android.permission.CAMERA
+            adb shell pm grant de.droiddrone.flight.gt6v4 android.permission.RECORD_AUDIO
+            adb logcat -c
+            adb shell am force-stop de.droiddrone.flight.gt6v4
+            adb shell am start -W -n de.droiddrone.flight.gt6v4/de.droiddrone.flight.MainActivity | tee "$GITHUB_WORKSPACE/out/SMOKE_ACTIVITY.txt"
+            sleep 3
+            test -n "$(adb shell pidof de.droiddrone.flight.gt6v4 | tr -d '\r')"
+            adb shell am start-foreground-service -n de.droiddrone.flight.gt6v4/de.droiddrone.flight.DDService | tee "$GITHUB_WORKSPACE/out/SMOKE_SERVICE.txt"
+            sleep 5
+            adb shell dumpsys activity services de.droiddrone.flight.gt6v4 > "$GITHUB_WORKSPACE/out/SMOKE_SERVICES.txt" || true
+            adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/out/SMOKE_LOGCAT.txt"
+            if grep -E "FATAL EXCEPTION|Process: de\.droiddrone\.flight\.gt6v4" "$GITHUB_WORKSPACE/out/SMOKE_LOGCAT.txt"; then
+              echo "GT6_V4_SMOKE_FATAL" | tee "$GITHUB_WORKSPACE/out/SMOKE_RESULT.txt"
+              exit 1
+            fi
+            test -n "$(adb shell pidof de.droiddrone.flight.gt6v4 | tr -d '\r')"
+            echo "GT6_V4_ANDROID16_SMOKE_OK" | tee "$GITHUB_WORKSPACE/out/SMOKE_RESULT.txt"
+
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
