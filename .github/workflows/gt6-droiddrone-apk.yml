@@ -1,9 +1,9 @@
-name: GT6 DroidDrone Tracker APK v3
+name: GT6 DroidDrone v4 Robust APK
 
 on:
   push:
     branches:
-      - gt6-droiddrone-apk-v3
+      - gt6-droiddrone-apk-v4
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -26,27 +26,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Ensure Android SDK 34
+      - name: Ensure Android SDK and NDK
         run: |
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
           sdkmanager --version
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" "ndk;26.3.11579264"
 
-      - name: Clone DroidDrone v2.3.0
+      - name: Clone clean DroidDrone v2.3.0
         run: |
           git clone --branch v2.3.0 --depth 1 --recurse-submodules https://github.com/DroidDrone/DroidDrone.git DroidDrone
           cd DroidDrone
           git submodule update --init --recursive
 
-      - name: Apply tracker v2 base patch
+      - name: Apply GT6 v4 patch
         run: |
-          python3 .gt6build/apply_tracker_patch.py DroidDrone
+          python3 .gt6build/v4/apply_v4_patch.py DroidDrone
+          grep -n "applicationId\|versionName\|versionCode\|useLegacyPackaging" DroidDrone/Flight/build.gradle
+          ! grep -R "xmaihh\|SerialHelper" DroidDrone/Flight/src/main/java/de/droiddrone/flight/Serial.java
 
-      - name: Apply v3 safe-camera fix
+      - name: Tracker JVM self-test
         run: |
-          python3 .gt6build/apply_v3_fix.py DroidDrone
-          grep -n "applicationId\|versionName\|versionCode" DroidDrone/Flight/build.gradle
+          rm -rf /tmp/gt6track && mkdir -p /tmp/gt6track/src/de/droiddrone/flight /tmp/gt6track/out
+          cp DroidDrone/Flight/src/main/java/de/droiddrone/flight/TargetTracker.java /tmp/gt6track/src/de/droiddrone/flight/
+          cp .gt6build/v4/TrackerSelfTest.java /tmp/gt6track/src/de/droiddrone/flight/
+          javac -d /tmp/gt6track/out /tmp/gt6track/src/de/droiddrone/flight/*.java
+          java -cp /tmp/gt6track/out de.droiddrone.flight.TrackerSelfTest
 
       - name: Build Flight debug APK
         working-directory: DroidDrone
@@ -55,17 +60,50 @@ jobs:
           chmod +x gradlew
           ./gradlew :Flight:assembleDebug --stacktrace --no-daemon
 
-      - name: Collect APK
+      - name: Verify APK and 16KB ELF alignment
         run: |
-          mkdir -p out
+          set -euo pipefail
+          mkdir -p out verify
           APK=$(find DroidDrone/Flight/build/outputs/apk -type f -name '*debug*.apk' | head -1)
           test -n "$APK"
-          cp "$APK" out/GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug.apk
-          sha256sum out/GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug.apk | tee out/SHA256.txt
+          cp "$APK" out/GT6-DroidDrone-Flight-v4-ROBUST-debug.apk
+          APK=out/GT6-DroidDrone-Flight-v4-ROBUST-debug.apk
+          unzip -t "$APK" >/dev/null
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK" | tee out/APKSIGNER.txt
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt" dump badging "$APK" | tee out/BADGING.txt
+          grep -q "package: name='de.droiddrone.flight.gt6v4'" out/BADGING.txt
+          unzip -q "$APK" 'lib/arm64-v8a/*.so' -d verify
+          test ! -e verify/lib/arm64-v8a/libserialport.so
+          find verify/lib/arm64-v8a -type f -name '*.so' -print | sort | tee out/NATIVE_LIBS.txt
+          python3 - <<'PY' | tee out/ELF_ALIGNMENT.txt
+          import pathlib, subprocess, sys
+          libs=sorted(pathlib.Path('verify/lib/arm64-v8a').glob('*.so'))
+          if not libs:
+              raise SystemExit('No arm64 libraries found')
+          bad=[]
+          for lib in libs:
+              out=subprocess.check_output(['readelf','-lW',str(lib)],text=True)
+              aligns=[]
+              for line in out.splitlines():
+                  p=line.split()
+                  if p and p[0]=='LOAD':
+                      aligns.append(int(p[-1],16))
+              minimum=min(aligns) if aligns else 0
+              print(f'{lib.name}: LOAD alignments={[hex(x) for x in aligns]} min={hex(minimum)}')
+              if minimum < 0x4000:
+                  bad.append(lib.name)
+          if bad:
+              print('BAD_16KB:', ', '.join(bad))
+              sys.exit(1)
+          print('ELF_16KB_OK')
+          PY
+          unzip -lv "$APK" | grep 'lib/arm64-v8a/.*\.so' | tee out/ZIP_NATIVE_ENTRIES.txt
+          sha256sum "$APK" | tee out/SHA256.txt
+          echo "GT6_V4_VERIFY_OK" | tee out/VERIFY_OK.txt
 
-      - name: Upload APK
+      - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug
+          name: GT6-DroidDrone-Flight-v4-ROBUST-debug
           path: out/*
           if-no-files-found: error
