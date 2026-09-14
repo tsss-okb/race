@@ -23,16 +23,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Clone DroidDrone v2.3.0
-        run: |
-          git clone --branch v2.3.0 --depth 1 --recurse-submodules https://github.com/DroidDrone/DroidDrone.git DroidDrone
-          cd DroidDrone
-          git submodule update --init --recursive
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Ensure Android SDK 34
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Clone DroidDrone v2.3.0
+        run: |
+          git clone --branch v2.3.0 --depth 1 --recurse-submodules https://github.com/DroidDrone/DroidDrone.git DroidDrone
+          cd DroidDrone
+          git submodule update --init --recursive
 
       - name: Apply GT6 tracker patch
         run: |
