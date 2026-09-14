@@ -1,0 +1,1 @@
+GT6 v3 safe-camera build branch marker
