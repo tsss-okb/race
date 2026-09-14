@@ -1,9 +1,9 @@
-name: GT6 DroidDrone Tracker APK
+name: GT6 DroidDrone Tracker APK v3
 
 on:
   push:
     branches:
-      - gt6-droiddrone-apk-v1
+      - gt6-droiddrone-apk-v3
   workflow_dispatch:
 
 permissions:
@@ -37,10 +37,14 @@ jobs:
           cd DroidDrone
           git submodule update --init --recursive
 
-      - name: Apply GT6 tracker patch
+      - name: Apply tracker v2 base patch
         run: |
           python3 .gt6build/apply_tracker_patch.py DroidDrone
-          grep -n "versionName\|versionCode" DroidDrone/Flight/build.gradle
+
+      - name: Apply v3 safe-camera fix
+        run: |
+          python3 .gt6build/apply_v3_fix.py DroidDrone
+          grep -n "applicationId\|versionName\|versionCode" DroidDrone/Flight/build.gradle
 
       - name: Build Flight debug APK
         working-directory: DroidDrone
@@ -53,12 +57,12 @@ jobs:
           mkdir -p out
           APK=$(find DroidDrone/Flight/build/outputs/apk -type f -name '*debug*.apk' | head -1)
           test -n "$APK"
-          cp "$APK" out/GT6-DroidDrone-Flight-TRACKER-v2-debug.apk
-          sha256sum out/GT6-DroidDrone-Flight-TRACKER-v2-debug.apk | tee out/SHA256.txt
+          cp "$APK" out/GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug.apk
+          sha256sum out/GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug.apk | tee out/SHA256.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: GT6-DroidDrone-Flight-TRACKER-v2-debug
+          name: GT6-DroidDrone-Flight-TRACKER-v3-SAFE-debug
           path: out/*
           if-no-files-found: error
