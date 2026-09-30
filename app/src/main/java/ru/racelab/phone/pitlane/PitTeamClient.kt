@@ -23,7 +23,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 data class PitTeamConfig(
     val relayUrl: String,
     val room: String,
-    val key: String
+    val key: String,
+    val deviceSlot: Int = 1,
+    val deviceRole: String = "Тимлид"
 ) {
     val valid: Boolean
         get() = relayUrl.startsWith("https://") && room.isNotBlank() && key.isNotBlank()
