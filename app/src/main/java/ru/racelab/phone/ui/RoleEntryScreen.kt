@@ -2,6 +2,8 @@ package ru.racelab.phone.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -51,13 +53,13 @@ fun RoleEntryScreen(
             contentAlignment = Alignment.Center
         ) {
             Card(
-                modifier = Modifier.widthIn(max = 780.dp).fillMaxWidth(),
+                modifier = Modifier.widthIn(max = 780.dp).fillMaxWidth().fillMaxHeight(0.96f),
                 colors = CardDefaults.cardColors(containerColor = EntryPanel),
                 border = BorderStroke(1.dp, EntryBorder),
                 shape = RoundedCornerShape(20.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(18.dp),
+                    modifier = Modifier.padding(18.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
