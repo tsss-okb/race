@@ -34,6 +34,7 @@ import ru.racelab.phone.pitlane.TeamDevicePresence
 import ru.racelab.phone.pitlane.TeamPresenceClient
 import ru.racelab.phone.pitlane.defaultRole
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val TeamBg = Color(0xFF050607)
 private val TeamPanel = Color(0xFF111315)
@@ -313,6 +314,7 @@ private fun TeamGarageScreen(
         .sortedBy { it.second }
         .map { it.first }
     val positionById = rankedIds.mapIndexed { index, id -> id to (index + 1) }.toMap()
+    val fastestTeamBestMs = snapshots.values.mapNotNull { it.lapBestMs }.minOrNull()
     val onlineCount = cars.count { car ->
         val s = snapshots[car.id]
         s != null && s.lastReceiveElapsedMs > 0L &&
@@ -398,6 +400,7 @@ private fun TeamGarageScreen(
                         deviceSlot = deviceSlot,
                         deviceRole = deviceRole,
                         teamPosition = positionById[car.id],
+                        fastestTeamBestMs = fastestTeamBestMs,
                         canDelete = index > 0,
                         onSnapshot = { snapshots[car.id] = it },
                         onOpen = { onOpenCar(car) },
@@ -421,6 +424,7 @@ private fun TeamGarageCarRow(
     deviceSlot: Int,
     deviceRole: String,
     teamPosition: Int?,
+    fastestTeamBestMs: Long?,
     canDelete: Boolean,
     onSnapshot: (PitTeamSnapshot) -> Unit,
     onOpen: () -> Unit,
@@ -449,6 +453,17 @@ private fun TeamGarageCarRow(
 
     val live = snapshot.lastReceiveElapsedMs > 0L &&
         now - snapshot.lastReceiveElapsedMs < 3_500L
+    val pitDistance = snapshot.pitDistanceM
+    val pitNow = snapshot.pitLaneActive || snapshot.pitActive
+    val pitSoon = !pitNow && pitDistance != null && pitDistance <= 350.0
+    val pitAlert = when {
+        pitNow -> "PIT NOW"
+        pitSoon -> "PIT SOON ${pitDistance!!.roundToInt()}m"
+        else -> null
+    }
+    val teamGapMs = if (snapshot.lapBestMs != null && fastestTeamBestMs != null) {
+        (snapshot.lapBestMs!! - fastestTeamBestMs).coerceAtLeast(0L)
+    } else null
     val identity = listOfNotNull(
         snapshot.carNumber.takeIf { it.isNotBlank() }?.let { "#$it" },
         snapshot.driverName.takeIf { it.isNotBlank() }
@@ -464,7 +479,15 @@ private fun TeamGarageCarRow(
             .fillMaxWidth()
             .clickable(onClick = onOpen),
         color = TeamPanel,
-        border = BorderStroke(1.dp, if (live) TeamGreen else TeamBorder),
+        border = BorderStroke(
+            if (pitNow) 2.dp else 1.dp,
+            when {
+                pitNow -> TeamRed
+                pitSoon -> TeamYellow
+                live -> TeamGreen
+                else -> TeamBorder
+            }
+        ),
         shape = RoundedCornerShape(13.dp)
     ) {
         Column(Modifier.fillMaxWidth().padding(9.dp)) {
@@ -493,6 +516,15 @@ private fun TeamGarageCarRow(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                if (pitAlert != null) {
+                    Text(
+                        pitAlert,
+                        color = if (pitNow) TeamRed else TeamYellow,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
                 Text(
                     if (live) "● LIVE" else "● OFFLINE",
                     color = if (live) TeamGreen else TeamRed,
@@ -516,9 +548,29 @@ private fun TeamGarageCarRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                GarageMetric("LAP", if (snapshot.lapNo > 0) snapshot.lapNo.toString() else "—", Modifier.weight(.55f))
+                GarageMetric("LAPS", snapshot.lapsCompleted.toString(), Modifier.weight(.58f))
+                GarageMetric(
+                    "STINT",
+                    "S${snapshot.stintNo} · L${snapshot.stintLapNo}",
+                    Modifier.weight(.78f),
+                    TeamYellow
+                )
                 GarageMetric("CURRENT", format100(snapshot.lapCurrentMs.takeIf { it > 0L }), Modifier.weight(1f))
                 GarageMetric("BEST", format100(snapshot.lapBestMs), Modifier.weight(1f), TeamGreen)
+            }
+
+            Spacer(Modifier.height(5.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                GarageMetric(
+                    "TEAM GAP",
+                    teamGapMs?.let { if (it == 0L) "FASTEST" else "+%.2f".format(it / 1000.0) } ?: "—",
+                    Modifier.weight(.85f),
+                    if (teamGapMs == 0L) TeamGreen else TeamWhite
+                )
                 GarageMetric(
                     "DELTA",
                     formatDelta100(snapshot.deltaMs),
@@ -532,9 +584,18 @@ private fun TeamGarageCarRow(
                 GarageMetric("SPEED", "${snapshot.speedKmh.toInt()} km/h", Modifier.weight(.8f))
                 GarageMetric(
                     "PIT",
-                    if (snapshot.pitActive) "ACTIVE" else if ((snapshot.pitLastMs ?: 0L) > 0L) format100(snapshot.pitLastMs) else "—",
+                    when {
+                        pitNow -> "NOW"
+                        pitSoon -> "${pitDistance!!.roundToInt()}m"
+                        (snapshot.pitLastMs ?: 0L) > 0L -> format100(snapshot.pitLastMs)
+                        else -> "—"
+                    },
                     Modifier.weight(.8f),
-                    if (snapshot.pitActive) TeamYellow else TeamWhite
+                    when {
+                        pitNow -> TeamRed
+                        pitSoon -> TeamYellow
+                        else -> TeamWhite
+                    }
                 )
             }
         }
