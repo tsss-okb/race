@@ -247,6 +247,8 @@ object InternetPitRelay {
             .put("seq", publishSeq.incrementAndGet())
             .put("serverTimeMs", System.currentTimeMillis())
             .put("teamName", raceProfile.teamName)
+            .put("driverName", raceProfile.driverName)
+            .put("carNumber", raceProfile.carNumber)
             .put("carName", raceProfile.carName)
             .put("raceClass", raceProfile.raceClass)
             .put("pitActive", state.pitTimerActive)
