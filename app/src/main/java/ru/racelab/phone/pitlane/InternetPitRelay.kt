@@ -264,6 +264,7 @@ object InternetPitRelay {
             .put("sessionActive", state.sessionActive)
             .put("armed", state.armed)
             .put("lapNo", state.laps.size + if (state.sessionActive) 1 else 0)
+            .put("lapsCompleted", state.laps.size)
             .put("lapCurrentMs", state.lapElapsedMs)
             .put("lapBestMs", state.bestLapMs ?: JSONObject.NULL)
             .put("deltaMs", state.deltaMs ?: JSONObject.NULL)
