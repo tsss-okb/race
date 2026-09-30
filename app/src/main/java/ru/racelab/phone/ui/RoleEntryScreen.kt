@@ -2,28 +2,10 @@ package ru.racelab.phone.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.racelab.phone.pitlane.RaceProfile
 
 private val EntryBg = Color(0xFF050607)
 private val EntryPanel = Color(0xFF111315)
@@ -41,9 +24,14 @@ private val EntryMuted = Color(0xFF989DA2)
 
 @Composable
 fun RoleEntryScreen(
-    onPilot: () -> Unit,
+    initialProfile: RaceProfile,
+    onPilot: (RaceProfile) -> Unit,
     onTeam: () -> Unit
 ) {
+    var teamName by remember(initialProfile) { mutableStateOf(initialProfile.teamName) }
+    var carName by remember(initialProfile) { mutableStateOf(initialProfile.carName) }
+    var raceClass by remember(initialProfile) { mutableStateOf(initialProfile.raceClass) }
+
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = EntryYellow,
@@ -59,49 +47,101 @@ fun RoleEntryScreen(
                 .fillMaxSize()
                 .background(EntryBg)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(18.dp),
+                .padding(14.dp),
             contentAlignment = Alignment.Center
         ) {
             Card(
-                modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(),
+                modifier = Modifier.widthIn(max = 780.dp).fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = EntryPanel),
                 border = BorderStroke(1.dp, EntryBorder),
                 shape = RoundedCornerShape(20.dp)
             ) {
                 Column(
-                    modifier = Modifier.padding(22.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         "RACELAB",
                         color = EntryYellow,
-                        fontSize = 31.sp,
+                        fontSize = 30.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 2.sp
                     )
                     Text(
                         "Выберите режим работы",
                         color = Color.White,
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        "Пилот записывает сессию и передаёт телеметрию. Команда подключается через GSM/интернет в режиме чтения — до 5 устройств одновременно.",
-                        color = EntryMuted,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFF0C0E10),
+                        border = BorderStroke(1.dp, EntryBorder),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(
+                            Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            Text(
+                                "ПРОФИЛЬ ЗАЕЗДА",
+                                color = EntryYellow,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 11.sp
+                            )
+                            OutlinedTextField(
+                                value = teamName,
+                                onValueChange = { teamName = it.take(48) },
+                                label = { Text("Название команды") },
+                                placeholder = { Text("TSSS Racing") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = carName,
+                                    onValueChange = { carName = it.take(64) },
+                                    label = { Text("Машина") },
+                                    placeholder = { Text("Porsche 911 GT3") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1.25f)
+                                )
+                                OutlinedTextField(
+                                    value = raceClass,
+                                    onValueChange = { raceClass = it.take(32) },
+                                    label = { Text("Класс") },
+                                    placeholder = { Text("GT3") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(.75f)
+                                )
+                            }
+                            Text(
+                                "Эти данные сохраняются и передаются на все командные экраны вместе с телеметрией.",
+                                color = EntryMuted,
+                                fontSize = 9.sp
+                            )
+                        }
+                    }
 
                     RoleButton(
                         title = "ПИЛОТ",
-                        subtitle = "GPS · камера · OBD/CAN · PIT · отправка телеметрии",
+                        subtitle = "GPS · камера · OBD/CAN · PIT · GSM телеметрия",
                         accent = EntryYellow,
-                        onClick = onPilot
+                        onClick = {
+                            onPilot(
+                                RaceProfile(
+                                    teamName = teamName.trim(),
+                                    carName = carName.trim(),
+                                    raceClass = raceClass.trim()
+                                )
+                            )
+                        }
                     )
                     RoleButton(
                         title = "КОМАНДА",
-                        subtitle = "PIT экран · круги · скорость · дельта · GSM relay",
+                        subtitle = "PIT · круги · скорость · дельта · до 5 устройств",
                         accent = EntryGreen,
                         onClick = onTeam
                     )
@@ -109,7 +149,7 @@ fun RoleEntryScreen(
                     Text(
                         "Командный режим не запускает GPS, камеру и OBD на этом устройстве.",
                         color = EntryMuted,
-                        fontSize = 10.sp,
+                        fontSize = 9.sp,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -127,14 +167,14 @@ private fun RoleButton(
 ) {
     Button(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(72.dp),
+        modifier = Modifier.fillMaxWidth().height(64.dp),
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = Color(0xFF171A1D),
             contentColor = Color.White
         ),
         border = BorderStroke(1.dp, accent),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -142,10 +182,10 @@ private fun RoleButton(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = accent, fontSize = 19.sp, fontWeight = FontWeight.Black)
-                Text(subtitle, color = EntryMuted, fontSize = 10.sp)
+                Text(title, color = accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                Text(subtitle, color = EntryMuted, fontSize = 9.sp)
             }
-            Text("›", color = accent, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text("›", color = accent, fontSize = 27.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
