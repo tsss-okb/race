@@ -21,6 +21,7 @@ import ru.racelab.phone.gnss.UsbNmeaManager
 import ru.racelab.phone.canbus.UsbCanManager
 import ru.racelab.phone.sensor.PhoneSensorMonitor
 import ru.racelab.phone.ui.RaceLabApp
+import ru.racelab.phone.ui.RoleEntryScreen
 import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
 import ru.racelab.phone.pitlane.PitLaneServer
@@ -33,18 +34,36 @@ class MainActivity : ComponentActivity() {
     private lateinit var phoneGnss: PhoneGnssMonitor
     private lateinit var usbGnss: UsbNmeaManager
     private lateinit var usbCan: UsbCanManager
+    private var pilotInitialized = false
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         val denied = grants.filterValues { !it }.keys
         if (denied.isEmpty()) {
             RaceRuntime.markMessage("Разрешения выданы")
-            phoneGnss.start()
+            if (::phoneGnss.isInitialized) phoneGnss.start()
         } else RaceRuntime.markMessage("Часть разрешений не выдана: ${denied.size}")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        showRoleEntry()
+    }
+
+
+    private fun showRoleEntry() {
+        setContent {
+            RoleEntryScreen(
+                onPilot = { startPilotMode() },
+                onTeam = { startActivity(Intent(this, PitLaneActivity::class.java)) }
+            )
+        }
+    }
+
+    private fun startPilotMode() {
+        if (pilotInitialized) return
+        pilotInitialized = true
+
         RaceRuntime.setGm204Enabled(RemoteControlSettingsRepository.isGm204Enabled(this))
         PitLaneServer.start()
         InternetPitRelay.start(this)
@@ -73,6 +92,9 @@ class MainActivity : ComponentActivity() {
         phoneSensors = PhoneSensorMonitor(this)
         phoneGnss = PhoneGnssMonitor(this)
         requestCorePermissions()
+
+        phoneSensors.start()
+        phoneGnss.start()
 
         setContent {
             RaceLabApp(
@@ -127,20 +149,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        PitLaneServer.start()
-        PitLaneServer.refreshStatus()
-        InternetPitRelay.start(this)
-        phoneSensors.start()
-        phoneGnss.start()
+        if (pilotInitialized) {
+            PitLaneServer.start()
+            PitLaneServer.refreshStatus()
+            InternetPitRelay.start(this)
+            phoneSensors.start()
+            phoneGnss.start()
+        }
     }
 
     override fun onPause() {
-        phoneSensors.stop()
-        phoneGnss.stop()
+        if (pilotInitialized) {
+            phoneSensors.stop()
+            phoneGnss.stop()
+        }
         super.onPause()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!pilotInitialized) return super.dispatchKeyEvent(event)
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
             val device = InputDevice.getDevice(event.deviceId)
             val external = device?.isExternal == true
@@ -217,12 +244,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        bleGps.disconnect()
-        usbGnss.close()
-        usbCan.close()
-        obd.disconnect()
-        PitLaneServer.stop()
-        InternetPitRelay.stop()
+        if (pilotInitialized) {
+            bleGps.disconnect()
+            usbGnss.close()
+            usbCan.close()
+            obd.disconnect()
+            PitLaneServer.stop()
+            InternetPitRelay.stop()
+        }
         super.onDestroy()
     }
 }
