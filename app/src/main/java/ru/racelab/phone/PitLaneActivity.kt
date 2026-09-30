@@ -338,6 +338,8 @@ private fun PitTeamDashboard(
                     rttMs = snapshot.rttMs,
                     track = snapshot.track,
                     teamName = snapshot.teamName,
+                    driverName = snapshot.driverName,
+                    carNumber = snapshot.carNumber,
                     carName = snapshot.carName,
                     raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
@@ -422,12 +424,15 @@ private fun PitTeamDashboard(
                     rttMs = snapshot.rttMs,
                     track = snapshot.track,
                     teamName = snapshot.teamName,
+                    driverName = snapshot.driverName,
+                    carNumber = snapshot.carNumber,
                     carName = snapshot.carName,
                     raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
                     onTarget = { showTargetDialog = true },
                     onSettings = onSettings
                 )
+                TeamDevicesBar(teamDevices)
 
                 Row(
                     Modifier.fillMaxWidth().weight(1f),
@@ -500,6 +505,8 @@ private fun TeamHeader(
     rttMs: Long?,
     track: String,
     teamName: String,
+    driverName: String,
+    carNumber: String,
     carName: String,
     raceClass: String,
     targetSeconds: Int,
@@ -508,6 +515,16 @@ private fun TeamHeader(
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val compact = maxWidth < 600.dp
+        val driverLabel = listOfNotNull(
+            carNumber.takeIf { it.isNotBlank() }?.let { "#$it" },
+            driverName.takeIf { it.isNotBlank() }
+        ).joinToString(" · ").ifBlank { "ПИЛОТ —" }
+        val raceIdentity = listOf(
+            teamName.ifBlank { "Команда —" },
+            carName.ifBlank { "Машина —" },
+            raceClass.ifBlank { "Класс —" },
+            track
+        ).joinToString("  ·  ")
 
         Surface(
             modifier = Modifier.fillMaxWidth().height(if (compact) 90.dp else 62.dp),
@@ -529,10 +546,10 @@ private fun TeamHeader(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            teamName.ifBlank { "КОМАНДА" },
+                            driverLabel,
                             color = TeamYellow,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
                             modifier = Modifier.weight(1f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -546,11 +563,7 @@ private fun TeamHeader(
                     }
 
                     Text(
-                        listOf(
-                            carName.ifBlank { "Машина —" },
-                            raceClass.ifBlank { "Класс —" },
-                            track
-                        ).joinToString("  ·  "),
+                        raceIdentity,
                         color = TeamMuted,
                         fontSize = 8.sp,
                         maxLines = 1,
@@ -599,7 +612,7 @@ private fun TeamHeader(
                             Text("RACELAB · PIT TEAM", color = TeamWhite, fontSize = 16.sp, fontWeight = FontWeight.Black)
                             Spacer(Modifier.width(10.dp))
                             Text(
-                                teamName.ifBlank { "КОМАНДА" },
+                                driverLabel,
                                 color = TeamYellow,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Black,
@@ -608,11 +621,7 @@ private fun TeamHeader(
                             )
                         }
                         Text(
-                            listOf(
-                                carName.ifBlank { "Машина —" },
-                                raceClass.ifBlank { "Класс —" },
-                                track
-                            ).joinToString("  ·  "),
+                            raceIdentity,
                             color = TeamMuted,
                             fontSize = 9.sp,
                             maxLines = 1,
