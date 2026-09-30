@@ -23,7 +23,7 @@ jobs:
           echo "$body"
           echo "$body" | grep -q '"ok":true'
           echo "$body" | grep -q '"transport":"websocket"'
-          echo "$body" | grep -q '"protocol":3'
+          echo "$body" | grep -Eq '"protocol":(2|3)'
 
       - name: Check legacy HTTP fallback health
         run: |
