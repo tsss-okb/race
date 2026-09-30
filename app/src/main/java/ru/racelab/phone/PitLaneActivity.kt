@@ -283,6 +283,9 @@ private fun PitTeamDashboard(
                     transport = snapshot.transport,
                     rttMs = snapshot.rttMs,
                     track = snapshot.track,
+                    teamName = snapshot.teamName,
+                    carName = snapshot.carName,
+                    raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
                     onTarget = { showTargetDialog = true },
                     onSettings = onSettings
@@ -363,6 +366,9 @@ private fun PitTeamDashboard(
                     transport = snapshot.transport,
                     rttMs = snapshot.rttMs,
                     track = snapshot.track,
+                    teamName = snapshot.teamName,
+                    carName = snapshot.carName,
+                    raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
                     onTarget = { showTargetDialog = true },
                     onSettings = onSettings
@@ -438,6 +444,9 @@ private fun TeamHeader(
     transport: String,
     rttMs: Long?,
     track: String,
+    teamName: String,
+    carName: String,
+    raceClass: String,
     targetSeconds: Int,
     onTarget: () -> Unit,
     onSettings: () -> Unit
@@ -446,7 +455,7 @@ private fun TeamHeader(
         val compact = maxWidth < 600.dp
 
         Surface(
-            modifier = Modifier.fillMaxWidth().height(if (compact) 72.dp else 54.dp),
+            modifier = Modifier.fillMaxWidth().height(if (compact) 90.dp else 62.dp),
             color = TeamPanel,
             border = BorderStroke(1.dp, TeamBorder),
             shape = RoundedCornerShape(13.dp)
@@ -465,9 +474,10 @@ private fun TeamHeader(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            track,
-                            color = TeamMuted,
+                            teamName.ifBlank { "КОМАНДА" },
+                            color = TeamYellow,
                             fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -479,6 +489,18 @@ private fun TeamHeader(
                             Text("⚙", color = TeamMuted, fontSize = 15.sp)
                         }
                     }
+
+                    Text(
+                        listOf(
+                            carName.ifBlank { "Машина —" },
+                            raceClass.ifBlank { "Класс —" },
+                            track
+                        ).joinToString("  ·  "),
+                        color = TeamMuted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -517,16 +539,31 @@ private fun TeamHeader(
                     Modifier.fillMaxSize().padding(horizontal = 13.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("RACELAB · PIT LANE TEAM", color = TeamWhite, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        track,
-                        color = TeamMuted,
-                        fontSize = 10.sp,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("RACELAB · PIT TEAM", color = TeamWhite, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                teamName.ifBlank { "КОМАНДА" },
+                                color = TeamYellow,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            listOf(
+                                carName.ifBlank { "Машина —" },
+                                raceClass.ifBlank { "Класс —" },
+                                track
+                            ).joinToString("  ·  "),
+                            color = TeamMuted,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Text(
                         when {
                             !live -> "● НЕТ СВЯЗИ"
