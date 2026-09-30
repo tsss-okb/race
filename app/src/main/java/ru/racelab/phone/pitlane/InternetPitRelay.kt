@@ -51,8 +51,10 @@ object InternetPitRelay {
     @Volatile private var lastSuccessMs: Long? = null
     @Volatile private var generation = 0L
     @Volatile private var reconnectDelayMs = MIN_RECONNECT_MS
+    @Volatile private var raceProfile = RaceProfile()
 
     fun start(context: Context) {
+        raceProfile = RaceProfileRepository.load(context)
         applySettings(InternetPitRelaySettingsRepository.load(context))
     }
 
@@ -244,6 +246,9 @@ object InternetPitRelay {
             .put("publisherSession", publisherSession)
             .put("seq", publishSeq.incrementAndGet())
             .put("serverTimeMs", System.currentTimeMillis())
+            .put("teamName", raceProfile.teamName)
+            .put("carName", raceProfile.carName)
+            .put("raceClass", raceProfile.raceClass)
             .put("pitActive", state.pitTimerActive)
             .put("pitCurrentMs", currentPit)
             .put("pitLastMs", state.pitLastMs ?: JSONObject.NULL)
