@@ -293,6 +293,376 @@ private fun PitTeamSetup(
 }
 
 @Composable
+private fun TeamGarageScreen(
+    cars: List<TeamCarEntry>,
+    deviceSlot: Int,
+    deviceRole: String,
+    defaultRelay: String,
+    onOpenCar: (TeamCarEntry) -> Unit,
+    onAddCar: (TeamCarEntry) -> Unit,
+    onRemoveCar: (TeamCarEntry) -> Unit,
+    onSettings: () -> Unit
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    val snapshots = remember { mutableStateMapOf<String, PitTeamSnapshot>() }
+
+    val rankedIds = cars
+        .mapNotNull { car ->
+            snapshots[car.id]?.lapBestMs?.let { best -> car.id to best }
+        }
+        .sortedBy { it.second }
+        .map { it.first }
+    val positionById = rankedIds.mapIndexed { index, id -> id to (index + 1) }.toMap()
+    val onlineCount = cars.count { car ->
+        val s = snapshots[car.id]
+        s != null && s.lastReceiveElapsedMs > 0L &&
+            SystemClock.elapsedRealtime() - s.lastReceiveElapsedMs < 3_500L
+    }
+
+    if (showAddDialog) {
+        AddTeamCarDialog(
+            defaultRelay = defaultRelay,
+            canAdd = cars.size < TeamGarageRepository.MAX_CARS,
+            onDismiss = { showAddDialog = false },
+            onAdd = {
+                onAddCar(it)
+                showAddDialog = false
+            }
+        )
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(TeamBg)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(9.dp)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = TeamPanel,
+            border = BorderStroke(1.dp, TeamBorder),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "RACELAB · TEAM GARAGE",
+                        color = TeamWhite,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        "${cars.size} машин · ${onlineCount} онлайн · устройство ${deviceSlot}/5 · $deviceRole",
+                        color = TeamMuted,
+                        fontSize = 9.sp
+                    )
+                }
+                Button(
+                    onClick = { showAddDialog = true },
+                    enabled = cars.size < TeamGarageRepository.MAX_CARS,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TeamGreen,
+                        contentColor = Color.Black
+                    ),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("+ МАШИНА", fontSize = 9.sp, fontWeight = FontWeight.Black)
+                }
+                Spacer(Modifier.width(6.dp))
+                TextButton(onClick = onSettings) {
+                    Text("⚙", color = TeamMuted, fontSize = 17.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(7.dp))
+
+        if (cars.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Добавь первую машину команды", color = TeamMuted)
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                cars.forEachIndexed { index, car ->
+                    TeamGarageCarRow(
+                        car = car,
+                        deviceSlot = deviceSlot,
+                        deviceRole = deviceRole,
+                        teamPosition = positionById[car.id],
+                        canDelete = index > 0,
+                        onSnapshot = { snapshots[car.id] = it },
+                        onOpen = { onOpenCar(car) },
+                        onDelete = { onRemoveCar(car) }
+                    )
+                }
+                Text(
+                    "P TEAM — позиция только среди машин вашей команды по лучшему кругу. Для общей позиции гонки нужен внешний тайминг трассы.",
+                    color = TeamMuted,
+                    fontSize = 8.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TeamGarageCarRow(
+    car: TeamCarEntry,
+    deviceSlot: Int,
+    deviceRole: String,
+    teamPosition: Int?,
+    canDelete: Boolean,
+    onSnapshot: (PitTeamSnapshot) -> Unit,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val config = remember(car, deviceSlot, deviceRole) {
+        car.toPitConfig(deviceSlot, deviceRole)
+    }
+    val client = remember(config) { PitTeamClient(config) }
+    val snapshot by client.state.collectAsState()
+
+    DisposableEffect(client) {
+        val job = client.start(scope)
+        onDispose { job.cancel() }
+    }
+    LaunchedEffect(snapshot) { onSnapshot(snapshot) }
+
+    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(snapshot.lastReceiveElapsedMs) {
+        while (true) {
+            now = SystemClock.elapsedRealtime()
+            delay(500L)
+        }
+    }
+
+    val live = snapshot.lastReceiveElapsedMs > 0L &&
+        now - snapshot.lastReceiveElapsedMs < 3_500L
+    val identity = listOfNotNull(
+        snapshot.carNumber.takeIf { it.isNotBlank() }?.let { "#$it" },
+        snapshot.driverName.takeIf { it.isNotBlank() }
+    ).joinToString(" · ").ifBlank { car.label.ifBlank { car.room } }
+    val carInfo = listOf(
+        snapshot.teamName.takeIf { it.isNotBlank() } ?: car.label.ifBlank { "Команда" },
+        snapshot.carName.ifBlank { "Машина —" },
+        snapshot.raceClass.ifBlank { "Класс —" }
+    ).joinToString(" · ")
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        color = TeamPanel,
+        border = BorderStroke(1.dp, if (live) TeamGreen else TeamBorder),
+        shape = RoundedCornerShape(13.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    teamPosition?.let { "P$it" } ?: "P—",
+                    color = if (teamPosition != null) TeamYellow else TeamMuted,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.width(40.dp)
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        identity,
+                        color = TeamWhite,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        carInfo,
+                        color = TeamMuted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    if (live) "● LIVE" else "● OFFLINE",
+                    color = if (live) TeamGreen else TeamRed,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black
+                )
+                if (canDelete) {
+                    Spacer(Modifier.width(4.dp))
+                    TextButton(
+                        onClick = onDelete,
+                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
+                    ) {
+                        Text("×", color = TeamRed, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                GarageMetric("LAP", if (snapshot.lapNo > 0) snapshot.lapNo.toString() else "—", Modifier.weight(.55f))
+                GarageMetric("CURRENT", format100(snapshot.lapCurrentMs.takeIf { it > 0L }), Modifier.weight(1f))
+                GarageMetric("BEST", format100(snapshot.lapBestMs), Modifier.weight(1f), TeamGreen)
+                GarageMetric(
+                    "DELTA",
+                    formatDelta100(snapshot.deltaMs),
+                    Modifier.weight(.72f),
+                    when {
+                        snapshot.deltaMs == null -> TeamWhite
+                        snapshot.deltaMs!! <= 0 -> TeamGreen
+                        else -> TeamRed
+                    }
+                )
+                GarageMetric("SPEED", "${snapshot.speedKmh.toInt()} km/h", Modifier.weight(.8f))
+                GarageMetric(
+                    "PIT",
+                    if (snapshot.pitActive) "ACTIVE" else if ((snapshot.pitLastMs ?: 0L) > 0L) format100(snapshot.pitLastMs) else "—",
+                    Modifier.weight(.8f),
+                    if (snapshot.pitActive) TeamYellow else TeamWhite
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GarageMetric(
+    title: String,
+    value: String,
+    modifier: Modifier,
+    color: Color = TeamWhite
+) {
+    Surface(
+        modifier = modifier.height(43.dp),
+        color = Color(0xFF0B0D0F),
+        border = BorderStroke(1.dp, TeamBorder),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(title, color = TeamMuted, fontSize = 6.sp, maxLines = 1)
+            Text(
+                value,
+                color = color,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddTeamCarDialog(
+    defaultRelay: String,
+    canAdd: Boolean,
+    onDismiss: () -> Unit,
+    onAdd: (TeamCarEntry) -> Unit
+) {
+    var label by remember { mutableStateOf("") }
+    var relay by remember(defaultRelay) { mutableStateOf(defaultRelay) }
+    var room by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf("") }
+
+    val candidate = TeamCarEntry(
+        label = label.trim(),
+        relayUrl = relay.trim().trimEnd('/'),
+        room = room.trim(),
+        key = key.trim()
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("ДОБАВИТЬ МАШИНУ", color = TeamYellow, fontWeight = FontWeight.Black)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Для машины сокомандника укажи её ROOM/KEY. После подключения имя пилота, номер, модель и класс подтянутся автоматически.",
+                    color = TeamMuted,
+                    fontSize = 10.sp
+                )
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it.take(32) },
+                    label = { Text("Подпись (необязательно)") },
+                    placeholder = { Text("Машина 2") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = relay,
+                    onValueChange = { relay = it },
+                    label = { Text("Relay URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = room,
+                        onValueChange = {
+                            room = it.filter { ch -> ch.isLetterOrDigit() || ch == '-' || ch == '_' }
+                        },
+                        label = { Text("ROOM") },
+                        singleLine = true,
+                        modifier = Modifier.weight(.8f)
+                    )
+                    OutlinedTextField(
+                        value = key,
+                        onValueChange = { key = it.filterNot(Char::isWhitespace) },
+                        label = { Text("KEY") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.2f)
+                    )
+                }
+                Text(
+                    "Гараж поддерживает до ${TeamGarageRepository.MAX_CARS} машин одновременно.",
+                    color = TeamMuted,
+                    fontSize = 8.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onAdd(candidate) },
+                enabled = canAdd && candidate.valid,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TeamGreen,
+                    contentColor = Color.Black
+                )
+            ) {
+                Text("ДОБАВИТЬ", fontWeight = FontWeight.Black)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("ОТМЕНА") }
+        },
+        containerColor = TeamPanel
+    )
+}
+
+@Composable
 private fun PitTeamDashboard(
     config: PitTeamConfig,
     onSettings: () -> Unit,
