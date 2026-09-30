@@ -9,6 +9,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -24,6 +27,9 @@ import kotlinx.coroutines.delay
 import ru.racelab.phone.pitlane.InternetPitRelaySettingsRepository
 import ru.racelab.phone.pitlane.PitTeamClient
 import ru.racelab.phone.pitlane.PitTeamConfig
+import ru.racelab.phone.pitlane.PitTeamSnapshot
+import ru.racelab.phone.pitlane.TeamCarEntry
+import ru.racelab.phone.pitlane.TeamGarageRepository
 import ru.racelab.phone.pitlane.TeamDevicePresence
 import ru.racelab.phone.pitlane.TeamPresenceClient
 import ru.racelab.phone.pitlane.defaultRole
@@ -55,6 +61,13 @@ class PitLaneActivity : ComponentActivity() {
                 )
             ) {
                 var config by remember { mutableStateOf(initial) }
+                var garage by remember {
+                    mutableStateOf(
+                        if (initial.valid) TeamGarageRepository.ensurePrimary(this, initial)
+                        else TeamGarageRepository.load(this)
+                    )
+                }
+                var selectedCar by remember { mutableStateOf<TeamCarEntry?>(null) }
                 var editing by remember { mutableStateOf(!initial.valid) }
 
                 if (editing) {
@@ -63,12 +76,37 @@ class PitLaneActivity : ComponentActivity() {
                         onConnect = {
                             PitTeamConfigRepository.save(this, it)
                             config = it
+                            garage = TeamGarageRepository.ensurePrimary(this, it)
+                            selectedCar = null
                             editing = false
                         }
                     )
-                } else {
+                } else if (selectedCar != null) {
+                    val car = selectedCar!!
                     PitTeamDashboard(
-                        config = config,
+                        config = car.toPitConfig(config.deviceSlot, config.deviceRole),
+                        onSettings = { editing = true },
+                        onGarage = { selectedCar = null }
+                    )
+                } else {
+                    TeamGarageScreen(
+                        cars = garage,
+                        deviceSlot = config.deviceSlot,
+                        deviceRole = config.deviceRole,
+                        defaultRelay = config.relayUrl,
+                        onOpenCar = { selectedCar = it },
+                        onAddCar = { entry ->
+                            val next = (garage + entry)
+                                .distinctBy { it.relayUrl.trimEnd('/') + "|" + it.room }
+                                .take(TeamGarageRepository.MAX_CARS)
+                            TeamGarageRepository.save(this, next)
+                            garage = next
+                        },
+                        onRemoveCar = { entry ->
+                            val next = garage.filterNot { it.id == entry.id }
+                            TeamGarageRepository.save(this, next)
+                            garage = next
+                        },
                         onSettings = { editing = true }
                     )
                 }
@@ -257,7 +295,8 @@ private fun PitTeamSetup(
 @Composable
 private fun PitTeamDashboard(
     config: PitTeamConfig,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onGarage: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -344,7 +383,8 @@ private fun PitTeamDashboard(
                     raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
                     onTarget = { showTargetDialog = true },
-                    onSettings = onSettings
+                    onSettings = onSettings,
+                    onGarage = onGarage
                 )
                 TeamDevicesBar(teamDevices)
 
@@ -430,7 +470,8 @@ private fun PitTeamDashboard(
                     raceClass = snapshot.raceClass,
                     targetSeconds = targetSeconds,
                     onTarget = { showTargetDialog = true },
-                    onSettings = onSettings
+                    onSettings = onSettings,
+                    onGarage = onGarage
                 )
                 TeamDevicesBar(teamDevices)
 
@@ -511,7 +552,8 @@ private fun TeamHeader(
     raceClass: String,
     targetSeconds: Int,
     onTarget: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onGarage: () -> Unit
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val compact = maxWidth < 600.dp
@@ -554,6 +596,12 @@ private fun TeamHeader(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        TextButton(
+                            onClick = onGarage,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                        ) {
+                            Text("ГАРАЖ", color = TeamGreen, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        }
                         TextButton(
                             onClick = onSettings,
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
@@ -658,6 +706,13 @@ private fun TeamHeader(
                         Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(6.dp))
+                    OutlinedButton(
+                        onClick = onGarage,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("ГАРАЖ", color = TeamGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
                     TextButton(onClick = onSettings) {
                         Text("⚙", color = TeamMuted, fontSize = 16.sp)
                     }
