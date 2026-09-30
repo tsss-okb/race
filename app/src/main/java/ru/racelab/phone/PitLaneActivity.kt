@@ -24,6 +24,9 @@ import kotlinx.coroutines.delay
 import ru.racelab.phone.pitlane.InternetPitRelaySettingsRepository
 import ru.racelab.phone.pitlane.PitTeamClient
 import ru.racelab.phone.pitlane.PitTeamConfig
+import ru.racelab.phone.pitlane.TeamDevicePresence
+import ru.racelab.phone.pitlane.TeamPresenceClient
+import ru.racelab.phone.pitlane.defaultRole
 import kotlin.math.abs
 
 private val TeamBg = Color(0xFF050607)
@@ -79,26 +82,35 @@ private object PitTeamConfigRepository {
     private const val RELAY = "relay"
     private const val ROOM = "room"
     private const val KEY = "key"
+    private const val SLOT = "device_slot"
+    private const val ROLE = "device_role"
 
     fun load(context: Context, uri: Uri?): PitTeamConfig {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val fromUri = uri?.takeIf { it.scheme == "racelab" && it.host == "pit" }?.let {
-            PitTeamConfig(
-                relayUrl = it.getQueryParameter("relay") ?: InternetPitRelaySettingsRepository.DEFAULT_BASE_URL,
-                room = it.getQueryParameter("room") ?: "",
-                key = it.getQueryParameter("key") ?: ""
-            )
-        }
+        val slot = prefs.getInt(SLOT, 1).coerceIn(1, 5)
+        val role = prefs.getString(ROLE, defaultRole(slot))?.takeIf { it.isNotBlank() } ?: defaultRole(slot)
 
         val stored = PitTeamConfig(
             relayUrl = prefs.getString(RELAY, InternetPitRelaySettingsRepository.DEFAULT_BASE_URL)
                 ?: InternetPitRelaySettingsRepository.DEFAULT_BASE_URL,
             room = prefs.getString(ROOM, "") ?: "",
-            key = prefs.getString(KEY, "") ?: ""
+            key = prefs.getString(KEY, "") ?: "",
+            deviceSlot = slot,
+            deviceRole = role
         )
 
+        val fromUri = uri?.takeIf { it.scheme == "racelab" && it.host == "pit" }?.let {
+            PitTeamConfig(
+                relayUrl = it.getQueryParameter("relay") ?: InternetPitRelaySettingsRepository.DEFAULT_BASE_URL,
+                room = it.getQueryParameter("room") ?: "",
+                key = it.getQueryParameter("key") ?: "",
+                deviceSlot = slot,
+                deviceRole = role
+            )
+        }
+
         val result = fromUri?.takeIf { it.valid } ?: stored
-        if (fromUri?.valid == true) save(context, fromUri)
+        if (fromUri?.valid == true) save(context, result)
         return result
     }
 
@@ -108,6 +120,8 @@ private object PitTeamConfigRepository {
             .putString(RELAY, config.relayUrl.trim().trimEnd('/'))
             .putString(ROOM, config.room.trim())
             .putString(KEY, config.key.trim())
+            .putInt(SLOT, config.deviceSlot.coerceIn(1, 5))
+            .putString(ROLE, config.deviceRole.trim().take(24))
             .apply()
     }
 }
@@ -138,6 +152,8 @@ private fun PitTeamSetup(
     var relay by remember(initial) { mutableStateOf(initial.relayUrl.ifBlank { InternetPitRelaySettingsRepository.DEFAULT_BASE_URL }) }
     var room by remember(initial) { mutableStateOf(initial.room) }
     var key by remember(initial) { mutableStateOf(initial.key) }
+    var deviceSlot by remember(initial) { mutableIntStateOf(initial.deviceSlot.coerceIn(1, 5)) }
+    var deviceRole by remember(initial) { mutableStateOf(initial.deviceRole.ifBlank { defaultRole(initial.deviceSlot) }) }
 
     Box(
         Modifier
@@ -189,7 +205,39 @@ private fun PitTeamSetup(
                     )
                 }
 
-                val candidate = PitTeamConfig(relay.trim(), room.trim(), key.trim())
+                Text("Устройство команды", color = TeamMuted, fontSize = 10.sp)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    (1..5).forEach { slot ->
+                        FilterChip(
+                            selected = deviceSlot == slot,
+                            onClick = {
+                                deviceSlot = slot
+                                deviceRole = defaultRole(slot)
+                            },
+                            label = { Text(slot.toString(), fontSize = 9.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = deviceRole,
+                    onValueChange = { deviceRole = it.take(24) },
+                    label = { Text("Роль устройства") },
+                    supportingText = { Text("Например: Тимлид, Инженер, Механик") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                val candidate = PitTeamConfig(
+                    relayUrl = relay.trim(),
+                    room = room.trim(),
+                    key = key.trim(),
+                    deviceSlot = deviceSlot,
+                    deviceRole = deviceRole.trim().ifBlank { defaultRole(deviceSlot) }
+                )
                 Button(
                     onClick = { onConnect(candidate) },
                     enabled = candidate.valid,
@@ -214,13 +262,19 @@ private fun PitTeamDashboard(
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val client = remember(config) { PitTeamClient(config) }
+    val presenceClient = remember(config) { TeamPresenceClient(config) }
     val snapshot by client.state.collectAsState()
+    val teamDevices by presenceClient.devices.collectAsState()
     var targetSeconds by remember { mutableIntStateOf(PitTargetRepository.loadSeconds(context)) }
     var showTargetDialog by remember { mutableStateOf(false) }
 
-    DisposableEffect(client) {
-        val job = client.start(scope)
-        onDispose { job.cancel() }
+    DisposableEffect(client, presenceClient) {
+        val telemetryJob = client.start(scope)
+        val presenceJob = presenceClient.start(scope)
+        onDispose {
+            telemetryJob.cancel()
+            presenceJob.cancel()
+        }
     }
 
     var frameNow by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
@@ -290,6 +344,7 @@ private fun PitTeamDashboard(
                     onTarget = { showTargetDialog = true },
                     onSettings = onSettings
                 )
+                TeamDevicesBar(teamDevices)
 
                 TeamPitCard(
                     active = snapshot.pitActive,
@@ -596,6 +651,58 @@ private fun TeamHeader(
                     Spacer(Modifier.width(6.dp))
                     TextButton(onClick = onSettings) {
                         Text("⚙", color = TeamMuted, fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TeamDevicesBar(devices: List<TeamDevicePresence>) {
+    val onlineCount = devices.count { it.online }
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(34.dp),
+        color = Color(0xFF090B0D),
+        border = BorderStroke(1.dp, TeamBorder),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "$onlineCount/5",
+                color = if (onlineCount > 0) TeamGreen else TeamRed,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.width(28.dp)
+            )
+            devices.forEach { device ->
+                Surface(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    color = if (device.online) Color(0xFF102012) else Color(0xFF151719),
+                    border = BorderStroke(1.dp, if (device.online) TeamGreen else TeamBorder),
+                    shape = RoundedCornerShape(7.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "●",
+                            color = if (device.online) TeamGreen else TeamRed,
+                            fontSize = 7.sp
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "${device.slot} ${device.role}",
+                            color = if (device.online) TeamWhite else TeamMuted,
+                            fontSize = 7.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
