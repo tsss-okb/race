@@ -46,12 +46,22 @@ data class PitTeamSnapshot(
     val satellites: Int = 0,
     val lastReceiveElapsedMs: Long = 0L,
     val relayReceivedAtMs: Long? = null,
+    val publisherSession: String? = null,
+    val seq: Long = 0L,
     val transport: String = "CONNECTING",
     val rttMs: Long? = null,
     val lastError: String? = null
 )
 
 class PitTeamClient(private val config: PitTeamConfig) {
+    companion object {
+        private const val WS_STALE_MS = 4_500L
+        private const val PING_INTERVAL_MS = 5_000L
+        private const val FALLBACK_INTERVAL_MS = 700L
+        private const val MIN_RECONNECT_MS = 800L
+        private const val MAX_RECONNECT_MS = 12_000L
+    }
+
     private val _state = kotlinx.coroutines.flow.MutableStateFlow(PitTeamSnapshot())
     val state: kotlinx.coroutines.flow.StateFlow<PitTeamSnapshot> = _state
 
@@ -65,6 +75,9 @@ class PitTeamClient(private val config: PitTeamConfig) {
     @Volatile private var socketOpen = false
     @Volatile private var lastWsMessageElapsed = 0L
     @Volatile private var lastWsAttemptElapsed = 0L
+    @Volatile private var lastPingElapsed = 0L
+    @Volatile private var lastFallbackElapsed = 0L
+    @Volatile private var reconnectDelayMs = MIN_RECONNECT_MS
     private val fallbackInFlight = AtomicBoolean(false)
 
     fun start(scope: CoroutineScope): Job {
@@ -72,15 +85,21 @@ class PitTeamClient(private val config: PitTeamConfig) {
         val job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val now = SystemClock.elapsedRealtime()
-                if (!socketOpen && now - lastWsAttemptElapsed > 800L) {
+                if (!socketOpen && socket == null && now - lastWsAttemptElapsed >= reconnectDelayMs) {
                     connectWebSocket()
                 }
 
-                val wsFresh = socketOpen && now - lastWsMessageElapsed < 1_500L
-                if (socketOpen) sendPing(now)
-                if (!wsFresh) fetchFallbackOnce()
+                val wsFresh = socketOpen && now - lastWsMessageElapsed < WS_STALE_MS
+                if (socketOpen && now - lastPingElapsed >= PING_INTERVAL_MS) {
+                    lastPingElapsed = now
+                    sendPing(now)
+                }
+                if (!wsFresh && now - lastFallbackElapsed >= FALLBACK_INTERVAL_MS) {
+                    lastFallbackElapsed = now
+                    fetchFallbackOnce()
+                }
 
-                delay(if (wsFresh) 500L else 220L)
+                delay(150L)
             }
         }
         job.invokeOnCompletion {
@@ -104,6 +123,9 @@ class PitTeamClient(private val config: PitTeamConfig) {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 socket = webSocket
                 socketOpen = true
+                lastWsMessageElapsed = SystemClock.elapsedRealtime()
+                lastPingElapsed = 0L
+                reconnectDelayMs = MIN_RECONNECT_MS
                 _state.value = _state.value.copy(transport = "WEBSOCKET", lastError = null)
             }
 
@@ -129,15 +151,18 @@ class PitTeamClient(private val config: PitTeamConfig) {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 socketOpen = false
                 socket = null
+                reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MAX_RECONNECT_MS)
                 _state.value = _state.value.copy(transport = "HTTP FALLBACK")
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 socketOpen = false
                 socket = null
+                reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MAX_RECONNECT_MS)
+                val error = if (response?.code == 429) "ЛИМИТ: 5 УСТРОЙСТВ КОМАНДЫ" else (t.message ?: "WEBSOCKET")
                 _state.value = _state.value.copy(
                     transport = "HTTP FALLBACK",
-                    lastError = t.message ?: "WEBSOCKET"
+                    lastError = error
                 )
             }
         })
@@ -198,7 +223,11 @@ class PitTeamClient(private val config: PitTeamConfig) {
         if (data.optString("type") == "ack") return
 
         val incomingRelayMs = data.optNullableLong("relayReceivedAtMs")
-        val currentRelayMs = _state.value.relayReceivedAtMs
+        val incomingSession = data.optString("publisherSession", "").takeIf { it.isNotBlank() }
+        val incomingSeq = data.optLong("seq", 0L)
+        val current = _state.value
+        val currentRelayMs = current.relayReceivedAtMs
+        if (incomingSession != null && incomingSession == current.publisherSession && incomingSeq > 0L && incomingSeq <= current.seq) return
         if (incomingRelayMs != null && currentRelayMs != null && incomingRelayMs < currentRelayMs) return
 
         val nowElapsed = SystemClock.elapsedRealtime()
@@ -219,8 +248,10 @@ class PitTeamClient(private val config: PitTeamConfig) {
             satellites = data.optInt("satellites", 0),
             lastReceiveElapsedMs = nowElapsed,
             relayReceivedAtMs = incomingRelayMs,
+            publisherSession = incomingSession ?: current.publisherSession,
+            seq = if (incomingSeq > 0L) incomingSeq else current.seq,
             transport = transport,
-            rttMs = _state.value.rttMs,
+            rttMs = current.rttMs,
             lastError = null
         )
     }

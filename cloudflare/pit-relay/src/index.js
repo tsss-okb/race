@@ -1,3 +1,5 @@
+const MAX_TEAM_VIEWERS = 5;
+
 export class PitRoom {
   constructor(state, env) {
     this.state = state;
@@ -22,6 +24,19 @@ export class PitRoom {
         if (!storedKey) await this.state.storage.put("key", key);
       } else {
         if (!storedKey || storedKey !== key) return json({ error: "forbidden" }, 403);
+      }
+
+      if (role === "viewer") {
+        let viewers = 0;
+        for (const peer of this.state.getWebSockets()) {
+          try {
+            const peerAttachment = peer.deserializeAttachment() || {};
+            if (peerAttachment.role === "viewer") viewers++;
+          } catch (_) {}
+        }
+        if (viewers >= MAX_TEAM_VIEWERS) {
+          return json({ error: "viewer limit reached", limit: MAX_TEAM_VIEWERS }, 429);
+        }
       }
 
       const pair = new WebSocketPair();
@@ -171,7 +186,7 @@ export default {
     }
 
     if (url.pathname === "/health") {
-      return json({ ok: true, service: "RaceLab Pit Relay", transport: "websocket", protocol: 2 });
+      return json({ ok: true, service: "RaceLab Pit Relay", transport: "websocket", protocol: 3, maxTeamViewers: MAX_TEAM_VIEWERS });
     }
 
     return new Response(
