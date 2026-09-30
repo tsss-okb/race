@@ -39,6 +39,10 @@ data class PitTeamSnapshot(
     val pitBestMs: Long? = null,
     val pitCount: Int = 0,
     val pitTrigger: String = "—",
+    val pitLaneActive: Boolean = false,
+    val pitDistanceM: Double? = null,
+    val stintNo: Int = 1,
+    val stintLapNo: Int = 0,
     val lapNo: Int = 0,
     val lapCurrentMs: Long = 0L,
     val lapBestMs: Long? = null,
@@ -247,6 +251,10 @@ class PitTeamClient(private val config: PitTeamConfig) {
             pitBestMs = data.optNullableLong("pitBestMs"),
             pitCount = data.optInt("pitCount", 0),
             pitTrigger = data.optString("pitTrigger", "—"),
+            pitLaneActive = data.optBoolean("pitLaneActive", false),
+            pitDistanceM = data.optNullableDouble("pitDistanceM"),
+            stintNo = data.optInt("stintNo", 1).coerceAtLeast(1),
+            stintLapNo = data.optInt("stintLapNo", 0).coerceAtLeast(0),
             lapNo = data.optInt("lapNo", 0),
             lapCurrentMs = data.optLong("lapCurrentMs", 0L),
             lapBestMs = data.optNullableLong("lapBestMs"),
@@ -283,4 +291,9 @@ class PitTeamClient(private val config: PitTeamConfig) {
 private fun JSONObject.optNullableLong(name: String): Long? {
     if (!has(name) || isNull(name)) return null
     return runCatching { getLong(name) }.getOrNull()
+}
+
+private fun JSONObject.optNullableDouble(name: String): Double? {
+    if (!has(name) || isNull(name)) return null
+    return runCatching { getDouble(name) }.getOrNull()
 }
