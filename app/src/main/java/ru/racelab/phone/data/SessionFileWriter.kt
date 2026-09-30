@@ -9,6 +9,7 @@ import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.canbus.CanFrame
 import ru.racelab.phone.canbus.CanSignalValue
+import ru.racelab.phone.pitlane.RaceProfileRepository
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -27,6 +28,7 @@ class SessionFileWriter(context: Context) {
     private val pitWriter: BufferedWriter
     private var closed = false
     private val startedAtMs = System.currentTimeMillis()
+    private val raceProfile = RaceProfileRepository.load(context)
 
     init {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -150,6 +152,11 @@ class SessionFileWriter(context: Context) {
             .put("sessionId", sessionId)
             .put("startedAt", startedAtMs)
             .put("endedAt", System.currentTimeMillis())
+            .put("teamName", raceProfile.teamName)
+            .put("driverName", raceProfile.driverName)
+            .put("carNumber", raceProfile.carNumber)
+            .put("carName", raceProfile.carName)
+            .put("raceClass", raceProfile.raceClass)
             .put("laps", JSONArray().apply {
                 laps.forEach { lap ->
                     put(JSONObject()
