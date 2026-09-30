@@ -17,9 +17,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.UUID
 
 object InternetPitRelay {
     private const val MAX_WS_QUEUE_BYTES = 16_384L
+    private const val PUBLISH_INTERVAL_MS = 500L
+    private const val MIN_RECONNECT_MS = 700L
+    private const val MAX_RECONNECT_MS = 10_000L
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "RaceLab-Pit-Heartbeat").apply { isDaemon = true }
@@ -28,6 +33,8 @@ object InternetPitRelay {
         Thread(r, "RaceLab-Pit-HTTP-Fallback").apply { isDaemon = true }
     }
     private val httpInFlight = AtomicBoolean(false)
+    private val publishSeq = AtomicLong(0L)
+    private val publisherSession = UUID.randomUUID().toString()
 
     private val httpClient = OkHttpClient.Builder()
         .pingInterval(15, TimeUnit.SECONDS)
@@ -43,6 +50,7 @@ object InternetPitRelay {
     @Volatile private var settings = InternetPitRelaySettings()
     @Volatile private var lastSuccessMs: Long? = null
     @Volatile private var generation = 0L
+    @Volatile private var reconnectDelayMs = MIN_RECONNECT_MS
 
     fun start(context: Context) {
         applySettings(InternetPitRelaySettingsRepository.load(context))
@@ -75,8 +83,8 @@ object InternetPitRelay {
             connectSocket(generation)
             heartbeatTask = scheduler.scheduleWithFixedDelay(
                 { heartbeat() },
-                1_000,
-                1_000,
+                350,
+                PUBLISH_INTERVAL_MS,
                 TimeUnit.MILLISECONDS
             )
         }
@@ -142,6 +150,7 @@ object InternetPitRelay {
                 }
                 socket = webSocket
                 socketOpen = true
+                reconnectDelayMs = MIN_RECONNECT_MS
                 RaceRuntime.setInternetPitRelayStatus(
                     enabled = true,
                     configured = true,
@@ -170,6 +179,7 @@ object InternetPitRelay {
                 if (expectedGeneration != generation) return
                 socketOpen = false
                 socket = null
+                reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MAX_RECONNECT_MS)
                 scheduleReconnect()
             }
 
@@ -177,6 +187,7 @@ object InternetPitRelay {
                 if (expectedGeneration != generation) return
                 socketOpen = false
                 socket = null
+                reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MAX_RECONNECT_MS)
                 RaceRuntime.setInternetPitRelayStatus(
                     enabled = true,
                     configured = true,
@@ -199,7 +210,7 @@ object InternetPitRelay {
                 reconnectTask = null
                 connectSocket(expectedGeneration)
             },
-            700,
+            reconnectDelayMs,
             TimeUnit.MILLISECONDS
         )
     }
@@ -229,6 +240,9 @@ object InternetPitRelay {
         }
 
         return JSONObject()
+            .put("protocol", 3)
+            .put("publisherSession", publisherSession)
+            .put("seq", publishSeq.incrementAndGet())
             .put("serverTimeMs", System.currentTimeMillis())
             .put("pitActive", state.pitTimerActive)
             .put("pitCurrentMs", currentPit)
