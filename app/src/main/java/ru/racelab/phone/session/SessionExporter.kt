@@ -103,12 +103,18 @@ object SessionExporter {
     }
 
     private fun writeJson(session: SessionSummary, out: OutputStream) {
+        val meta = readMeta(session)
         val obj = JSONObject()
-            .put("format", "racelab-session-export-v2")
+            .put("format", "racelab-session-export-v3")
             .put("id", session.id)
             .put("startedAt", session.startedAtMs)
             .put("endedAt", session.endedAtMs)
             .put("trackName", session.trackName)
+            .put("teamName", meta.optString("teamName", ""))
+            .put("driverName", meta.optString("driverName", ""))
+            .put("carNumber", meta.optString("carNumber", ""))
+            .put("carName", meta.optString("carName", ""))
+            .put("raceClass", meta.optString("raceClass", ""))
             .put("gpsSource", session.gpsSource)
             .put("bestLapMs", session.bestLapMs)
             .put("maxSpeedKmh", session.maxSpeedKmh)
