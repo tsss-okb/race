@@ -26,6 +26,8 @@ import ru.racelab.phone.remote.RemoteAction
 import ru.racelab.phone.remote.RemoteControlSettingsRepository
 import ru.racelab.phone.pitlane.PitLaneServer
 import ru.racelab.phone.pitlane.InternetPitRelay
+import ru.racelab.phone.pitlane.RaceProfile
+import ru.racelab.phone.pitlane.RaceProfileRepository
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleGps: BleNmeaManager
@@ -54,17 +56,22 @@ class MainActivity : ComponentActivity() {
     private fun showRoleEntry() {
         setContent {
             RoleEntryScreen(
-                onPilot = { startPilotMode() },
+                initialProfile = RaceProfileRepository.load(this),
+                onPilot = { profile ->
+                    RaceProfileRepository.save(this, profile)
+                    startPilotMode(profile)
+                },
                 onTeam = { startActivity(Intent(this, PitLaneActivity::class.java)) }
             )
         }
     }
 
-    private fun startPilotMode() {
+    private fun startPilotMode(profile: RaceProfile) {
         if (pilotInitialized) return
         pilotInitialized = true
 
         RaceRuntime.setGm204Enabled(RemoteControlSettingsRepository.isGm204Enabled(this))
+        RaceProfileRepository.save(this, profile)
         PitLaneServer.start()
         InternetPitRelay.start(this)
 
