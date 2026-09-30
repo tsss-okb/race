@@ -68,6 +68,9 @@ object RaceRuntime {
     private var pitEntryLine: RaceLine? = null
     private var pitExitLine: RaceLine? = null
     private var pitLaneStartedMs: Long? = null
+    private var stintNo = 1
+    private var stintStartLapCount = 0
+    private var pitVisitOpen = false
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -82,6 +85,7 @@ object RaceRuntime {
         latestPoint = null; previousPoint = null; lastGpsTs = null; gpsHz = 0.0
         preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear(); canSignals.clear(); canFrameCount = 0L; lastCanTs = null; canHz = 0.0
         pitTimer.reset(); pitCanPressed.clear(); miniSectorTracker.reset(); pitLaneStartedMs = null
+        stintNo = 1; stintStartLapCount = 0; pitVisitOpen = false
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -99,6 +103,9 @@ object RaceRuntime {
             pitLaneActive = false,
             pitLaneElapsedMs = 0L,
             pitLaneLastMs = null,
+            pitDistanceM = null,
+            stintNo = 1,
+            stintLapNo = 0,
             pitTimerActive = false,
             pitStartedElapsedMs = null,
             pitLastMs = null,
@@ -243,6 +250,7 @@ object RaceRuntime {
             pitLaneActive = false,
             pitLaneElapsedMs = 0L,
             pitLaneLastMs = null,
+            pitDistanceM = null,
             lastMessage = "PIT IN / PIT OUT очищены"
         )
     }
@@ -267,6 +275,7 @@ object RaceRuntime {
             pitExitPoint = pitExitLine?.let { GeoPoint(it.centerLat, it.centerLon, System.currentTimeMillis()) },
             pitLaneActive = false,
             pitLaneElapsedMs = 0L,
+            pitDistanceM = null,
             currentMiniSector = 0,
             miniSectorDeltaMs = null,
             miniSectorDeltasMs = List(10) { null },
@@ -386,6 +395,7 @@ object RaceRuntime {
                     pitLaneStartedMs = hit
                     pitLaneActive = true
                     pitEntered = true
+                    pitVisitOpen = true
                 }
             } else {
                 val hit = pitExitLine?.let { RaceGeometry.crossing(prev, point, it) }
@@ -395,6 +405,11 @@ object RaceRuntime {
                     pitLaneStartedMs = null
                     pitLaneActive = false
                     pitExited = true
+                    if (pitVisitOpen) {
+                        stintNo += 1
+                        stintStartLapCount = engine.laps.size
+                        pitVisitOpen = false
+                    }
                 }
             }
         }
@@ -402,6 +417,11 @@ object RaceRuntime {
         val pitLaneElapsed = if (pitLaneActive) {
             (point.ts - (pitLaneStartedMs ?: point.ts)).coerceAtLeast(0L)
         } else 0L
+        val pitDistanceM = if (pitLaneActive) {
+            0.0
+        } else {
+            _state.value.pitEntryPoint?.let { RaceGeometry.distance(point, it) }
+        }
 
         val lapElapsed = engine.currentLapStartMs?.let { (point.ts - it).coerceAtLeast(0) } ?: 0L
         val activeLapNo = engine.currentLapStartMs?.let { engine.laps.size + 1 }
@@ -446,6 +466,10 @@ object RaceRuntime {
             pitLaneActive = pitLaneActive,
             pitLaneElapsedMs = pitLaneElapsed,
             pitLaneLastMs = pitLaneLastMs,
+            pitDistanceM = pitDistanceM,
+            stintNo = stintNo,
+            stintLapNo = ((engine.laps.size - stintStartLapCount).coerceAtLeast(0) +
+                if (engine.currentLapStartMs != null) 1 else 0),
             lastMessage = when {
                 pitEntered -> "PIT IN • отсчёт pit lane начат"
                 pitExited -> "PIT OUT • pit lane " + formatLap(pitLaneLastMs ?: 0L)
@@ -663,6 +687,13 @@ object RaceRuntime {
         val event = pitTimer.toggle(SystemClock.elapsedRealtime(), trigger) ?: return
         val snap = event.snapshot
         writer?.writePitEvent(System.currentTimeMillis(), event.type, event.elapsedMs, trigger)
+        if (snap.active && (pitEntryLine == null || pitExitLine == null)) {
+            pitVisitOpen = true
+        } else if (!snap.active && pitVisitOpen && (pitEntryLine == null || pitExitLine == null)) {
+            stintNo += 1
+            stintStartLapCount = engine.laps.size
+            pitVisitOpen = false
+        }
         _state.value = _state.value.copy(
             pitTimerActive = snap.active,
             pitStartedElapsedMs = snap.startedElapsedMs,
@@ -670,6 +701,9 @@ object RaceRuntime {
             pitBestMs = snap.bestMs,
             pitStopCount = snap.count,
             pitLastTrigger = snap.lastTrigger,
+            stintNo = stintNo,
+            stintLapNo = ((engine.laps.size - stintStartLapCount).coerceAtLeast(0) +
+                if (engine.currentLapStartMs != null) 1 else 0),
             lastMessage = if (snap.active) {
                 "PIT TIMER START • " + trigger
             } else {
