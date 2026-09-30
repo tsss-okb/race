@@ -75,15 +75,23 @@ object TeamGarageRepository {
     fun ensurePrimary(context: Context, config: PitTeamConfig): List<TeamCarEntry> {
         if (!config.valid) return load(context)
         val current = load(context).toMutableList()
-        val index = current.indexOfFirst { it.room == config.room && it.relayUrl.trimEnd('/') == config.relayUrl.trimEnd('/') }
+        val index = current.indexOfFirst {
+            it.room == config.room && it.relayUrl.trimEnd('/') == config.relayUrl.trimEnd('/')
+        }
+        val existingPrimary = current.firstOrNull { it.id == "primary" }
         val primary = TeamCarEntry(
-            id = if (index >= 0) current[index].id else "primary",
-            label = if (index >= 0) current[index].label.ifBlank { "Основная машина" } else "Основная машина",
+            id = "primary",
+            label = when {
+                index >= 0 -> current[index].label.ifBlank { "Основная машина" }
+                existingPrimary != null -> existingPrimary.label.ifBlank { "Основная машина" }
+                else -> "Основная машина"
+            },
             relayUrl = config.relayUrl,
             room = config.room,
             key = config.key
         )
-        if (index >= 0) current[index] = primary else current.add(0, primary)
+        current.removeAll { it.id == "primary" || (it.room == config.room && it.relayUrl.trimEnd('/') == config.relayUrl.trimEnd('/')) }
+        current.add(0, primary)
         val result = current.distinctBy { it.relayUrl.trimEnd('/') + "|" + it.room }.take(MAX_CARS)
         save(context, result)
         return result
