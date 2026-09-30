@@ -31,6 +31,8 @@ fun RoleEntryScreen(
     onTeam: () -> Unit
 ) {
     var teamName by remember(initialProfile) { mutableStateOf(initialProfile.teamName) }
+    var driverName by remember(initialProfile) { mutableStateOf(initialProfile.driverName) }
+    var carNumber by remember(initialProfile) { mutableStateOf(initialProfile.carNumber) }
     var carName by remember(initialProfile) { mutableStateOf(initialProfile.carName) }
     var raceClass by remember(initialProfile) { mutableStateOf(initialProfile.raceClass) }
 
@@ -103,6 +105,26 @@ fun RoleEntryScreen(
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(
+                                    value = carNumber,
+                                    onValueChange = { input ->
+                                        carNumber = input.filter { ch -> ch.isLetterOrDigit() || ch == '-' }.take(8)
+                                    },
+                                    label = { Text("№ машины") },
+                                    placeholder = { Text("27") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(.55f)
+                                )
+                                OutlinedTextField(
+                                    value = driverName,
+                                    onValueChange = { driverName = it.take(48) },
+                                    label = { Text("Пилот") },
+                                    placeholder = { Text("Иван") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1.45f)
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
                                     value = carName,
                                     onValueChange = { carName = it.take(64) },
                                     label = { Text("Машина") },
@@ -135,6 +157,8 @@ fun RoleEntryScreen(
                             onPilot(
                                 RaceProfile(
                                     teamName = teamName.trim(),
+                                    driverName = driverName.trim(),
+                                    carNumber = carNumber.trim(),
                                     carName = carName.trim(),
                                     raceClass = raceClass.trim()
                                 )
