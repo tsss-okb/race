@@ -8,6 +8,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,12 +30,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -67,12 +74,12 @@ import ru.racelab.phone.pitlane.InternetPitRelaySettings
 import ru.racelab.phone.pitlane.InternetPitRelaySettingsRepository
 import kotlin.math.abs
 
-private val Bg = Color(0xFF050607)
-private val Panel = Color(0xFF111315)
-private val Green = Color(0xFF58E13E)
-private val Amber = Color(0xFFF2C300)
-private val Red = Color(0xFFFF3B30)
-private val Muted = Color(0xFF989DA2)
+private val Bg = RacingColors.Background
+private val Panel = RacingColors.Surface
+private val Green = RacingColors.Success
+private val Amber = RacingColors.Accent
+private val Red = RacingColors.Error
+private val Muted = RacingColors.Muted
 
 private enum class Tab(val label: String) {
     DASHBOARD("ДАШБОРД"),
@@ -112,16 +119,7 @@ fun RaceLabApp(
         }
     }
 
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Amber,
-            secondary = Green,
-            background = Bg,
-            surface = Panel,
-            onBackground = Color.White,
-            onSurface = Color.White
-        )
-    ) {
+    RacingTheme {
         Scaffold(
             containerColor = Bg,
             contentWindowInsets = WindowInsets.safeDrawing,
@@ -184,44 +182,53 @@ fun RaceLabApp(
 
 @Composable
 private fun CompactTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    val compact = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
     Surface(
-        color = Color(0xFF080A0C),
+        color = RacingColors.Background,
         tonalElevation = 0.dp,
-        border = BorderStroke(1.dp, Color(0xFF202326))
+        border = BorderStroke(1.dp, RacingColors.Border)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                .height(22.dp)
-                .padding(horizontal = 3.dp, vertical = 1.dp),
-            horizontalArrangement = Arrangement.spacedBy(1.dp),
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                .height(if (compact) 48.dp else 64.dp)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Tab.entries.forEach { item ->
+            Tab.entries.forEachIndexed { index, item ->
                 val active = selected == item
-                val glyph = when (item) {
-                    Tab.DASHBOARD -> "◴"
-                    Tab.LAPS -> "⚑"
-                    Tab.ANALYSIS -> "▥"
-                    Tab.DATA -> "⌁"
-                    Tab.SETTINGS -> "⚙"
+                val label = when (item) {
+                    Tab.DASHBOARD -> "ПАНЕЛЬ"
+                    Tab.SETTINGS -> "НАСТР."
+                    else -> item.label
                 }
                 Surface(
                     onClick = { onSelect(item) },
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    shape = RoundedCornerShape(4.dp),
-                    color = if (active) Color(0xFF171A1D) else Color.Transparent
+                    modifier = Modifier.weight(1f).fillMaxHeight().semantics {
+                        this.selected = active
+                        contentDescription = item.label
+                    },
+                    shape = CutCornerShape(6.dp),
+                    color = if (active) RacingColors.AccentSurface else Color.Transparent
                 ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        if (!compact) RacingNavIcon(index, if (active) Amber else Muted)
                         Text(
-                            glyph,
+                            label,
                             color = if (active) Amber else Muted,
-                            fontSize = 10.sp,
-                            lineHeight = 10.sp,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
+                        if (active) Box(Modifier.padding(top = 3.dp).width(18.dp).height(2.dp).background(Amber))
                     }
                 }
             }
@@ -240,6 +247,7 @@ private fun DataHubScreen(
 ) {
     var section by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize().background(Bg)) {
+        RacingSectionHeader("ДАННЫЕ", "TELEMETRY / I/O", Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         Row(
             Modifier.fillMaxWidth().padding(7.dp)
                 .background(Color(0xFF111315), RoundedCornerShape(12.dp))
@@ -249,14 +257,14 @@ private fun DataHubScreen(
             listOf("ВИДЕО", "IMU", "I/O").forEachIndexed { index, label ->
                 Button(
                     onClick = { section = index },
-                    modifier = Modifier.weight(1f).height(38.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (section == index) Amber else Color.Transparent,
                         contentColor = if (section == index) Color.Black else Color.White
                     ),
                     contentPadding = PaddingValues(3.dp)
                 ) {
-                    Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -296,25 +304,25 @@ private fun SettingsHubScreen(
             .padding(9.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("НАСТРОЙКИ RACELAB", color = Amber, fontWeight = FontWeight.Black, fontSize = 15.sp)
+        RacingSectionHeader("НАСТРОЙКИ", "RACE CONTROL")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
                 onClick = { showTracks = true },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1E20), contentColor = Color.White)
-            ) { Text("ТРАССЫ", fontSize = 9.sp) }
+            ) { Text("ТРАССЫ", fontSize = 12.sp) }
             Button(
                 onClick = { RaceRuntime.calibrateImu() },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
-            ) { Text("IMU CAL", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+            ) { Text("IMU CAL", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             OutlinedButton(
                 onClick = onRequestPermissions,
                 modifier = Modifier.weight(1f)
-            ) { Text("ДОСТУП", fontSize = 9.sp) }
+            ) { Text("ДОСТУП", fontSize = 12.sp) }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Автостоп после заезда", color = Color.White, modifier = Modifier.weight(1f), fontSize = 11.sp)
+            Text("Автостоп после заезда", color = Color.White, modifier = Modifier.weight(1f), fontSize = 12.sp)
             Switch(
                 checked = state.autoStopEnabled,
                 onCheckedChange = { RaceRuntime.setAutoStopEnabled(it) }
@@ -329,11 +337,11 @@ private fun SettingsHubScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("HOCO GM204 PROFILE", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text("HOCO GM204 PROFILE", color = Amber, fontWeight = FontWeight.Black, fontSize = 12.sp)
                     Text(
                         "Camera → PIT • OK → Reset • ←/→ вкладки • ↑ Dashboard • ↓ Data",
                         color = Muted,
-                        fontSize = 8.sp
+                        fontSize = 12.sp
                     )
                 }
                 Switch(
@@ -347,25 +355,25 @@ private fun SettingsHubScreen(
             Text(
                 "Устройство: " + state.remoteDeviceName + " • Последняя кнопка: " + state.remoteLastKey,
                 color = Color.White,
-                fontSize = 9.sp
+                fontSize = 12.sp
             )
             HorizontalDivider(color = Color(0xFF282C2F))
 
-            Text("PIT BUTTON", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("PIT BUTTON", color = Amber, fontWeight = FontWeight.Black, fontSize = 12.sp)
             Text(
                 "Последний источник: " + state.pitLastTrigger,
                 color = Color.White,
-                fontSize = 10.sp
+                fontSize = 12.sp
             )
             Text(
                 "BLE/USB HID: F1 • BUTTON 1/A • PLAY/PAUSE • CAMERA • внешние VOL+/VOL−",
                 color = Muted,
-                fontSize = 9.sp
+                fontSize = 12.sp
             )
             Text(
                 "CAN: Данные → CAN → SIGNAL → Channel = PIT_BUTTON. Срабатывание по фронту значения > 0.5.",
                 color = Muted,
-                fontSize = 9.sp
+                fontSize = 12.sp
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(
@@ -376,14 +384,14 @@ private fun SettingsHubScreen(
                     ),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(if (state.pitTimerActive) "PIT STOP" else "PIT START", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(if (state.pitTimerActive) "PIT STOP" else "PIT START", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 OutlinedButton(
                     onClick = { RaceRuntime.resetPitTimer() },
                     enabled = !state.pitTimerActive,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("СБРОС PIT", fontSize = 9.sp)
+                    Text("СБРОС PIT", fontSize = 12.sp)
                 }
             }
         }
@@ -395,11 +403,11 @@ private fun SettingsHubScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("PIT LANE • INTERNET", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text("PIT LANE • INTERNET", color = Amber, fontWeight = FontWeight.Black, fontSize = 12.sp)
                     Text(
                         "● " + state.internetPitRelayStatus,
                         color = if (state.internetPitRelayStatus == "LIVE") Green else if (relayEnabled) Amber else Muted,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -412,7 +420,7 @@ private fun SettingsHubScreen(
             OutlinedTextField(
                 value = relayBaseUrl,
                 onValueChange = { relayBaseUrl = it },
-                label = { Text("Relay URL (https://…)", fontSize = 8.sp) },
+                label = { Text("Relay URL (https://…)", fontSize = 12.sp) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -421,14 +429,14 @@ private fun SettingsHubScreen(
                 OutlinedTextField(
                     value = relayRoom,
                     onValueChange = { relayRoom = it.filter { ch -> ch.isLetterOrDigit() || ch == '-' || ch == '_' } },
-                    label = { Text("ROOM", fontSize = 8.sp) },
+                    label = { Text("ROOM", fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(.45f)
                 )
                 OutlinedTextField(
                     value = relayKey,
                     onValueChange = { relayKey = it.filterNot(Char::isWhitespace) },
-                    label = { Text("KEY", fontSize = 8.sp) },
+                    label = { Text("KEY", fontSize = 12.sp) },
                     singleLine = true,
                     modifier = Modifier.weight(.75f)
                 )
@@ -449,7 +457,7 @@ private fun SettingsHubScreen(
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
                 ) {
-                    Text("СОХРАНИТЬ / ПОДКЛЮЧИТЬ", fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    Text("СОХРАНИТЬ / ПОДКЛЮЧИТЬ", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 OutlinedButton(
                     onClick = {
@@ -462,7 +470,7 @@ private fun SettingsHubScreen(
                     },
                     modifier = Modifier.weight(.62f)
                 ) {
-                    Text("НОВЫЙ ROOM", fontSize = 8.sp)
+                    Text("НОВЫЙ ROOM", fontSize = 12.sp)
                 }
             }
 
@@ -470,14 +478,14 @@ private fun SettingsHubScreen(
                 Text(
                     "TEAM LINK",
                     color = Amber,
-                    fontSize = 8.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         state.internetPitViewerUrl,
                         color = Color.White,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
                         modifier = Modifier.weight(1f),
                         maxLines = 1
                     )
@@ -485,7 +493,7 @@ private fun SettingsHubScreen(
                         onClick = { clipboard.setText(AnnotatedString(state.internetPitViewerUrl)) },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
-                        Text("КОПИЯ", color = Amber, fontSize = 8.sp)
+                        Text("КОПИЯ", color = Amber, fontSize = 12.sp)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -500,7 +508,7 @@ private fun SettingsHubScreen(
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = Amber, contentColor = Color.Black)
                     ) {
-                        Text("ПОДЕЛИТЬСЯ КОМАНДЕ", fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        Text("ПОДЕЛИТЬСЯ КОМАНДЕ", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     OutlinedButton(
                         onClick = {
@@ -510,7 +518,7 @@ private fun SettingsHubScreen(
                         },
                         modifier = Modifier.weight(.7f)
                     ) {
-                        Text("ТЕСТ TEAM", fontSize = 8.sp)
+                        Text("ТЕСТ TEAM", fontSize = 12.sp)
                     }
                 }
             }
@@ -518,7 +526,7 @@ private fun SettingsHubScreen(
             Text(
                 "Основной режим: на втором устройстве установлен тот же RaceLab. TEAM LINK сразу открывает отдельное read-only табло через интернет. Браузер больше не нужен.",
                 color = Muted,
-                fontSize = 8.sp
+                fontSize = 12.sp
             )
         }
 
@@ -530,11 +538,11 @@ private fun SettingsHubScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("PIT LANE SCREEN", color = Amber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                    Text("PIT LANE SCREEN", color = Amber, fontWeight = FontWeight.Black, fontSize = 12.sp)
                     Text(
                         if (state.pitLaneServerRunning) "● LIVE • READ ONLY" else "● OFFLINE",
                         color = if (state.pitLaneServerRunning) Green else Red,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -542,7 +550,7 @@ private fun SettingsHubScreen(
                     onClick = { PitLaneServer.refreshStatus() },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
                 ) {
-                    Text("ОБНОВИТЬ", fontSize = 8.sp)
+                    Text("ОБНОВИТЬ", fontSize = 12.sp)
                 }
             }
 
@@ -550,7 +558,7 @@ private fun SettingsHubScreen(
                 Text(
                     "Включи Wi‑Fi или точку доступа и нажми ОБНОВИТЬ.",
                     color = Muted,
-                    fontSize = 9.sp
+                    fontSize = 12.sp
                 )
             } else {
                 state.pitLaneUrls.take(3).forEach { url ->
@@ -558,7 +566,7 @@ private fun SettingsHubScreen(
                         Text(
                             url,
                             color = Color.White,
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f),
                             maxLines = 1
@@ -567,7 +575,7 @@ private fun SettingsHubScreen(
                             onClick = { clipboard.setText(AnnotatedString(url)) },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                         ) {
-                            Text("КОПИЯ", color = Amber, fontSize = 8.sp)
+                            Text("КОПИЯ", color = Amber, fontSize = 12.sp)
                         }
                     }
                 }
@@ -576,14 +584,14 @@ private fun SettingsHubScreen(
             Text(
                 "Команда подключается к той же Wi‑Fi сети/Hotspot и открывает адрес в браузере. Обновление PIT ≈ 4 Гц.",
                 color = Muted,
-                fontSize = 8.sp
+                fontSize = 12.sp
             )
         }
 
         Text(
             "Диагностика",
             color = Muted,
-            fontSize = 10.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold
         )
         Box(Modifier.fillMaxWidth().height(220.dp)) {
@@ -673,13 +681,13 @@ private fun DriveControlPane(
                     " • PIT OUT " + (if (state.pitExitConfigured) "✓" else "—") +
                     (if (state.pitLaneActive) " • LANE ACTIVE" else ""),
                 color = if (state.pitLaneActive) Red else Muted,
-                fontSize = 11.sp
+                fontSize = 12.sp
             )
             Text(
                 "Track: " + (state.currentTrackName ?: "не выбрана") +
                     (state.nearestTrackName?.let { " • рядом " + it + " " + (state.nearestTrackDistanceM?.let { d -> "%.0f м".format(d) } ?: "") } ?: ""),
                 color = Muted,
-                fontSize = 11.sp
+                fontSize = 12.sp
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -689,7 +697,7 @@ private fun DriveControlPane(
                     checked = state.autoStopEnabled,
                     onCheckedChange = { RaceRuntime.setAutoStopEnabled(it) }
                 )
-                Text(" автостоп", fontSize = 10.sp)
+                Text(" автостоп", fontSize = 12.sp)
             }
         }
         if (showTracks) TrackLibraryDialog(state = state, onDismiss = { showTracks = false })
@@ -732,7 +740,7 @@ private fun DriveControlPane(
                 onClick = { RaceRuntime.clearPitLaneLines() },
                 modifier = Modifier.width(76.dp)
             ) {
-                Text("CLR PIT", fontSize = 9.sp)
+                Text("CLR PIT", fontSize = 12.sp)
             }
         }
         Text("КРУГИ", color = Muted, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -811,8 +819,8 @@ fun TrackLibraryDialog(state: AppState, onDismiss: () -> Unit) {
                         modifier = Modifier.weight(1f)
                     ) { Text("ИМПОРТ") }
                 }
-                if (info.isNotBlank()) Text(info, color = Amber, fontSize = 11.sp)
-                Text("Сохранено: " + tracks.size, color = Muted, fontSize = 11.sp)
+                if (info.isNotBlank()) Text(info, color = Amber, fontSize = 12.sp)
+                Text("Сохранено: " + tracks.size, color = Muted, fontSize = 12.sp)
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     items(tracks, key = { it.id }) { track ->
                         TrackRow(
@@ -859,14 +867,14 @@ private fun TrackRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(track.name, fontWeight = FontWeight.Bold, color = if (selected) Green else Color.White)
-                Text("Sectors: " + track.sectors.size, color = Muted, fontSize = 10.sp)
+                Text("Sectors: " + track.sectors.size, color = Muted, fontSize = 12.sp)
             }
             TextButton(onClick = onLoad) { Text("LOAD") }
             TextButton(onClick = onDelete) { Text("×", color = Red) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            OutlinedButton(onClick = onJson, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY JSON", fontSize = 9.sp) }
-            OutlinedButton(onClick = onGpx, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY GPX", fontSize = 9.sp) }
+            OutlinedButton(onClick = onJson, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY JSON", fontSize = 12.sp) }
+            OutlinedButton(onClick = onGpx, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) { Text("COPY GPX", fontSize = 12.sp) }
         }
     }
 }
@@ -917,7 +925,7 @@ private fun VideoScreen(state: AppState, onRequestPermissions: () -> Unit) {
                     fontSize = 12.sp
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("Во время сессии камера принадлежит foreground recorder.", color = Muted, fontSize = 11.sp)
+                Text("Во время сессии камера принадлежит foreground recorder.", color = Muted, fontSize = 12.sp)
             }
         } else {
             AndroidView(
@@ -962,12 +970,12 @@ private fun VideoScreen(state: AppState, onRequestPermissions: () -> Unit) {
                     .background(Color(0xB0000000))
                     .padding(10.dp)
             ) {
-                Text(message, color = Muted, fontSize = 11.sp)
+                Text(message, color = Muted, fontSize = 12.sp)
                 Text(
                     "AUTO: " + settings.quality.name + " " + settings.fps + "fps " + settings.codec.name +
                         " " + settings.bitrateMbps + "Mbps",
                     color = Color.White,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -1041,7 +1049,7 @@ private fun VideoSettingsDialog(
                 Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Разрешение", color = Muted, fontSize = 11.sp)
+                Text("Разрешение", color = Muted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     VideoChoice("1080p", value.quality == VideoQualityMode.FHD, Modifier.weight(1f)) {
                         value = value.copy(quality = VideoQualityMode.FHD)
@@ -1051,13 +1059,13 @@ private fun VideoSettingsDialog(
                     }
                 }
 
-                Text("FPS", color = Muted, fontSize = 11.sp)
+                Text("FPS", color = Muted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     VideoChoice("30", value.fps == 30, Modifier.weight(1f)) { value = value.copy(fps = 30) }
                     VideoChoice("60", value.fps == 60, Modifier.weight(1f)) { value = value.copy(fps = 60) }
                 }
 
-                Text("Codec", color = Muted, fontSize = 11.sp)
+                Text("Codec", color = Muted, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     VideoCodecMode.entries.forEach { codec ->
                         VideoChoice(codec.name, value.codec == codec, Modifier.weight(1f)) {
@@ -1066,7 +1074,7 @@ private fun VideoSettingsDialog(
                     }
                 }
 
-                Text("Bitrate: " + bitrate.toInt() + " Mbps", color = Muted, fontSize = 11.sp)
+                Text("Bitrate: " + bitrate.toInt() + " Mbps", color = Muted, fontSize = 12.sp)
                 Slider(value = bitrate, onValueChange = { bitrate = it }, valueRange = 8f..100f)
 
                 SettingSwitch("Стабилизация", value.stabilization) { value = value.copy(stabilization = it) }
@@ -1078,7 +1086,7 @@ private fun VideoSettingsDialog(
                 Text(
                     "Если выбранный 4K/60/HEVC профиль не поддерживается камерой, RaceLab автоматически откатится на 1080p30 AUTO.",
                     color = Amber,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
             }
         }
@@ -1095,7 +1103,7 @@ private fun VideoChoice(label: String, selected: Boolean, modifier: Modifier, on
             contentColor = if (selected) Color.Black else Color.White
         ),
         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 4.dp)
-    ) { Text(label, fontSize = 10.sp, maxLines = 1) }
+    ) { Text(label, fontSize = 12.sp, maxLines = 1) }
 }
 
 @Composable
@@ -1169,7 +1177,7 @@ private fun ImuPanel(state: AppState) {
         }
         Text(
             "Калибровка: закрепи телефон, машина стоит ровно; направление выбирает край телефона, смотрящий вперёд.",
-            color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp)
+            color = Muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp)
         )
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             items(state.sensors, key = { it.id }) { SensorRow(it) }
@@ -1229,7 +1237,7 @@ private fun SensorRow(s: SensorSnapshot) {
     Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(s.name, fontWeight = FontWeight.Bold)
-            Text("type ${s.type} • ${s.vendor}", color = Muted, fontSize = 11.sp)
+            Text("type ${s.type} • ${s.vendor}", color = Muted, fontSize = 12.sp)
         }
         Text(s.values.take(4).joinToString("  ") { "%.3f".format(it) }, modifier = Modifier.weight(1.2f), textAlign = TextAlign.End, fontSize = 12.sp)
         Text("%.0f Hz".format(s.hz), color = Green, modifier = Modifier.width(65.dp), textAlign = TextAlign.End, fontSize = 12.sp)
@@ -1263,7 +1271,7 @@ private fun ConnectionPanel(title: String, ui: BleUiState, modifier: Modifier, o
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0D120E), RoundedCornerShape(8.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(d.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text("${d.address} • ${d.rssi} dBm", color = Muted, fontSize = 10.sp)
+                        Text("${d.address} • ${d.rssi} dBm", color = Muted, fontSize = 12.sp)
                     }
                     TextButton(onClick = { onConnect(d.address) }) { Text("CONNECT") }
                 }
@@ -1274,18 +1282,18 @@ private fun ConnectionPanel(title: String, ui: BleUiState, modifier: Modifier, o
 
 @Composable
 private fun MetricCard(title: String, value: String, unit: String, modifier: Modifier, valueColor: Color) {
-    Column(modifier.background(Panel, RoundedCornerShape(14.dp)).padding(12.dp)) {
-        Text(title, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Column(modifier.background(Panel, CutCornerShape(10.dp)).border(1.dp, RacingColors.Border, CutCornerShape(10.dp)).padding(12.dp)) {
+        Text(title, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, color = valueColor, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            if (unit.isNotBlank()) Text("  $unit", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 3.dp))
+            Text(value, color = valueColor, fontFamily = RacingDisplay, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            if (unit.isNotBlank()) Text("  $unit", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 3.dp))
         }
     }
 }
 
 @Composable
 private fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp), content = content)
+    Column(Modifier.fillMaxWidth().background(Panel, CutCornerShape(10.dp)).border(1.dp, RacingColors.Border, CutCornerShape(10.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content)
 }
 
 @Composable

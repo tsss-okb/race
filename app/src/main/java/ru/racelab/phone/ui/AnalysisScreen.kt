@@ -2,10 +2,13 @@ package ru.racelab.phone.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -21,17 +24,24 @@ import ru.racelab.phone.core.LapResult
 import ru.racelab.phone.data.AppState
 import kotlin.math.abs
 
-private val AnalysisPanel = Color(0xFF131A15)
-private val AnalysisGreen = Color(0xFF69FF72)
-private val AnalysisAmber = Color(0xFFFFCA58)
-private val AnalysisRed = Color(0xFFFF6B6B)
-private val AnalysisMuted = Color(0xFF93A096)
+private val AnalysisPanel = RacingColors.Surface
+private val AnalysisGreen = RacingColors.Success
+private val AnalysisAmber = RacingColors.Warning
+private val AnalysisRed = RacingColors.Error
+private val AnalysisMuted = RacingColors.Muted
 
 @Composable
 fun AnalysisScreen(state: AppState) {
     if (state.laps.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(24.dp)) {
-            Text("После первого завершённого круга здесь появится анализ.", color = AnalysisMuted)
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            RacingSectionHeader("АНАЛИЗ КРУГА", "LAP ANALYSIS")
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                RacingEmptyState(
+                    title = "ПОКА НЕТ КРУГОВ",
+                    subtitle = "Завершите первый круг, чтобы сравнить скорость, дельту и траекторию заезда.",
+                    tag = "AWAITING LAP"
+                )
+            }
         }
         return
     }
@@ -50,6 +60,7 @@ fun AnalysisScreen(state: AppState) {
         Modifier.fillMaxSize().padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item { RacingSectionHeader("АНАЛИЗ КРУГА", "LAP ANALYSIS") }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LapSelector("REF", reference, state.laps, Modifier.weight(1f)) { referenceNo = it.no }
@@ -90,7 +101,7 @@ fun AnalysisScreen(state: AppState) {
                 )
             }
         }
-        item { Text("СИЛЬНЫЕ ЗОНЫ ТОРМОЖЕНИЯ / РАЗГОНА", color = AnalysisMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+        item { Text("СИЛЬНЫЕ ЗОНЫ ТОРМОЖЕНИЯ / РАЗГОНА", color = AnalysisMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
         items(zones) { zone ->
             Row(
                 Modifier.fillMaxWidth().background(AnalysisPanel, RoundedCornerShape(10.dp)).padding(10.dp),
@@ -124,16 +135,16 @@ private fun LapSelector(title: String, selected: LapResult, laps: List<LapResult
 
 @Composable
 private fun AnalysisMetric(title: String, value: String, modifier: Modifier, color: Color) {
-    Column(modifier.background(AnalysisPanel, RoundedCornerShape(12.dp)).padding(10.dp)) {
-        Text(title, color = AnalysisMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-        Text(value, color = color, fontSize = 20.sp, fontWeight = FontWeight.Black)
+    Column(modifier.background(AnalysisPanel, CutCornerShape(10.dp)).border(1.dp, RacingColors.Border, CutCornerShape(10.dp)).padding(10.dp)) {
+        Text(title, color = AnalysisMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = color, fontFamily = RacingDisplay, fontSize = 26.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 private fun ChartCard(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().background(AnalysisPanel, RoundedCornerShape(12.dp)).padding(10.dp)) {
-        Text(title, color = AnalysisMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Column(Modifier.fillMaxWidth().background(AnalysisPanel, CutCornerShape(10.dp)).border(1.dp, RacingColors.Border, CutCornerShape(10.dp)).padding(10.dp)) {
+        Text(title, color = AnalysisMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         content()
     }

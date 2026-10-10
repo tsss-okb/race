@@ -33,17 +33,20 @@ import ru.racelab.phone.pitlane.TeamGarageRepository
 import ru.racelab.phone.pitlane.TeamDevicePresence
 import ru.racelab.phone.pitlane.TeamPresenceClient
 import ru.racelab.phone.pitlane.defaultRole
+import ru.racelab.phone.ui.RacingColors
+import ru.racelab.phone.ui.RacingDisplay
+import ru.racelab.phone.ui.RacingTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private val TeamBg = Color(0xFF050607)
-private val TeamPanel = Color(0xFF111315)
-private val TeamBorder = Color(0xFF2B2F33)
-private val TeamYellow = Color(0xFFF2C300)
-private val TeamGreen = Color(0xFF58E13E)
-private val TeamRed = Color(0xFFFF3B30)
-private val TeamWhite = Color(0xFFF2F2F2)
-private val TeamMuted = Color(0xFF989DA2)
+private val TeamBg = RacingColors.Background
+private val TeamPanel = RacingColors.Surface
+private val TeamBorder = RacingColors.Border
+private val TeamYellow = RacingColors.Accent
+private val TeamGreen = RacingColors.Success
+private val TeamRed = RacingColors.Error
+private val TeamWhite = RacingColors.White
+private val TeamMuted = RacingColors.Muted
 
 class PitLaneActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,15 +55,7 @@ class PitLaneActivity : ComponentActivity() {
         val initial = PitTeamConfigRepository.load(this, intent?.data)
 
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = TeamYellow,
-                    background = TeamBg,
-                    surface = TeamPanel,
-                    onBackground = TeamWhite,
-                    onSurface = TeamWhite
-                )
-            ) {
+            RacingTheme {
                 var config by remember { mutableStateOf(initial) }
                 var garage by remember {
                     mutableStateOf(
@@ -203,20 +198,20 @@ private fun PitTeamSetup(
         contentAlignment = Alignment.Center
     ) {
         Card(
-            modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth(),
+            modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().fillMaxHeight(.96f),
             colors = CardDefaults.cardColors(containerColor = TeamPanel),
             border = BorderStroke(1.dp, TeamBorder),
             shape = RoundedCornerShape(18.dp)
         ) {
             Column(
-                Modifier.padding(18.dp),
+                Modifier.padding(18.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("PIT LANE TEAM", color = TeamYellow, fontWeight = FontWeight.Black, fontSize = 24.sp)
+                Text("PIT LANE TEAM", color = TeamWhite, fontFamily = RacingDisplay, fontWeight = FontWeight.Bold, fontSize = 28.sp)
                 Text(
                     "Второй экран команды. Только чтение — управление PIT остаётся у гонщика.",
                     color = TeamMuted,
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 )
 
                 OutlinedTextField(
@@ -244,7 +239,7 @@ private fun PitTeamSetup(
                     )
                 }
 
-                Text("Устройство команды", color = TeamMuted, fontSize = 10.sp)
+                Text("Устройство команды", color = TeamMuted, fontSize = 12.sp)
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -256,7 +251,7 @@ private fun PitTeamSetup(
                                 deviceSlot = slot
                                 deviceRole = defaultRole(slot)
                             },
-                            label = { Text(slot.toString(), fontSize = 9.sp) },
+                            label = { Text(slot.toString(), fontSize = 12.sp) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -354,13 +349,14 @@ private fun TeamGarageScreen(
                     Text(
                         "RACELAB · TEAM GARAGE",
                         color = TeamWhite,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black
+                        fontFamily = RacingDisplay,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
                         "${cars.size} машин · ${onlineCount} онлайн · устройство ${deviceSlot}/5 · $deviceRole",
                         color = TeamMuted,
-                        fontSize = 9.sp
+                        fontSize = 12.sp
                     )
                 }
                 Button(
@@ -372,7 +368,7 @@ private fun TeamGarageScreen(
                     ),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Text("+ МАШИНА", fontSize = 9.sp, fontWeight = FontWeight.Black)
+                    Text("+ МАШИНА", fontSize = 12.sp, fontWeight = FontWeight.Black)
                 }
                 Spacer(Modifier.width(6.dp))
                 TextButton(onClick = onSettings) {
@@ -410,7 +406,7 @@ private fun TeamGarageScreen(
                 Text(
                     "P TEAM — позиция только среди машин вашей команды по лучшему кругу. Для общей позиции гонки нужен внешний тайминг трассы.",
                     color = TeamMuted,
-                    fontSize = 8.sp,
+                    fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
                 )
             }
@@ -511,7 +507,7 @@ private fun TeamGarageCarRow(
                     Text(
                         carInfo,
                         color = TeamMuted,
-                        fontSize = 8.sp,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -520,7 +516,7 @@ private fun TeamGarageCarRow(
                     Text(
                         pitAlert,
                         color = if (pitNow) TeamRed else TeamYellow,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Black
                     )
                     Spacer(Modifier.width(8.dp))
@@ -528,7 +524,7 @@ private fun TeamGarageCarRow(
                 Text(
                     if (live) "● LIVE" else "● OFFLINE",
                     color = if (live) TeamGreen else TeamRed,
-                    fontSize = 9.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
                 if (canDelete) {
@@ -620,11 +616,11 @@ private fun GarageMetric(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(title, color = TeamMuted, fontSize = 6.sp, maxLines = 1)
+            Text(title, color = TeamMuted, fontSize = 12.sp, maxLines = 1)
             Text(
                 value,
                 color = color,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -662,7 +658,7 @@ private fun AddTeamCarDialog(
                 Text(
                     "Для машины сокомандника укажи её ROOM/KEY. После подключения имя пилота, номер, модель и класс подтянутся автоматически.",
                     color = TeamMuted,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
                 OutlinedTextField(
                     value = label,
@@ -700,7 +696,7 @@ private fun AddTeamCarDialog(
                 Text(
                     "Гараж поддерживает до ${TeamGarageRepository.MAX_CARS} машин одновременно.",
                     color = TeamMuted,
-                    fontSize = 8.sp
+                    fontSize = 12.sp
                 )
             }
         },
@@ -1021,7 +1017,7 @@ private fun TeamHeader(
                         Text(
                             driverLabel,
                             color = TeamYellow,
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Black,
                             modifier = Modifier.weight(1f),
                             maxLines = 1,
@@ -1031,7 +1027,7 @@ private fun TeamHeader(
                             onClick = onGarage,
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                         ) {
-                            Text("ГАРАЖ", color = TeamGreen, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                            Text("ГАРАЖ", color = TeamGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         TextButton(
                             onClick = onSettings,
@@ -1044,7 +1040,7 @@ private fun TeamHeader(
                     Text(
                         raceIdentity,
                         color = TeamMuted,
-                        fontSize = 8.sp,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1061,7 +1057,7 @@ private fun TeamHeader(
                                 transport == "WEBSOCKET" -> TeamGreen
                                 else -> TeamYellow
                             },
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Black
                         )
                         Spacer(Modifier.width(8.dp))
@@ -1069,7 +1065,7 @@ private fun TeamHeader(
                             rttMs?.let { "RTT ${it}ms" }
                                 ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
                             color = TeamMuted,
-                            fontSize = 8.sp,
+                            fontSize = 12.sp,
                             modifier = Modifier.weight(1f)
                         )
                         OutlinedButton(
@@ -1077,7 +1073,7 @@ private fun TeamHeader(
                             contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
                             modifier = Modifier.height(28.dp)
                         ) {
-                            Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                            Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1093,7 +1089,7 @@ private fun TeamHeader(
                             Text(
                                 driverLabel,
                                 color = TeamYellow,
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Black,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -1102,7 +1098,7 @@ private fun TeamHeader(
                         Text(
                             raceIdentity,
                             color = TeamMuted,
-                            fontSize = 9.sp,
+                            fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1118,7 +1114,7 @@ private fun TeamHeader(
                             transport == "WEBSOCKET" -> TeamGreen
                             else -> TeamYellow
                         },
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Black
                     )
                     Spacer(Modifier.width(8.dp))
@@ -1126,7 +1122,7 @@ private fun TeamHeader(
                         rttMs?.let { "RTT ${it}ms" }
                             ?: if (receiveAgeMs != Long.MAX_VALUE) "AGE ${receiveAgeMs}ms" else "—",
                         color = TeamMuted,
-                        fontSize = 8.sp
+                        fontSize = 12.sp
                     )
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
@@ -1134,7 +1130,7 @@ private fun TeamHeader(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
-                        Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text("PIT ${targetSeconds}s", color = TeamYellow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(6.dp))
                     OutlinedButton(
@@ -1142,7 +1138,7 @@ private fun TeamHeader(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
-                        Text("ГАРАЖ", color = TeamGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text("ГАРАЖ", color = TeamGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     TextButton(onClick = onSettings) {
                         Text("⚙", color = TeamMuted, fontSize = 16.sp)
@@ -1170,7 +1166,7 @@ private fun TeamDevicesBar(devices: List<TeamDevicePresence>) {
             Text(
                 "$onlineCount/5",
                 color = if (onlineCount > 0) TeamGreen else TeamRed,
-                fontSize = 9.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 modifier = Modifier.width(28.dp)
             )
@@ -1188,13 +1184,13 @@ private fun TeamDevicesBar(devices: List<TeamDevicePresence>) {
                         Text(
                             "●",
                             color = if (device.online) TeamGreen else TeamRed,
-                            fontSize = 7.sp
+                            fontSize = 12.sp
                         )
                         Spacer(Modifier.width(3.dp))
                         Text(
                             "${device.slot} ${device.role}",
                             color = if (device.online) TeamWhite else TeamMuted,
-                            fontSize = 7.sp,
+                            fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1259,6 +1255,7 @@ private fun TeamPitCard(
                 Text(
                     parts.first,
                     color = TeamWhite,
+                    fontFamily = RacingDisplay,
                     fontSize = 72.sp,
                     lineHeight = 72.sp,
                     fontWeight = FontWeight.Black
@@ -1266,6 +1263,7 @@ private fun TeamPitCard(
                 Text(
                     parts.second,
                     color = if (alertVisible) TeamWhite else TeamYellow,
+                    fontFamily = RacingDisplay,
                     fontSize = 72.sp,
                     lineHeight = 72.sp,
                     fontWeight = FontWeight.Black
@@ -1276,7 +1274,7 @@ private fun TeamPitCard(
                 if (active) "ПРОШЛО ${format100(pitMs)} · TARGET ${targetSeconds}s · ${trigger}"
                 else "TARGET ${targetSeconds}s · ${trigger}",
                 color = if (alertVisible) TeamWhite else TeamMuted,
-                fontSize = 9.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -1303,7 +1301,7 @@ private fun PitTargetDialog(
                 Text(
                     "Установи целевое время. За 15 секунд до окончания табло начнёт мигать красным.",
                     color = TeamMuted,
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 )
                 OutlinedTextField(
                     value = value,
@@ -1318,7 +1316,7 @@ private fun PitTargetDialog(
                     listOf(30, 45, 60, 90, 120).forEach { preset ->
                         AssistChip(
                             onClick = { value = preset.toString() },
-                            label = { Text("${preset}s", fontSize = 9.sp) }
+                            label = { Text("${preset}s", fontSize = 12.sp) }
                         )
                     }
                 }
@@ -1361,10 +1359,11 @@ private fun TeamMetric(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(title, color = TeamMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Text(title, color = TeamMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(
                 value,
                 color = color,
+                fontFamily = RacingDisplay,
                 fontSize = 25.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1,
@@ -1392,7 +1391,7 @@ private fun TeamBottomMetric(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(title, color = TeamMuted, fontSize = 7.sp, maxLines = 1)
+            Text(title, color = TeamMuted, fontSize = 12.sp, maxLines = 1)
             Text(
                 value,
                 color = valueColor,

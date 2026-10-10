@@ -28,11 +28,11 @@ import ru.racelab.phone.obd.CustomPid
 import ru.racelab.phone.obd.CustomPidRepository
 import ru.racelab.phone.obd.EvChannel
 
-private val ObdPanel = Color(0xFF131A15)
-private val ObdGreen = Color(0xFF69FF72)
-private val ObdAmber = Color(0xFFFFCA58)
-private val ObdRed = Color(0xFFFF6B6B)
-private val ObdMuted = Color(0xFF93A096)
+private val ObdPanel = RacingColors.Surface
+private val ObdGreen = RacingColors.Success
+private val ObdAmber = RacingColors.Warning
+private val ObdRed = RacingColors.Error
+private val ObdMuted = RacingColors.Muted
 
 @Composable
 fun AdvancedConnectionsScreen(
@@ -80,7 +80,7 @@ private fun ObdTab(label: String, selected: Boolean, modifier: Modifier, onClick
         ),
         contentPadding = PaddingValues(horizontal = 4.dp)
     ) {
-        Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -113,7 +113,7 @@ private fun LinkSection(
                             contentColor = if (state.gnssSourceMode == mode) Color.Black else Color.White
                         ),
                         contentPadding = PaddingValues(horizontal = 3.dp, vertical = 3.dp)
-                    ) { Text(mode.label, fontSize = 8.sp, maxLines = 1) }
+                    ) { Text(mode.label, fontSize = 12.sp, maxLines = 1) }
                 }
             }
             Text(
@@ -122,7 +122,7 @@ private fun LinkSection(
                     " • HDOP " + (state.hdop?.let { "%.2f".format(it) } ?: "—") +
                     " • VDOP " + (state.vdop?.let { "%.2f".format(it) } ?: "—"),
                 color = ObdMuted,
-                fontSize = 10.sp
+                fontSize = 12.sp
             )
         }
 
@@ -158,18 +158,18 @@ private fun UsbGnssPanel(ui: UsbGnssState, manager: UsbNmeaManager) {
         Text(
             ui.status + " • RX " + ui.bytesReceived + " B",
             color = ObdMuted,
-            fontSize = 10.sp
+            fontSize = 12.sp
         )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(
                 onClick = { manager.refresh() },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) { Text("REFRESH", fontSize = 9.sp) }
+            ) { Text("REFRESH", fontSize = 12.sp) }
             Box {
                 OutlinedButton(
                     onClick = { baudMenu = true },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                ) { Text(baud.toString() + " baud", fontSize = 9.sp) }
+                ) { Text(baud.toString() + " baud", fontSize = 12.sp) }
                 DropdownMenu(expanded = baudMenu, onDismissRequest = { baudMenu = false }) {
                     UsbNmeaManager.COMMON_BAUD_RATES.forEach { b ->
                         DropdownMenuItem(
@@ -182,7 +182,7 @@ private fun UsbGnssPanel(ui: UsbGnssState, manager: UsbNmeaManager) {
             OutlinedButton(
                 onClick = { manager.disconnect() },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) { Text("OFF", fontSize = 9.sp) }
+            ) { Text("OFF", fontSize = 12.sp) }
         }
         ui.devices.forEach { d ->
             Row(
@@ -190,16 +190,16 @@ private fun UsbGnssPanel(ui: UsbGnssState, manager: UsbNmeaManager) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(d.name, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text(d.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     Text(
                         "VID " + "%04X".format(d.vendorId) + " PID " + "%04X".format(d.productId) +
                             " • ports " + d.ports,
                         color = ObdMuted,
-                        fontSize = 9.sp
+                        fontSize = 12.sp
                     )
                 }
                 TextButton(onClick = { manager.connect(d.deviceId, baud) }) {
-                    Text(if (ui.connectedDeviceId == d.deviceId) "ON" else "CONNECT", fontSize = 9.sp)
+                    Text(if (ui.connectedDeviceId == d.deviceId) "ON" else "CONNECT", fontSize = 12.sp)
                 }
             }
         }
@@ -219,13 +219,13 @@ private fun CompactDevicePanel(
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Text(title, color = ObdGreen, fontWeight = FontWeight.Black)
-        Text(ui.status, color = ObdMuted, fontSize = 11.sp)
+        Text(ui.status, color = ObdMuted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = scan, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                Text(if (ui.scanning) "SCAN…" else "SCAN", fontSize = 10.sp)
+                Text(if (ui.scanning) "SCAN…" else "SCAN", fontSize = 12.sp)
             }
             OutlinedButton(onClick = disconnect, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                Text("OFF", fontSize = 10.sp)
+                Text("OFF", fontSize = 12.sp)
             }
         }
         ui.devices.take(8).forEach { d ->
@@ -235,9 +235,9 @@ private fun CompactDevicePanel(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(d.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    Text(d.address + " • " + d.rssi + " dBm", color = ObdMuted, fontSize = 9.sp)
+                    Text(d.address + " • " + d.rssi + " dBm", color = ObdMuted, fontSize = 12.sp)
                 }
-                TextButton(onClick = { connect(d.address) }) { Text("CONNECT", fontSize = 9.sp) }
+                TextButton(onClick = { connect(d.address) }) { Text("CONNECT", fontSize = 12.sp) }
             }
         }
     }
@@ -253,7 +253,7 @@ private fun EngineSection(state: AppState) {
         Text(
             "SUPPORTED PID: " + state.supportedObdPids.size,
             color = ObdMuted,
-            fontSize = 11.sp
+            fontSize = 12.sp
         )
         MetricGrid(
             listOf(
@@ -286,7 +286,7 @@ private fun EvSection(state: AppState) {
         Text(
             "EV-каналы заполняются Custom PID профилем конкретного автомобиля.",
             color = ObdMuted,
-            fontSize = 11.sp
+            fontSize = 12.sp
         )
         MetricGrid(
             listOf(
@@ -299,7 +299,7 @@ private fun EvSection(state: AppState) {
             )
         )
         if (state.customObd.isNotEmpty()) {
-            Text("CUSTOM LIVE", color = ObdMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text("CUSTOM LIVE", color = ObdMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             state.customObd.forEach { v ->
                 Row(
                     Modifier.fillMaxWidth().background(ObdPanel, RoundedCornerShape(9.dp)).padding(9.dp),
@@ -321,14 +321,14 @@ private fun MetricGrid(metrics: List<Triple<String, Double?, String>>) {
                 Column(
                     Modifier.weight(1f).background(ObdPanel, RoundedCornerShape(11.dp)).padding(10.dp)
                 ) {
-                    Text(m.first, color = ObdMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(m.first, color = ObdMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Text(
                         m.second?.let { "%.2f".format(it) } ?: "—",
                         color = if (m.second == null) ObdMuted else ObdGreen,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Black
                     )
-                    Text(m.third, color = ObdMuted, fontSize = 9.sp)
+                    Text(m.third, color = ObdMuted, fontSize = 12.sp)
                 }
             }
             if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -371,15 +371,15 @@ private fun CustomPidSection(state: AppState, obd: Elm327Manager) {
                             pid.request + " → " + pid.responsePrefix +
                                 " • x" + pid.scale + " " + (if (pid.offset >= 0) "+" else "") + pid.offset,
                             color = ObdMuted,
-                            fontSize = 9.sp
+                            fontSize = 12.sp
                         )
                         Text(
                             pid.evChannel.name + (live?.let { " • " + "%.3f".format(it.value) + " " + it.unit } ?: ""),
                             color = if (live != null) ObdGreen else ObdAmber,
-                            fontSize = 10.sp
+                            fontSize = 12.sp
                         )
                     }
-                    TextButton(onClick = { editing = pid }) { Text("EDIT", fontSize = 9.sp) }
+                    TextButton(onClick = { editing = pid }) { Text("EDIT", fontSize = 12.sp) }
                     TextButton(
                         onClick = {
                             CustomPidRepository.delete(context, pid.id)
@@ -469,7 +469,7 @@ private fun CustomPidDialog(
                 OutlinedTextField(name, { name = it }, label = { Text("Название") }, singleLine = true)
                 OutlinedTextField(request, { request = it }, label = { Text("Request hex") }, singleLine = true)
                 OutlinedTextField(prefix, { prefix = it }, label = { Text("Response prefix hex") }, singleLine = true)
-                Text("Bytes: " + byteCount, color = ObdMuted, fontSize = 11.sp)
+                Text("Bytes: " + byteCount, color = ObdMuted, fontSize = 12.sp)
                 Slider(
                     value = byteCount.toFloat(),
                     onValueChange = { byteCount = it.toInt().coerceIn(1, 4) },

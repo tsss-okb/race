@@ -3,12 +3,14 @@ package ru.racelab.phone.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,11 +31,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val ArchivePanel = Color(0xFF131A15)
-private val ArchiveGreen = Color(0xFF69FF72)
-private val ArchiveAmber = Color(0xFFFFCA58)
-private val ArchiveRed = Color(0xFFFF6B6B)
-private val ArchiveMuted = Color(0xFF93A096)
+private val ArchivePanel = RacingColors.Surface
+private val ArchiveGreen = RacingColors.Success
+private val ArchiveAmber = RacingColors.Warning
+private val ArchiveRed = RacingColors.Error
+private val ArchiveMuted = RacingColors.Muted
 
 @Composable
 fun SessionsScreen() {
@@ -46,23 +48,27 @@ fun SessionsScreen() {
         sessions = SessionRepository.list(context)
     }
 
-    Column(Modifier.fillMaxSize().padding(9.dp)) {
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("АРХИВ СЕССИЙ", color = ArchiveGreen, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                RacingSectionHeader("АРХИВ СЕССИЙ", "SESSION ARCHIVE")
                 Text(
                     sessions.size.toString() + " сессий • " + formatBytes(sessions.sumOf { it.sizeBytes }),
                     color = ArchiveMuted,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
             }
-            OutlinedButton(onClick = { refresh() }) { Text("ОБНОВИТЬ", fontSize = 9.sp) }
+            OutlinedButton(onClick = { refresh() }) { Text("ОБНОВИТЬ", fontSize = 12.sp) }
         }
         Spacer(Modifier.height(7.dp))
 
         if (sessions.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Завершённые заезды появятся здесь.", color = ArchiveMuted)
+                RacingEmptyState(
+                    title = "АРХИВ ПОКА ПУСТ",
+                    subtitle = "Завершите заезд. Здесь появятся круги, телеметрия и записи видео для разбора сессии.",
+                    tag = "NO SESSIONS"
+                )
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -117,8 +123,9 @@ private fun SessionCard(
     Surface(
         onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = ArchivePanel
+        shape = CutCornerShape(10.dp),
+        color = ArchivePanel,
+        border = BorderStroke(1.dp, RacingColors.Border)
     ) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -128,14 +135,14 @@ private fun SessionCard(
                         fontWeight = FontWeight.Black,
                         color = if (session.bestLapMs != null) ArchiveGreen else Color.White
                     )
-                    Text(formatDate(session.startedAtMs) + " • " + session.id, color = ArchiveMuted, fontSize = 9.sp)
+                    Text(formatDate(session.startedAtMs) + " • " + session.id, color = ArchiveMuted, fontSize = 12.sp)
                 }
                 TextButton(onClick = onDelete) { Text("×", color = ArchiveRed, fontSize = 18.sp) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("LAPS " + session.laps.size, fontSize = 10.sp)
-                Text("BEST " + (session.bestLapMs?.let(::formatLap) ?: "—"), color = ArchiveGreen, fontSize = 10.sp)
-                Text("VMAX " + "%.0f".format(session.maxSpeedKmh), color = ArchiveAmber, fontSize = 10.sp)
+                Text("LAPS " + session.laps.size, fontSize = 12.sp)
+                Text("BEST " + (session.bestLapMs?.let(::formatLap) ?: "—"), color = ArchiveGreen, fontSize = 12.sp)
+                Text("VMAX " + "%.0f".format(session.maxSpeedKmh), color = ArchiveAmber, fontSize = 12.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 DataBadge("GPS", session.hasGps)
@@ -159,7 +166,7 @@ private fun DataBadge(text: String, active: Boolean) {
             )
             .padding(horizontal = 6.dp, vertical = 3.dp),
         color = if (active) ArchiveGreen else ArchiveMuted,
-        fontSize = 8.sp,
+        fontSize = 12.sp,
         fontWeight = FontWeight.Bold
     )
 }
@@ -183,7 +190,7 @@ private fun SessionDetailsDialog(
         title = {
             Column {
                 Text(session.trackName ?: "СЕССИЯ")
-                Text(formatDate(session.startedAtMs), color = ArchiveMuted, fontSize = 10.sp)
+                Text(formatDate(session.startedAtMs), color = ArchiveMuted, fontSize = 12.sp)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("ГОТОВО") } },
@@ -203,25 +210,25 @@ private fun SessionDetailsDialog(
                 Text(
                     "GPS " + (session.gpsSource ?: "—") + " • " + formatBytes(session.sizeBytes),
                     color = ArchiveMuted,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
 
                 if (session.laps.isNotEmpty()) {
-                    Text("КРУГИ", color = ArchiveMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("КРУГИ", color = ArchiveMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     session.laps.take(12).forEach { lap ->
                         Row(
                             Modifier.fillMaxWidth().background(ArchivePanel, RoundedCornerShape(8.dp)).padding(7.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("#" + lap.no, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                            Text(formatLap(lap.timeMs), color = if (lap.timeMs == session.bestLapMs) ArchiveGreen else Color.White, fontSize = 10.sp)
-                            Text("%.0f km/h".format(lap.maxSpeedKmh), color = ArchiveMuted, fontSize = 9.sp)
+                            Text("#" + lap.no, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text(formatLap(lap.timeMs), color = if (lap.timeMs == session.bestLapMs) ArchiveGreen else Color.White, fontSize = 12.sp)
+                            Text("%.0f km/h".format(lap.maxSpeedKmh), color = ArchiveMuted, fontSize = 12.sp)
                         }
                     }
                 }
 
                 if (session.videoRefs.isNotEmpty()) {
-                    Text("ВИДЕО", color = ArchiveMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("ВИДЕО", color = ArchiveMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     session.videoRefs.take(8).forEach { ref ->
                         OutlinedButton(
                             onClick = {
@@ -235,7 +242,7 @@ private fun SessionDetailsDialog(
                                 }.onFailure { status = "Не удалось открыть видео" }
                             },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text(ref.name, fontSize = 9.sp, maxLines = 1) }
+                        ) { Text(ref.name, fontSize = 12.sp, maxLines = 1) }
                     }
                 }
 
@@ -245,11 +252,11 @@ private fun SessionDetailsDialog(
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = ArchiveGreen, contentColor = Color.Black)
                     ) {
-                        Text("АНАЛИЗ КРУГОВ REF / CMP", fontSize = 9.sp, fontWeight = FontWeight.Black)
+                        Text("АНАЛИЗ КРУГОВ REF / CMP", fontSize = 12.sp, fontWeight = FontWeight.Black)
                     }
                 }
 
-                Text("ЭКСПОРТ → Downloads/RaceLab", color = ArchiveMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text("ЭКСПОРТ → Downloads/RaceLab", color = ArchiveMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 SessionExportFormat.entries.chunked(3).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         row.forEach { format ->
@@ -272,7 +279,7 @@ private fun SessionDetailsDialog(
                                 },
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 5.dp)
-                            ) { Text(format.name, fontSize = 8.sp) }
+                            ) { Text(format.name, fontSize = 12.sp) }
                         }
                         repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
@@ -284,10 +291,10 @@ private fun SessionDetailsDialog(
                             onClick = { SessionExporter.share(context, exp) },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = ArchiveGreen, contentColor = Color.Black)
-                        ) { Text("ПОДЕЛИТЬСЯ " + exp.displayName, fontSize = 9.sp) }
+                        ) { Text("ПОДЕЛИТЬСЯ " + exp.displayName, fontSize = 12.sp) }
                     }
                 }
-                if (status.isNotBlank()) Text(status, color = ArchiveAmber, fontSize = 9.sp)
+                if (status.isNotBlank()) Text(status, color = ArchiveAmber, fontSize = 12.sp)
 
                 TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
                     Text("УДАЛИТЬ СЕССИЮ", color = ArchiveRed)
@@ -352,7 +359,7 @@ private fun SessionDetailsDialog(
 @Composable
 private fun ArchiveMetric(title: String, value: String, modifier: Modifier, color: Color) {
     Column(modifier.background(ArchivePanel, RoundedCornerShape(10.dp)).padding(8.dp)) {
-        Text(title, color = ArchiveMuted, fontSize = 8.sp)
+        Text(title, color = ArchiveMuted, fontSize = 12.sp)
         Text(value, color = color, fontWeight = FontWeight.Black, fontSize = 16.sp)
     }
 }

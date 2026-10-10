@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,12 +18,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.racelab.phone.pitlane.RaceProfile
 
-private val EntryBg = Color(0xFF050607)
-private val EntryPanel = Color(0xFF111315)
-private val EntryBorder = Color(0xFF2B2F33)
-private val EntryYellow = Color(0xFFF2C300)
-private val EntryGreen = Color(0xFF58E13E)
-private val EntryMuted = Color(0xFF989DA2)
+private val EntryBg = RacingColors.Background
+private val EntryPanel = RacingColors.Surface
+private val EntryBorder = RacingColors.Border
+private val EntryYellow = RacingColors.Accent
+private val EntryMuted = RacingColors.Muted
 
 @Composable
 fun RoleEntryScreen(
@@ -36,16 +36,7 @@ fun RoleEntryScreen(
     var carName by remember(initialProfile) { mutableStateOf(initialProfile.carName) }
     var raceClass by remember(initialProfile) { mutableStateOf(initialProfile.raceClass) }
 
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = EntryYellow,
-            secondary = EntryGreen,
-            background = EntryBg,
-            surface = EntryPanel,
-            onBackground = Color.White,
-            onSurface = Color.White
-        )
-    ) {
+    RacingTheme {
         Box(
             Modifier
                 .fillMaxSize()
@@ -58,32 +49,41 @@ fun RoleEntryScreen(
                 modifier = Modifier.widthIn(max = 780.dp).fillMaxWidth().fillMaxHeight(0.96f),
                 colors = CardDefaults.cardColors(containerColor = EntryPanel),
                 border = BorderStroke(1.dp, EntryBorder),
-                shape = RoundedCornerShape(20.dp)
+                shape = CutCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        RacingWordmark(size = 44)
+                        Text(
+                            "RACE\nCONTROL",
+                            color = EntryMuted,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            letterSpacing = 1.sp,
+                            textAlign = TextAlign.End
+                        )
+                    }
                     Text(
-                        "RACELAB",
-                        color = EntryYellow,
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 2.sp
+                        "Телеметрия. Тайминг. Контроль заезда.",
+                        modifier = Modifier.fillMaxWidth(),
+                        color = EntryMuted,
+                        fontSize = 14.sp
                     )
-                    Text(
-                        "Выберите режим работы",
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    HorizontalDivider(color = EntryBorder, modifier = Modifier.padding(vertical = 4.dp))
 
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        color = Color(0xFF0C0E10),
+                        color = RacingColors.Background,
                         border = BorderStroke(1.dp, EntryBorder),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = CutCornerShape(10.dp)
                     ) {
                         Column(
                             Modifier.padding(12.dp),
@@ -91,9 +91,10 @@ fun RoleEntryScreen(
                         ) {
                             Text(
                                 "ПРОФИЛЬ ЗАЕЗДА",
-                                color = EntryYellow,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 11.sp
+                                color = RacingColors.White,
+                                fontFamily = RacingDisplay,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp
                             )
                             OutlinedTextField(
                                 value = teamName,
@@ -144,7 +145,8 @@ fun RoleEntryScreen(
                             Text(
                                 "Эти данные сохраняются и передаются на все командные экраны вместе с телеметрией.",
                                 color = EntryMuted,
-                                fontSize = 9.sp
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp
                             )
                         }
                     }
@@ -153,6 +155,7 @@ fun RoleEntryScreen(
                         title = "ПИЛОТ",
                         subtitle = "GPS · камера · OBD/CAN · PIT · GSM телеметрия",
                         accent = EntryYellow,
+                        primary = true,
                         onClick = {
                             onPilot(
                                 RaceProfile(
@@ -168,14 +171,15 @@ fun RoleEntryScreen(
                     RoleButton(
                         title = "КОМАНДА",
                         subtitle = "PIT · круги · скорость · дельта · до 5 устройств",
-                        accent = EntryGreen,
+                        accent = EntryYellow,
                         onClick = onTeam
                     )
 
                     Text(
                         "Командный режим не запускает GPS, камеру и OBD на этом устройстве.",
                         color = EntryMuted,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -189,15 +193,17 @@ private fun RoleButton(
     title: String,
     subtitle: String,
     accent: Color,
+    primary: Boolean = false,
     onClick: () -> Unit
 ) {
+    val textColor = if (primary) RacingColors.Background else RacingColors.White
     Button(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 76.dp),
+        shape = CutCornerShape(9.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0xFF171A1D),
-            contentColor = Color.White
+            containerColor = if (primary) accent else RacingColors.Raised,
+            contentColor = textColor
         ),
         border = BorderStroke(1.dp, accent),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp)
@@ -208,10 +214,10 @@ private fun RoleButton(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
-                Text(subtitle, color = EntryMuted, fontSize = 9.sp)
+                Text(title, color = textColor, fontFamily = RacingDisplay, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(subtitle, color = if (primary) textColor.copy(alpha = .80f) else EntryMuted, fontSize = 12.sp, lineHeight = 17.sp)
             }
-            Text("›", color = accent, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+            Text("›", color = if (primary) textColor else accent, fontSize = 32.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

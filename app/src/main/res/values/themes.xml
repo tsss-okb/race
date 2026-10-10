@@ -2,8 +2,8 @@
     <style name="Theme.RaceLab" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#0B0F0C</item>
-        <item name="android:navigationBarColor">#0B0F0C</item>
-        <item name="android:colorAccent">#66FF66</item>
+        <item name="android:statusBarColor">#090B10</item>
+        <item name="android:navigationBarColor">#090B10</item>
+        <item name="android:colorAccent">#FF5E52</item>
     </style>
 </resources>

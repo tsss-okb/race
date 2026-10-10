@@ -4,8 +4,13 @@ import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,15 +30,15 @@ import ru.racelab.phone.data.RaceRuntime
 import ru.racelab.phone.diag.DiagnosticsProvider
 import kotlin.math.abs
 
-private val GtBg = Color(0xFF050607)
-private val GtPanelTop = Color(0xFF171A1D)
-private val GtPanelBottom = Color(0xFF0B0D0F)
-private val GtBorder = Color(0xFF2B2F33)
-private val GtYellow = Color(0xFFF2C300)
-private val GtGreen = Color(0xFF58E13E)
-private val GtRed = Color(0xFFFF3B30)
-private val GtWhite = Color(0xFFF2F2F2)
-private val GtMuted = Color(0xFF989DA2)
+private val GtBg = RacingColors.Background
+private val GtPanelTop = RacingColors.Raised
+private val GtPanelBottom = RacingColors.Surface
+private val GtBorder = RacingColors.Border
+private val GtYellow = RacingColors.Warning
+private val GtGreen = RacingColors.Success
+private val GtRed = RacingColors.Error
+private val GtWhite = RacingColors.White
+private val GtMuted = RacingColors.Muted
 
 @Composable
 fun GT3DashboardScreen(
@@ -80,7 +85,7 @@ fun GT3DashboardScreen(
                 onStop = onStop
             )
         } else {
-            GT3LandscapeDashboard(
+            GT3RacingLandscapeDashboard(
                 state = state,
                 battery = battery,
                 pitElapsedMs = pitElapsedMs,
@@ -103,16 +108,35 @@ private fun GT3PortraitDashboard(
         Modifier
             .fillMaxSize()
             .background(GtBg)
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            RacingWordmark(Modifier.weight(1f), size = 32)
+            RacingStatusChip(
+                when {
+                    state.sessionActive || state.videoRecording -> "REC"
+                    state.armed -> "ARM"
+                    else -> "ГОТОВ"
+                },
+                when {
+                    state.sessionActive || state.videoRecording -> GtRed
+                    state.armed -> GtYellow
+                    else -> GtGreen
+                }
+            )
+        }
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
         GT3LandscapeRpmStrip(
             rpm = state.obd.rpm,
-            modifier = Modifier.fillMaxWidth().height(46.dp)
+            modifier = Modifier.fillMaxWidth().height(40.dp)
         )
 
         Row(
-            Modifier.fillMaxWidth().height(57.dp),
+            Modifier.fillMaxWidth().height(82.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             GT3LandscapeLapCard(
@@ -120,7 +144,7 @@ private fun GT3PortraitDashboard(
                 gtFmt(state.lapElapsedMs),
                 Modifier.weight(1f),
                 GtWhite,
-                GtYellow
+                RacingColors.Accent
             )
             GT3LandscapeLapCard(
                 "ЛУЧШИЙ",
@@ -132,7 +156,7 @@ private fun GT3PortraitDashboard(
         }
 
         Row(
-            Modifier.fillMaxWidth().height(53.dp),
+            Modifier.fillMaxWidth().height(68.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             GT3LandscapeLapCard(
@@ -164,17 +188,17 @@ private fun GT3PortraitDashboard(
 
         GT3MiniSectorStrip(
             state = state,
-            modifier = Modifier.fillMaxWidth().height(27.dp)
+            modifier = Modifier.fillMaxWidth().height(32.dp)
         )
 
         GT3LandscapeStatus(
             state = state,
             battery = battery,
-            modifier = Modifier.fillMaxWidth().height(46.dp)
+            modifier = Modifier.fillMaxWidth().height(64.dp)
         )
 
         Row(
-            Modifier.fillMaxWidth().height(124.dp),
+            Modifier.fillMaxWidth().height(148.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             GT3LandscapeSpeed(
@@ -190,11 +214,11 @@ private fun GT3PortraitDashboard(
 
         GT3TrackMap(
             state = state,
-            modifier = Modifier.fillMaxWidth().weight(1f)
+            modifier = Modifier.fillMaxWidth().height(170.dp)
         )
 
         Row(
-            Modifier.fillMaxWidth().height(66.dp),
+            Modifier.fillMaxWidth().height(80.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             GT3ReadableMetric(
@@ -226,36 +250,37 @@ private fun GT3PortraitDashboard(
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
+        }
 
         Row(
-            Modifier.fillMaxWidth().height(38.dp),
+            Modifier.fillMaxWidth().height(48.dp),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             GT3RoundAction(
                 label = if (state.pitTimerActive) "PIT ■" else "PIT ▶",
                 onClick = { RaceRuntime.togglePitTimer("SCREEN") },
-                modifier = Modifier.width(68.dp).fillMaxHeight(),
+                modifier = Modifier.width(72.dp).fillMaxHeight(),
                 active = state.pitTimerActive
             )
             Button(
                 onClick = if (state.sessionActive) onStop else onStart,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                shape = RoundedCornerShape(18.dp),
+                shape = CutCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF101214),
-                    contentColor = if (state.sessionActive) GtRed else GtYellow
+                    containerColor = if (state.sessionActive) RacingColors.AccentSurface else RacingColors.Accent,
+                    contentColor = if (state.sessionActive) GtRed else GtBg
                 ),
                 border = BorderStroke(
                     1.dp,
-                    if (state.sessionActive) GtRed.copy(alpha = .70f) else GtYellow.copy(alpha = .70f)
+                    if (state.sessionActive) GtRed else RacingColors.Accent
                 ),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp)
             ) {
                 Text(
                     if (state.sessionActive) "■ СТОП" else if (state.startConfigured) "● ARM / СТАРТ" else "● СТАРТ",
                     fontWeight = FontWeight.Black,
-                    fontSize = 9.sp,
+                    fontSize = 12.sp,
                     maxLines = 1
                 )
             }
@@ -264,6 +289,102 @@ private fun GT3PortraitDashboard(
                 onClick = { RaceRuntime.setStartLineHere() },
                 modifier = Modifier.width(64.dp).fillMaxHeight()
             )
+        }
+    }
+}
+
+@Composable
+private fun GT3RacingLandscapeDashboard(
+    state: AppState,
+    battery: Int,
+    pitElapsedMs: Long,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(GtBg).padding(8.dp)) {
+        val compact = maxHeight < 320.dp
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth().height(36.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RacingWordmark(size = 26)
+                GT3LandscapeRpmStrip(state.obd.rpm, Modifier.weight(1f).fillMaxHeight())
+                RacingStatusChip(
+                    if (state.latestPoint != null) "GPS %.1f Hz".format(state.gpsHz) else "GPS —",
+                    if (state.latestPoint != null) GtGreen else GtMuted
+                )
+                Text(
+                    if (battery >= 0) "$battery%" else "—%",
+                    color = if (battery in 0..15) GtRed else GtMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GT3LandscapeSpeed(state.speedKmh, Modifier.weight(1f).fillMaxWidth())
+                    Row(Modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        GT3ReadableMetric("МАСЛО", state.obd.oilTempC?.let { "%.0f".format(it) } ?: "—", "°C", temperatureColor(state.obd.oilTempC), Modifier.weight(1f).fillMaxHeight())
+                        GT3ReadableMetric("ОЖ", state.obd.coolantC?.let { "%.0f".format(it) } ?: "—", "°C", temperatureColor(state.obd.coolantC), Modifier.weight(1f).fillMaxHeight())
+                    }
+                    Row(Modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        GT3ReadableMetric("LAT G", "%+.2f".format(state.lateralG), "", GtWhite, Modifier.weight(1f).fillMaxHeight())
+                        GT3ReadableMetric("LONG G", "%+.2f".format(state.longitudinalG), "", GtWhite, Modifier.weight(1f).fillMaxHeight())
+                    }
+                }
+                Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth().height(if (compact) 56.dp else 76.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        GT3LandscapeLapCard("ТЕКУЩИЙ", gtFmt(state.lapElapsedMs), Modifier.weight(1f), GtWhite, RacingColors.Accent)
+                        GT3LandscapeLapCard("ЛУЧШИЙ", gtFmt(state.bestLapMs), Modifier.weight(1f), GtWhite, Color.Transparent)
+                    }
+                    Row(Modifier.fillMaxWidth().height(if (compact) 56.dp else 68.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        GT3LandscapeLapCard("ДЕЛЬТА", gtDelta(state.deltaMs), Modifier.weight(.85f), gtDeltaColor(state.deltaMs), Color.Transparent)
+                        GT3LandscapeLapCard("ПРОГНОЗ", gtFmt(state.predictedLapMs), Modifier.weight(1.15f), if (state.predictedLapMs != null && state.bestLapMs != null && state.predictedLapMs <= state.bestLapMs) GtGreen else GtWhite, Color.Transparent)
+                        GT3LandscapeLapCard("КРУГ", (state.laps.size + if (state.lapElapsedMs > 0L) 1 else 0).toString(), Modifier.weight(.45f), GtWhite, Color.Transparent)
+                    }
+                    GT3MiniSectorStrip(state, Modifier.fillMaxWidth().height(if (compact) 24.dp else 32.dp))
+                    if (!compact) {
+                        Text(
+                            state.currentTrackName ?: "ТРАССА НЕ ВЫБРАНА",
+                            color = GtMuted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Column(Modifier.weight(1.5f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GT3TrackMap(state, Modifier.weight(1f).fillMaxWidth())
+                    GT3PitStrip(state, pitElapsedMs, Modifier.fillMaxWidth().height(68.dp))
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().height(48.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GT3RoundAction(if (state.pitTimerActive) "PIT СТОП" else "PIT СТАРТ", { RaceRuntime.togglePitTimer("SCREEN") }, Modifier.width(112.dp).fillMaxHeight(), state.pitTimerActive)
+                Button(
+                    onClick = if (state.sessionActive) onStop else onStart,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    shape = CutCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.sessionActive) RacingColors.AccentSurface else RacingColors.Accent,
+                        contentColor = if (state.sessionActive) GtRed else GtBg
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    Text(
+                        if (state.sessionActive) "СТОП ЗАПИСИ" else if (state.startConfigured) "ARM / СТАРТ" else "НАЧАТЬ СЕССИЮ",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                }
+                GT3RoundAction("ЛИНИЯ СТАРТА", { RaceRuntime.setStartLineHere() }, Modifier.width(142.dp).fillMaxHeight())
+            }
         }
     }
 }
@@ -451,7 +572,7 @@ private fun GT3LandscapeDashboard(
                         else -> "●  НАЧАТЬ СЕССИЮ"
                     },
                     fontWeight = FontWeight.Black,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -479,7 +600,7 @@ private fun GT3LandscapeStatus(state: AppState, battery: Int, modifier: Modifier
                         if (state.latestPoint != null) "● GPS LIVE" else "○ GPS",
                         color = if (state.latestPoint != null) GtGreen else GtMuted,
                         fontWeight = FontWeight.Black,
-                        fontSize = 11.sp
+                        fontSize = 12.sp
                     )
                 }
                 Text(
@@ -487,7 +608,8 @@ private fun GT3LandscapeStatus(state: AppState, battery: Int, modifier: Modifier
                         "   %.1f Hz".format(state.gpsHz) +
                         "   SAT " + state.satellites,
                     color = GtWhite,
-                    fontSize = 9.sp,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -496,7 +618,8 @@ private fun GT3LandscapeStatus(state: AppState, battery: Int, modifier: Modifier
                     "SENS " + state.activeSensorCount + "/" + state.availableSensorCount +
                         "   " + state.gpsSource.uppercase(),
                     color = GtMuted,
-                    fontSize = 8.sp,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -517,14 +640,14 @@ private fun GT3LandscapeStatus(state: AppState, battery: Int, modifier: Modifier
                         state.armed -> GtYellow
                         else -> GtGreen
                     },
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Black,
                     maxLines = 1
                 )
                 Text(
                     if (battery >= 0) "BAT $battery%" else "BAT —",
                     color = if (battery in 0..15) GtRed else GtWhite,
-                    fontSize = 10.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
@@ -543,14 +666,15 @@ private fun GT3LandscapeLapCard(
 ) {
     GT3Panel(modifier, corner = 10) {
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp),
+            Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 3.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Text(
                 title,
                 color = GtMuted,
-                fontSize = 8.sp,
+                fontSize = 12.sp,
+                lineHeight = 15.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -558,9 +682,10 @@ private fun GT3LandscapeLapCard(
             Text(
                 value,
                 color = valueColor,
-                fontSize = 17.sp,
-                lineHeight = 18.sp,
-                fontWeight = FontWeight.Bold,
+                fontFamily = RacingDisplay,
+                fontSize = 28.sp,
+                lineHeight = 31.sp,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Clip
             )
@@ -581,7 +706,7 @@ private fun GT3LandscapeRpmStrip(rpm: Double?, modifier: Modifier) {
             Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("RPM", color = GtMuted, fontSize = 8.sp, fontWeight = FontWeight.Black)
+            Text("RPM", color = GtMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(8.dp))
             Canvas(Modifier.weight(1f).height(17.dp)) {
                 val gap = 3f
@@ -613,8 +738,9 @@ private fun GT3LandscapeRpmStrip(rpm: Double?, modifier: Modifier) {
                     ratio >= .75 -> GtYellow
                     else -> GtWhite
                 },
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black,
+                fontFamily = RacingDisplay,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1
             )
         }
@@ -624,21 +750,26 @@ private fun GT3LandscapeRpmStrip(rpm: Double?, modifier: Modifier) {
 @Composable
 private fun GT3LandscapeSpeed(speedKmh: Double, modifier: Modifier) {
     GT3Panel(modifier, corner = 10) {
-        Column(
-            Modifier.fillMaxSize().padding(6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text("СКОРОСТЬ", color = GtMuted, fontSize = 8.sp, maxLines = 1)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val compact = maxHeight < 90.dp
+            val valueSize = (maxHeight.value - if (compact) 24f else 44f).coerceIn(24f, 64f)
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 5.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+            Text(if (compact) "СКОРОСТЬ · км/ч" else "СКОРОСТЬ", color = GtMuted, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1)
             Text(
                 speedKmh.toInt().toString(),
-                color = GtYellow,
-                fontSize = 48.sp,
-                lineHeight = 48.sp,
-                fontWeight = FontWeight.Black,
+                color = GtWhite,
+                fontFamily = RacingDisplay,
+                fontSize = valueSize.sp,
+                lineHeight = valueSize.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1
             )
-            Text("км/ч", color = GtMuted, fontSize = 8.sp, maxLines = 1)
+            if (!compact) Text("км/ч", color = GtMuted, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1)
+            }
         }
     }
 }
@@ -654,29 +785,33 @@ private fun GT3LandscapePit(state: AppState, elapsedMs: Long, modifier: Modifier
             Text(
                 if (state.pitTimerActive) "PIT • ACTIVE" else "PIT STOP",
                 color = if (state.pitTimerActive) GtYellow else GtMuted,
-                fontSize = 8.sp,
+                fontSize = 12.sp,
+                lineHeight = 15.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1
             )
             Text(
                 pitFmt(elapsedMs),
                 color = if (state.pitTimerActive) GtYellow else GtWhite,
-                fontSize = 24.sp,
-                lineHeight = 25.sp,
-                fontWeight = FontWeight.Black,
+                fontFamily = RacingDisplay,
+                fontSize = 32.sp,
+                lineHeight = 35.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1
             )
             Spacer(Modifier.height(3.dp))
             Text(
                 "LAST " + (state.pitLastMs?.let(::pitFmtShort) ?: "—"),
                 color = GtWhite,
-                fontSize = 7.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 maxLines = 1
             )
             Text(
                 "BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"),
                 color = GtGreen,
-                fontSize = 7.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 maxLines = 1
             )
             Text(
@@ -686,13 +821,15 @@ private fun GT3LandscapePit(state: AppState, elapsedMs: Long, modifier: Modifier
                     "LANE LAST " + (state.pitLaneLastMs?.let(::pitFmtShort) ?: "—")
                 },
                 color = if (state.pitLaneActive) GtRed else GtMuted,
-                fontSize = 6.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 maxLines = 1
             )
             Text(
                 state.pitLastTrigger.take(20),
                 color = GtMuted,
-                fontSize = 6.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -711,14 +848,14 @@ private fun GT3StatusBar(state: AppState, battery: Int) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("GPS", color = if (state.latestPoint != null) GtGreen else GtMuted, fontWeight = FontWeight.Black, fontSize = 14.sp)
                     Spacer(Modifier.width(5.dp))
-                    Text("▮▮▮", color = if (state.latestPoint != null) GtGreen else GtMuted, fontSize = 11.sp)
+                    Text("▮▮▮", color = if (state.latestPoint != null) GtGreen else GtMuted, fontSize = 12.sp)
                 }
                 Text(
                     "±" + (state.accuracyM?.let { "%.1f м".format(it) } ?: "—") +
                         " • " + "%.1f Hz".format(state.gpsHz) +
                         " • SAT " + state.satellites,
                     color = GtMuted,
-                    fontSize = 8.sp
+                    fontSize = 12.sp
                 )
             }
 
@@ -729,7 +866,7 @@ private fun GT3StatusBar(state: AppState, battery: Int) {
                     Text(
                         if (state.sessionActive) "ЗАПИСЬ" else if (state.armed) "ARM" else "ГОТОВ",
                         color = GtWhite,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -740,7 +877,7 @@ private fun GT3StatusBar(state: AppState, battery: Int) {
                         else -> state.currentTrackName ?: "RaceLab"
                     },
                     color = GtMuted,
-                    fontSize = 8.sp,
+                    fontSize = 12.sp,
                     maxLines = 1
                 )
             }
@@ -758,7 +895,7 @@ private fun GT3StatusBar(state: AppState, battery: Int) {
                 Text(
                     state.gpsSource.uppercase(),
                     color = GtMuted,
-                    fontSize = 8.sp
+                    fontSize = 12.sp
                 )
             }
         }
@@ -791,7 +928,7 @@ private fun GT3LapCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(title, color = GtMuted, fontSize = 8.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(title, color = GtMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             Spacer(Modifier.height(3.dp))
             Text(value, color = color, fontSize = 21.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             if (underline != Color.Transparent) {
@@ -817,19 +954,19 @@ private fun GT3PitStrip(
                 Text(
                     "PIT STOP",
                     color = if (state.pitTimerActive) GtYellow else GtMuted,
-                    fontSize = 9.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
                 Text(
                     if (state.pitTimerActive) "ACTIVE" else "READY",
                     color = if (state.pitTimerActive) GtYellow else GtGreen,
-                    fontSize = 8.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     state.pitLastTrigger.take(18),
                     color = GtMuted,
-                    fontSize = 6.sp,
+                    fontSize = 12.sp,
                     maxLines = 1
                 )
             }
@@ -848,7 +985,7 @@ private fun GT3PitStrip(
                 Text(
                     if (state.pitTimerActive) "НАЖМИ КНОПКУ РУЛЯ ДЛЯ STOP" else "КНОПКА РУЛЯ → START",
                     color = GtMuted,
-                    fontSize = 7.sp,
+                    fontSize = 12.sp,
                     maxLines = 1
                 )
             }
@@ -857,16 +994,16 @@ private fun GT3PitStrip(
                 Modifier.width(84.dp),
                 horizontalAlignment = Alignment.End
             ) {
-                Text("LAST " + (state.pitLastMs?.let(::pitFmtShort) ?: "—"), color = GtWhite, fontSize = 8.sp)
-                Text("BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"), color = GtGreen, fontSize = 8.sp)
-                Text("PIT #" + state.pitStopCount, color = GtMuted, fontSize = 7.sp)
+                Text("LAST " + (state.pitLastMs?.let(::pitFmtShort) ?: "—"), color = GtWhite, fontSize = 12.sp)
+                Text("BEST " + (state.pitBestMs?.let(::pitFmtShort) ?: "—"), color = GtGreen, fontSize = 12.sp)
+                Text("PIT #" + state.pitStopCount, color = GtMuted, fontSize = 12.sp)
                 if (!state.pitTimerActive && state.pitStopCount > 0) {
                     TextButton(
                         onClick = { RaceRuntime.resetPitTimer() },
                         contentPadding = PaddingValues(0.dp),
                         modifier = Modifier.height(20.dp)
                     ) {
-                        Text("СБРОС", color = GtMuted, fontSize = 7.sp)
+                        Text("СБРОС", color = GtMuted, fontSize = 12.sp)
                     }
                 }
             }
@@ -889,8 +1026,8 @@ private fun GT3RpmStrip(
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
-                    Text("ОБОРОТЫ", color = GtMuted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                    Text("RPM", color = GtMuted, fontSize = 7.sp)
+                    Text("ОБОРОТЫ", color = GtMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("RPM", color = GtMuted, fontSize = 12.sp)
                 }
                 Text(
                     rpm?.let { "%,.0f".format(it).replace(",", " ") } ?: "—",
@@ -936,7 +1073,7 @@ private fun GT3RpmStrip(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 listOf("0", "2", "4", "6", "8", "10").forEach { label ->
-                    Text(label, color = GtMuted, fontSize = 7.sp)
+                    Text(label, color = GtMuted, fontSize = 12.sp)
                 }
             }
         }
@@ -953,14 +1090,15 @@ private fun GT3ReadableMetric(
 ) {
     GT3Panel(modifier, corner = 10) {
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 7.dp),
+            Modifier.fillMaxSize().padding(horizontal = 5.dp, vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Text(
                 title,
                 color = GtMuted,
-                fontSize = 9.sp,
+                fontSize = 12.sp,
+                lineHeight = 14.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1
             )
@@ -968,9 +1106,10 @@ private fun GT3ReadableMetric(
                 Text(
                     value,
                     color = accent,
-                    fontSize = 22.sp,
-                    lineHeight = 23.sp,
-                    fontWeight = FontWeight.Black,
+                    fontFamily = RacingDisplay,
+                    fontSize = 24.sp,
+                    lineHeight = 26.sp,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
                 if (unit.isNotBlank()) {
@@ -978,7 +1117,8 @@ private fun GT3ReadableMetric(
                     Text(
                         unit,
                         color = GtMuted,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 14.sp,
                         modifier = Modifier.padding(bottom = 3.dp),
                         maxLines = 1
                     )
@@ -1009,8 +1149,8 @@ private fun GT3CompactMetric(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(unit, color = GtMuted, fontSize = 6.sp, maxLines = 1)
+                Text(title, color = GtMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(unit, color = GtMuted, fontSize = 12.sp, maxLines = 1)
             }
             Text(
                 value?.let { if (abs(it) >= 100) "%.0f".format(it) else "%.1f".format(it) } ?: "—",
@@ -1038,10 +1178,10 @@ private fun GT3LargeMetric(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(title, color = GtMuted, fontSize = 8.sp)
+            Text(title, color = GtMuted, fontSize = 12.sp)
             Text(value, color = accent, fontSize = valueSize.sp, fontWeight = FontWeight.Medium, lineHeight = valueSize.sp)
             if (unit.isNotBlank()) {
-                Text(unit, color = GtMuted, fontSize = 9.sp)
+                Text(unit, color = GtMuted, fontSize = 12.sp)
             }
         }
     }
@@ -1055,7 +1195,7 @@ private fun GT3MiniSectorStrip(state: AppState, modifier: Modifier) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text("MINI", color = GtMuted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+            Text("MINI", color = GtMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             state.miniSectorDeltasMs.forEachIndexed { index, value ->
                 val active = state.currentMiniSector == index + 1
                 val color = when {
@@ -1071,13 +1211,14 @@ private fun GT3MiniSectorStrip(state: AppState, modifier: Modifier) {
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .background(color.copy(alpha = if (active) .95f else .65f), RoundedCornerShape(4.dp)),
+                        .background(color.copy(alpha = if (active) 1f else .85f), RoundedCornerShape(4.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         "M" + (index + 1),
-                        color = if (color == GtWhite || color == GtYellow || color == GtGreen) Color.Black else GtWhite,
-                        fontSize = 6.sp,
+                        color = if (color == GtWhite || color == GtYellow || color == GtGreen || color == GtRed) GtBg else GtWhite,
+                        fontSize = 12.sp,
+                        lineHeight = 14.sp,
                         fontWeight = FontWeight.Black
                     )
                 }
@@ -1085,7 +1226,7 @@ private fun GT3MiniSectorStrip(state: AppState, modifier: Modifier) {
             Text(
                 gtMiniDelta(state.miniSectorDeltaMs),
                 color = gtDeltaColor(state.miniSectorDeltaMs),
-                fontSize = 8.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 modifier = Modifier.width(42.dp),
                 textAlign = TextAlign.End,
@@ -1099,7 +1240,7 @@ private fun GT3MiniSectorStrip(state: AppState, modifier: Modifier) {
 private fun GT3GMeter(state: AppState, modifier: Modifier) {
     GT3Panel(modifier, corner = 11) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
-            Text("G-МЕТР", color = GtMuted, fontSize = 7.sp, maxLines = 1)
+            Text("G-МЕТР", color = GtMuted, fontSize = 12.sp, maxLines = 1)
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 Canvas(Modifier.weight(1f).aspectRatio(1f)) {
                     val c = Offset(size.width / 2f, size.height / 2f)
@@ -1115,10 +1256,10 @@ private fun GT3GMeter(state: AppState, modifier: Modifier) {
                 }
                 Column(Modifier.width(54.dp), verticalArrangement = Arrangement.Center) {
                     Text("%+.2f".format(state.lateralG), color = GtWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Text("LAT G", color = GtMuted, fontSize = 7.sp)
+                    Text("LAT G", color = GtMuted, fontSize = 12.sp)
                     Spacer(Modifier.height(7.dp))
                     Text("%+.2f".format(state.longitudinalG), color = GtWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Text("LONG G", color = GtMuted, fontSize = 7.sp)
+                    Text("LONG G", color = GtMuted, fontSize = 12.sp)
                 }
             }
         }
@@ -1134,12 +1275,12 @@ private fun GT3LapCounter(state: AppState, modifier: Modifier) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("КРУГ", color = GtMuted, fontSize = 8.sp)
+            Text("КРУГ", color = GtMuted, fontSize = 12.sp)
             Text(current.toString(), color = GtWhite, fontSize = 37.sp, fontWeight = FontWeight.Medium)
             Text(
                 if (state.armed) "ARM" else if (state.sessionActive) "ACTIVE" else "READY",
                 color = if (state.sessionActive || state.armed) GtYellow else GtMuted,
-                fontSize = 8.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1156,7 +1297,7 @@ private fun GT3TrackMap(state: AppState, modifier: Modifier) {
                 Text(
                     "КАРТА ТРАССЫ",
                     color = GtMuted,
-                    fontSize = 7.sp,
+                    fontSize = 12.sp,
                     maxLines = 1
                 )
                 Spacer(Modifier.weight(1f))
@@ -1164,13 +1305,24 @@ private fun GT3TrackMap(state: AppState, modifier: Modifier) {
                     Text(
                         "M" + state.currentMiniSector + " " + gtMiniDelta(state.miniSectorDeltaMs),
                         color = gtDeltaColor(state.miniSectorDeltaMs),
-                        fontSize = 7.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
                 }
             }
 
+            Box(Modifier.fillMaxSize()) {
+            if (trackPoints.size < 2) {
+                Column(
+                    Modifier.align(Alignment.Center).padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text("ОЖИДАНИЕ ТРАССЫ", color = GtWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    Text("Маршрут появится по данным GPS", color = GtMuted, fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Center)
+                }
+            }
             Canvas(Modifier.fillMaxSize().padding(5.dp)) {
                 val all = buildList {
                     addAll(trackPoints)
@@ -1233,6 +1385,7 @@ private fun GT3TrackMap(state: AppState, modifier: Modifier) {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -1247,12 +1400,15 @@ private fun GT3RoundAction(
     OutlinedButton(
         onClick = onClick,
         modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
+        shape = CutCornerShape(7.dp),
         border = BorderStroke(1.dp, if (active) GtYellow else GtBorder),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (active) GtYellow else GtWhite),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (active) GtYellow.copy(alpha = .10f) else RacingColors.Surface,
+            contentColor = if (active) GtYellow else GtWhite
+        ),
         contentPadding = PaddingValues(2.dp)
     ) {
-        Text(label, fontSize = 8.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -1262,21 +1418,21 @@ private fun GT3Panel(
     corner: Int,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val shape = CutCornerShape(minOf(corner, 9).dp)
     Box(
         modifier
+            .clip(shape)
             .background(
                 brush = Brush.verticalGradient(listOf(GtPanelTop, GtPanelBottom)),
-                shape = RoundedCornerShape(corner.dp)
+                shape = shape
             )
-            .then(
-                Modifier.background(Color.Transparent, RoundedCornerShape(corner.dp))
-            ),
+            .border(1.dp, GtBorder, shape),
         content = {
             Box(
                 Modifier
                     .fillMaxSize()
                     .padding(1.dp)
-                    .background(Color.Transparent, RoundedCornerShape(corner.dp)),
+                    .background(Color.Transparent, shape),
                 content = content
             )
         }

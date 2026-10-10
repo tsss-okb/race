@@ -18,11 +18,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.racelab.phone.canbus.*
 import ru.racelab.phone.data.AppState
 
-private val CanPanel = Color(0xFF131A15)
-private val CanGreen = Color(0xFF69FF72)
-private val CanAmber = Color(0xFFFFCA58)
-private val CanRed = Color(0xFFFF6B6B)
-private val CanMuted = Color(0xFF93A096)
+private val CanPanel = RacingColors.Surface
+private val CanGreen = RacingColors.Success
+private val CanAmber = RacingColors.Warning
+private val CanRed = RacingColors.Error
+private val CanMuted = RacingColors.Muted
 
 @Composable
 fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
@@ -51,18 +51,18 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text("USB-CAN / SLCAN", color = CanGreen, fontWeight = FontWeight.Black)
-            Text(ui.status, color = CanMuted, fontSize = 10.sp)
+            Text(ui.status, color = CanMuted, fontSize = 12.sp)
             Text(
                 "RX " + ui.framesRx + " frames • " + "%.1f Hz".format(state.canHz),
                 color = CanMuted,
-                fontSize = 10.sp
+                fontSize = 12.sp
             )
             ui.lastFrame?.let { f ->
                 Text(
                     "0x" + f.id.toString(16).uppercase() + "  " +
                         f.data.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) },
                     color = CanAmber,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
             }
 
@@ -70,12 +70,12 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                 Button(
                     onClick = { manager.refresh() },
                     contentPadding = PaddingValues(horizontal = 9.dp, vertical = 3.dp)
-                ) { Text("REFRESH", fontSize = 8.sp) }
+                ) { Text("REFRESH", fontSize = 12.sp) }
                 Box {
                     OutlinedButton(
                         onClick = { serialMenu = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
-                    ) { Text(serialBaud.toString(), fontSize = 8.sp) }
+                    ) { Text(serialBaud.toString(), fontSize = 12.sp) }
                     DropdownMenu(expanded = serialMenu, onDismissRequest = { serialMenu = false }) {
                         UsbCanManager.SERIAL_BAUD_RATES.forEach { b ->
                             DropdownMenuItem(
@@ -89,7 +89,7 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                     OutlinedButton(
                         onClick = { bitrateMenu = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
-                    ) { Text((bitrate.bitsPerSecond / 1000).toString() + "k", fontSize = 8.sp) }
+                    ) { Text((bitrate.bitsPerSecond / 1000).toString() + "k", fontSize = 12.sp) }
                     DropdownMenu(expanded = bitrateMenu, onDismissRequest = { bitrateMenu = false }) {
                         CanBitrate.entries.forEach { b ->
                             DropdownMenuItem(
@@ -101,7 +101,7 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = listenOnly, onCheckedChange = { listenOnly = it })
-                    Text("LISTEN", fontSize = 8.sp)
+                    Text("LISTEN", fontSize = 12.sp)
                 }
             }
 
@@ -111,17 +111,17 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(d.name, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Text(d.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         Text(
                             "VID " + "%04X".format(d.vendorId) + " PID " + "%04X".format(d.productId),
                             color = CanMuted,
-                            fontSize = 8.sp
+                            fontSize = 12.sp
                         )
                     }
                     TextButton(
                         onClick = { manager.connect(d.deviceId, serialBaud, bitrate, listenOnly) }
                     ) {
-                        Text(if (ui.connectedDeviceId == d.deviceId) "ON" else "CONNECT", fontSize = 8.sp)
+                        Text(if (ui.connectedDeviceId == d.deviceId) "ON" else "CONNECT", fontSize = 12.sp)
                     }
                 }
             }
@@ -136,7 +136,7 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
             Text(
                 "CAN SIGNALS (" + profiles.size + ")",
                 color = CanMuted,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
@@ -144,7 +144,7 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                 onClick = { createNew = true },
                 colors = ButtonDefaults.buttonColors(containerColor = CanGreen, contentColor = Color.Black),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-            ) { Text("+ SIGNAL", fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+            ) { Text("+ SIGNAL", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
         }
 
         profiles.forEach { signal ->
@@ -154,22 +154,22 @@ fun CanSectionScreen(state: AppState, manager: UsbCanManager) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(signal.name, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text(signal.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     Text(
                         "0x" + signal.canId.toString(16).uppercase() +
                             " bit " + signal.startBit + ":" + signal.bitLength +
                             " • " + signal.byteOrder.name,
                         color = CanMuted,
-                        fontSize = 8.sp
+                        fontSize = 12.sp
                     )
                     Text(
                         signal.channel.name +
                             (live?.let { " • " + "%.3f".format(it.value) + " " + signal.unit } ?: ""),
                         color = if (live != null) CanGreen else CanAmber,
-                        fontSize = 9.sp
+                        fontSize = 12.sp
                     )
                 }
-                TextButton(onClick = { editing = signal }) { Text("EDIT", fontSize = 8.sp) }
+                TextButton(onClick = { editing = signal }) { Text("EDIT", fontSize = 12.sp) }
                 TextButton(
                     onClick = {
                         CanSignalRepository.delete(context, signal.id)
@@ -223,14 +223,14 @@ private fun VehicleCanMetrics(state: AppState) {
                 Column(
                     Modifier.weight(1f).background(CanPanel, RoundedCornerShape(10.dp)).padding(8.dp)
                 ) {
-                    Text(m.first, color = CanMuted, fontSize = 8.sp)
+                    Text(m.first, color = CanMuted, fontSize = 12.sp)
                     Text(
                         m.second?.let { "%.2f".format(it) } ?: "—",
                         color = if (m.second == null) CanMuted else CanGreen,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Black
                     )
-                    Text(m.third, color = CanMuted, fontSize = 8.sp)
+                    Text(m.third, color = CanMuted, fontSize = 12.sp)
                 }
             }
             if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -329,7 +329,7 @@ private fun CanSignalDialog(
                 Text(
                     "BIG_ENDIAN использует сетевую нумерацию битов (bit 0 = MSB первого байта).",
                     color = CanAmber,
-                    fontSize = 9.sp
+                    fontSize = 12.sp
                 )
             }
         }
