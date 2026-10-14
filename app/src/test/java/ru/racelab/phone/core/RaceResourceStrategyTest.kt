@@ -71,6 +71,25 @@ class RaceResourceStrategyTest {
     }
 
     @Test
+    fun oneConsumptionIntervalIsStillDataCollection() {
+        val tracker = RaceResourceStrategyTracker()
+        tracker.onLapCompleted(RaceResourceKind.FUEL, 80.0)
+        tracker.onLapCompleted(RaceResourceKind.FUEL, 76.0)
+
+        val m = tracker.metrics(
+            resourceKind = RaceResourceKind.FUEL,
+            resourcePct = 76.0,
+            raceTargetLaps = 20,
+            lapsCompleted = 2,
+            reservePct = 5.0,
+            pacePitWindow = "HOLD"
+        )
+
+        assertEquals("DATA", m.resourcePitWindow)
+        assertEquals(1, m.sampleCount)
+    }
+
+    @Test
     fun energySocUsesSameLapRangeModel() {
         val tracker = RaceResourceStrategyTracker()
         tracker.onLapCompleted(RaceResourceKind.ENERGY, 64.0)
