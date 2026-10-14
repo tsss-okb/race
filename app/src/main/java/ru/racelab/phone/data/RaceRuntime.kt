@@ -17,6 +17,8 @@ import ru.racelab.phone.core.PitTimerEngine
 import ru.racelab.phone.core.MiniSectorTracker
 import ru.racelab.phone.core.RaceLine
 import ru.racelab.phone.core.RaceEngineer
+import ru.racelab.phone.core.RaceResourceKind
+import ru.racelab.phone.core.RaceResourceStrategyTracker
 import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
@@ -29,6 +31,7 @@ import ru.racelab.phone.canbus.CanChannel
 import ru.racelab.phone.canbus.CanFrame
 import ru.racelab.phone.canbus.CanSignalValue
 import ru.racelab.phone.remote.RemoteAction
+import ru.racelab.phone.pitlane.RaceProfileRepository
 import kotlin.math.sqrt
 
 object RaceRuntime {
@@ -72,6 +75,9 @@ object RaceRuntime {
     private var stintNo = 1
     private var stintStartLapCount = 0
     private var pitVisitOpen = false
+    private val resourceStrategyTracker = RaceResourceStrategyTracker()
+    private var raceTargetLaps = 0
+    private var resourceReservePct = 5.0
 
     @Synchronized
     fun setAvailableSensors(count: Int) {
@@ -87,6 +93,11 @@ object RaceRuntime {
         preview.clear(); obd = ObdState(); ev = EvState(); customObd.clear(); canSignals.clear(); canFrameCount = 0L; lastCanTs = null; canHz = 0.0
         pitTimer.reset(); pitCanPressed.clear(); miniSectorTracker.reset(); pitLaneStartedMs = null
         stintNo = 1; stintStartLapCount = 0; pitVisitOpen = false
+        resourceStrategyTracker.reset()
+        RaceProfileRepository.load(context.applicationContext).also { profile ->
+            raceTargetLaps = profile.raceTargetLaps
+            resourceReservePct = profile.resourceReservePct
+        }
         writer = SessionFileWriter(context.applicationContext)
         _state.value = _state.value.copy(
             sessionActive = true,
@@ -112,6 +123,16 @@ object RaceRuntime {
             stintDegradationMsPerLap = null,
             stintNextLapForecastMs = null,
             pacePitWindow = "DATA",
+            strategyResourceKind = "NONE",
+            strategyResourcePct = null,
+            strategyUsagePerLapPct = null,
+            strategyEstimatedLapsRemaining = null,
+            strategyRaceLapsRemaining = raceTargetLaps.takeIf { it > 0 },
+            strategyFinishMarginLaps = null,
+            strategyMandatoryPit = false,
+            strategyResourcePitWindow = "DATA",
+            strategyCombined = "DATA",
+            strategySampleCount = 0,
             pitTimerActive = false,
             pitStartedElapsedMs = null,
             pitLastMs = null,
@@ -415,6 +436,8 @@ object RaceRuntime {
                         stintNo += 1
                         stintStartLapCount = engine.laps.size
                         pitVisitOpen = false
+                        val resource = currentRaceResource()
+                        resourceStrategyTracker.resetStint(resource.first, resource.second)
                     }
                 }
             }
@@ -446,6 +469,19 @@ object RaceRuntime {
             lapTimesMs = paceStintLapTimes,
             bestLapMs = engine.bestLapMs,
             pitActive = pitLaneActive || _state.value.pitTimerActive
+        )
+
+        val raceResource = currentRaceResource()
+        if (update.lapCompleted != null) {
+            resourceStrategyTracker.onLapCompleted(raceResource.first, raceResource.second)
+        }
+        val resourceMetrics = resourceStrategyTracker.metrics(
+            resourceKind = raceResource.first,
+            resourcePct = raceResource.second,
+            raceTargetLaps = raceTargetLaps,
+            lapsCompleted = engine.laps.size,
+            reservePct = resourceReservePct,
+            pacePitWindow = engineerMetrics.pitWindow
         )
 
         val speedKmhNow = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0)
@@ -495,6 +531,16 @@ object RaceRuntime {
             stintDegradationMsPerLap = engineerMetrics.degradationMsPerLap,
             stintNextLapForecastMs = prediction?.projectedMs ?: engineerMetrics.nextLapForecastMs,
             pacePitWindow = engineerMetrics.pitWindow,
+            strategyResourceKind = resourceMetrics.kind.name,
+            strategyResourcePct = resourceMetrics.resourcePct,
+            strategyUsagePerLapPct = resourceMetrics.usagePerLapPct,
+            strategyEstimatedLapsRemaining = resourceMetrics.estimatedLapsRemaining,
+            strategyRaceLapsRemaining = resourceMetrics.raceLapsRemaining,
+            strategyFinishMarginLaps = resourceMetrics.finishMarginLaps,
+            strategyMandatoryPit = resourceMetrics.mandatoryPit,
+            strategyResourcePitWindow = resourceMetrics.resourcePitWindow,
+            strategyCombined = resourceMetrics.combinedStrategy,
+            strategySampleCount = resourceMetrics.sampleCount,
             lastMessage = when {
                 pitEntered -> "PIT IN • отсчёт pit lane начат"
                 pitExited -> "PIT OUT • pit lane " + formatLap(pitLaneLastMs ?: 0L)
@@ -590,6 +636,7 @@ object RaceRuntime {
             mafGps = reading.mafGps ?: obd.mafGps,
             voltageV = reading.voltageV ?: obd.voltageV,
             oilTempC = reading.oilTempC ?: obd.oilTempC,
+            fuelLevelPct = reading.fuelLevelPct ?: obd.fuelLevelPct,
             fuelPressureKpa = reading.fuelPressureKpa ?: obd.fuelPressureKpa,
             shortTrimPct = reading.shortTrimPct ?: obd.shortTrimPct,
             longTrimPct = reading.longTrimPct ?: obd.longTrimPct
@@ -600,18 +647,20 @@ object RaceRuntime {
     @Synchronized
     fun updateCustomObd(pid: CustomPid, value: Double) {
         customObd[pid.id] = CustomObdValue(pid.id, pid.name, value, pid.unit)
-        ev = when (pid.evChannel) {
-            EvChannel.SOC -> ev.copy(socPct = value)
-            EvChannel.BATTERY_POWER_KW -> ev.copy(batteryPowerKw = value)
-            EvChannel.MOTOR_POWER_KW -> ev.copy(motorPowerKw = value)
-            EvChannel.REGEN_KW -> ev.copy(regenKw = value)
-            EvChannel.BATTERY_TEMP_C -> ev.copy(batteryTempC = value)
-            EvChannel.INVERTER_TEMP_C -> ev.copy(inverterTempC = value)
-            EvChannel.NONE -> ev
+        when (pid.evChannel) {
+            EvChannel.FUEL_LEVEL_PCT -> obd = obd.copy(fuelLevelPct = value.coerceIn(0.0, 100.0))
+            EvChannel.SOC -> ev = ev.copy(socPct = value.coerceIn(0.0, 100.0))
+            EvChannel.BATTERY_POWER_KW -> ev = ev.copy(batteryPowerKw = value)
+            EvChannel.MOTOR_POWER_KW -> ev = ev.copy(motorPowerKw = value)
+            EvChannel.REGEN_KW -> ev = ev.copy(regenKw = value)
+            EvChannel.BATTERY_TEMP_C -> ev = ev.copy(batteryTempC = value)
+            EvChannel.INVERTER_TEMP_C -> ev = ev.copy(inverterTempC = value)
+            EvChannel.NONE -> Unit
         }
         writer?.writeCustomObd(System.currentTimeMillis(), pid, value)
         _state.value = _state.value.copy(
             customObd = customObd.values.toList(),
+            obd = obd,
             ev = ev
         )
     }
@@ -620,6 +669,12 @@ object RaceRuntime {
     fun setSupportedObdPids(pids: Set<String>) {
         supportedObdPids += pids
         _state.value = _state.value.copy(supportedObdPids = supportedObdPids.toSet())
+    }
+
+    private fun currentRaceResource(): Pair<RaceResourceKind, Double?> = when {
+        obd.fuelLevelPct != null -> RaceResourceKind.FUEL to obd.fuelLevelPct
+        ev.socPct != null -> RaceResourceKind.ENERGY to ev.socPct
+        else -> RaceResourceKind.NONE to null
     }
 
     private fun sourceKey(source: String): String = when {
@@ -675,6 +730,7 @@ object RaceRuntime {
             CanChannel.THROTTLE_PCT -> obd = obd.copy(throttlePct = decoded.value)
             CanChannel.COOLANT_C -> obd = obd.copy(coolantC = decoded.value)
             CanChannel.OIL_TEMP_C -> obd = obd.copy(oilTempC = decoded.value)
+            CanChannel.FUEL_LEVEL_PCT -> obd = obd.copy(fuelLevelPct = decoded.value.coerceIn(0.0, 100.0))
             CanChannel.GEAR -> vehicleCan = vehicleCan.copy(gear = decoded.value)
             CanChannel.STEERING_DEG -> vehicleCan = vehicleCan.copy(steeringDeg = decoded.value)
             CanChannel.BRAKE_PRESSURE_BAR -> vehicleCan = vehicleCan.copy(brakePressureBar = decoded.value)
@@ -719,6 +775,8 @@ object RaceRuntime {
             stintNo += 1
             stintStartLapCount = engine.laps.size
             pitVisitOpen = false
+            val resource = currentRaceResource()
+            resourceStrategyTracker.resetStint(resource.first, resource.second)
             fallbackStintChanged = true
         }
         _state.value = _state.value.copy(
