@@ -474,6 +474,137 @@ private fun TeamGarageScreen(
 }
 
 @Composable
+private fun TeamCommandSummary(
+    cars: Int,
+    online: Int,
+    alerts: Int,
+    mandatoryPit: Int,
+    pitActive: Int,
+    fastest: String,
+    fastestLapMs: Long?,
+    onOverview: () -> Unit,
+    onStrategy: () -> Unit,
+    onPit: () -> Unit,
+    onConnection: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        TeamSummaryCard(
+            title = "КОМАНДА",
+            value = "$online/$cars LIVE",
+            note = if (online == cars && cars > 0) "все на связи" else "проверь связь",
+            color = if (online == cars && cars > 0) TeamGreen else TeamYellow,
+            modifier = Modifier.weight(.8f),
+            onClick = onConnection
+        )
+        TeamSummaryCard(
+            title = "АЛЕРТЫ",
+            value = alerts.toString(),
+            note = if (alerts == 0) "нет срочных" else "нужно внимание",
+            color = if (alerts == 0) TeamGreen else TeamRed,
+            modifier = Modifier.weight(.65f),
+            onClick = onOverview
+        )
+        TeamSummaryCard(
+            title = "PIT REQUIRED",
+            value = mandatoryPit.toString(),
+            note = if (mandatoryPit == 0) "ресурс OK" else "по ресурсу",
+            color = if (mandatoryPit == 0) TeamGreen else TeamYellow,
+            modifier = Modifier.weight(.8f),
+            onClick = onStrategy
+        )
+        TeamSummaryCard(
+            title = "PIT ACTIVE",
+            value = pitActive.toString(),
+            note = if (pitActive == 0) "pit lane свободен" else "машина в PIT",
+            color = if (pitActive == 0) TeamWhite else TeamRed,
+            modifier = Modifier.weight(.75f),
+            onClick = onPit
+        )
+        TeamSummaryCard(
+            title = "FASTEST TEAM",
+            value = fastest,
+            note = format100(fastestLapMs),
+            color = TeamGreen,
+            modifier = Modifier.weight(1.15f),
+            onClick = onOverview
+        )
+    }
+}
+
+@Composable
+private fun TeamSummaryCard(
+    title: String,
+    value: String,
+    note: String,
+    color: Color,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .height(58.dp)
+            .clickable(onClick = onClick),
+        color = Color(0xFF0B0D0F),
+        border = BorderStroke(1.dp, TeamBorder),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 7.dp, vertical = 5.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(title, color = TeamMuted, fontSize = 10.sp, maxLines = 1)
+            Text(
+                value,
+                color = color,
+                fontFamily = RacingDisplay,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(note, color = TeamMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun TeamMenuTabs(
+    selected: TeamMenuSection,
+    onSelected: (TeamMenuSection) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        TeamMenuSection.entries.forEach { item ->
+            val active = item == selected
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp)
+                    .clickable { onSelected(item) },
+                color = if (active) TeamYellow else Color(0xFF0B0D0F),
+                border = BorderStroke(1.dp, if (active) TeamYellow else TeamBorder),
+                shape = RoundedCornerShape(9.dp)
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        item.shortTitle,
+                        color = if (active) Color.Black else TeamWhite,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TeamGarageCarRow(
     car: TeamCarEntry,
     deviceSlot: Int,
