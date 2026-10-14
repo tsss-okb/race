@@ -86,8 +86,8 @@ class RaceResourceStrategyTracker {
             usageSamples.clear()
         }
 
-        val recent = usageSamples.takeLast(4)
-        val usage = recent.takeIf { it.isNotEmpty() }?.average()
+        val recent = usageSamples.takeLast(5)
+        val usage = recent.takeIf { it.size >= 2 }?.let(::robustAverage)
         val safeReserve = reservePct.coerceIn(0.0, 25.0)
         val estimatedLaps = usage
             ?.takeIf { it > 0.01 }
@@ -129,6 +129,16 @@ class RaceResourceStrategyTracker {
             combinedStrategy = combine(pacePitWindow, resourceWindow, mandatory, estimatedLaps),
             sampleCount = recent.size
         )
+    }
+
+    private fun robustAverage(values: List<Double>): Double {
+        if (values.size <= 2) return values.average()
+        val sorted = values.sorted()
+        return if (sorted.size >= 5) {
+            sorted.drop(1).dropLast(1).average()
+        } else {
+            sorted.average()
+        }
     }
 
     private fun combine(
