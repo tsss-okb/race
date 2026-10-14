@@ -638,8 +638,17 @@ private fun TeamGarageCarRow(
         }
     }
 
-    val live = snapshot.lastReceiveElapsedMs > 0L &&
-        now - snapshot.lastReceiveElapsedMs < 3_500L
+    val receiveAgeMs = if (snapshot.lastReceiveElapsedMs > 0L) {
+        (now - snapshot.lastReceiveElapsedMs).coerceAtLeast(0L)
+    } else {
+        Long.MAX_VALUE
+    }
+    val live = receiveAgeMs < 3_500L
+    val currentPitMs = if (snapshot.pitActive && snapshot.pitBaseReceivedElapsedMs > 0L) {
+        snapshot.pitBaseMs + (now - snapshot.pitBaseReceivedElapsedMs).coerceAtLeast(0L)
+    } else {
+        snapshot.pitLastMs ?: 0L
+    }
     val pitDistance = snapshot.pitDistanceM
     val pitNow = snapshot.pitLaneActive || snapshot.pitActive
     val pitSoon = !pitNow && pitDistance != null && pitDistance <= 350.0
@@ -751,130 +760,279 @@ private fun TeamGarageCarRow(
 
             Spacer(Modifier.height(6.dp))
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                GarageMetric("LAPS", snapshot.lapsCompleted.toString(), Modifier.weight(.58f))
-                GarageMetric(
-                    "STINT",
-                    "S${snapshot.stintNo} · L${snapshot.stintLapNo}",
-                    Modifier.weight(.78f),
-                    TeamYellow
-                )
-                GarageMetric("CURRENT", format100(snapshot.lapCurrentMs.takeIf { it > 0L }), Modifier.weight(1f))
-                GarageMetric("BEST", format100(snapshot.lapBestMs), Modifier.weight(1f), TeamGreen)
-            }
-
-            Spacer(Modifier.height(5.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                GarageMetric(
-                    "TEAM GAP",
-                    teamGapMs?.let { if (it == 0L) "FASTEST" else "+%.2f".format(it / 1000.0) } ?: "—",
-                    Modifier.weight(.85f),
-                    if (teamGapMs == 0L) TeamGreen else TeamWhite
-                )
-                GarageMetric(
-                    "DELTA",
-                    formatDelta100(snapshot.deltaMs),
-                    Modifier.weight(.72f),
-                    when {
-                        snapshot.deltaMs == null -> TeamWhite
-                        snapshot.deltaMs!! <= 0 -> TeamGreen
-                        else -> TeamRed
+            when (section) {
+                TeamMenuSection.OVERVIEW -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric("LAPS", snapshot.lapsCompleted.toString(), Modifier.weight(.6f))
+                        GarageMetric("BEST", format100(snapshot.lapBestMs), Modifier.weight(1f), TeamGreen)
+                        GarageMetric(
+                            "STRATEGY",
+                            snapshot.strategyCombined,
+                            Modifier.weight(1.05f),
+                            strategyCombinedColor(snapshot)
+                        )
+                        GarageMetric(
+                            "RESOURCE",
+                            formatResource(snapshot),
+                            Modifier.weight(.95f),
+                            resourceLevelColor(snapshot.strategyResourcePct)
+                        )
                     }
-                )
-                GarageMetric("SPEED", "${snapshot.speedKmh.toInt()} km/h", Modifier.weight(.8f))
-                GarageMetric(
-                    "PIT",
-                    when {
-                        pitNow -> "NOW"
-                        pitSoon -> "${pitDistance!!.roundToInt()}m"
-                        (snapshot.pitLastMs ?: 0L) > 0L -> format100(snapshot.pitLastMs)
-                        else -> "—"
-                    },
-                    Modifier.weight(.8f),
-                    when {
-                        pitNow -> TeamRed
-                        pitSoon -> TeamYellow
-                        else -> TeamWhite
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric(
+                            "TEAM GAP",
+                            teamGapMs?.let { if (it == 0L) "FASTEST" else "+%.2f".format(it / 1000.0) } ?: "—",
+                            Modifier.weight(.9f),
+                            if (teamGapMs == 0L) TeamGreen else TeamWhite
+                        )
+                        GarageMetric("PRED LAP", format100(snapshot.stintNextLapForecastMs), Modifier.weight(1f))
+                        GarageMetric(
+                            "RANGE",
+                            snapshot.strategyEstimatedLapsRemaining?.let { "%.1f L".format(it) } ?: "—",
+                            Modifier.weight(.8f),
+                            resourceRangeColor(snapshot)
+                        )
+                        GarageMetric(
+                            "PIT",
+                            when {
+                                pitNow -> "NOW"
+                                pitSoon -> "${pitDistance!!.roundToInt()}m"
+                                snapshot.strategyMandatoryPit -> "REQUIRED"
+                                else -> "READY"
+                            },
+                            Modifier.weight(.85f),
+                            when {
+                                pitNow -> TeamRed
+                                pitSoon || snapshot.strategyMandatoryPit -> TeamYellow
+                                else -> TeamGreen
+                            }
+                        )
                     }
-                )
-            }
+                }
 
-            Spacer(Modifier.height(5.dp))
+                TeamMenuSection.CARS -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric("LAPS", snapshot.lapsCompleted.toString(), Modifier.weight(.58f))
+                        GarageMetric(
+                            "STINT",
+                            "S${snapshot.stintNo} · L${snapshot.stintLapNo}",
+                            Modifier.weight(.78f),
+                            TeamYellow
+                        )
+                        GarageMetric("CURRENT", format100(snapshot.lapCurrentMs.takeIf { it > 0L }), Modifier.weight(1f))
+                        GarageMetric("BEST", format100(snapshot.lapBestMs), Modifier.weight(1f), TeamGreen)
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric(
+                            "TEAM GAP",
+                            teamGapMs?.let { if (it == 0L) "FASTEST" else "+%.2f".format(it / 1000.0) } ?: "—",
+                            Modifier.weight(.85f),
+                            if (teamGapMs == 0L) TeamGreen else TeamWhite
+                        )
+                        GarageMetric(
+                            "DELTA",
+                            formatDelta100(snapshot.deltaMs),
+                            Modifier.weight(.72f),
+                            when {
+                                snapshot.deltaMs == null -> TeamWhite
+                                snapshot.deltaMs!! <= 0 -> TeamGreen
+                                else -> TeamRed
+                            }
+                        )
+                        GarageMetric("SPEED", "${snapshot.speedKmh.toInt()} km/h", Modifier.weight(.8f))
+                        GarageMetric(
+                            "RACE LEFT",
+                            snapshot.strategyRaceLapsRemaining?.let { "$it L" } ?: "—",
+                            Modifier.weight(.8f)
+                        )
+                    }
+                }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                GarageMetric(
-                    "PRED LAP",
-                    format100(snapshot.stintNextLapForecastMs),
-                    Modifier.weight(1f),
-                    TeamWhite
-                )
-                GarageMetric(
-                    "STINT AVG",
-                    format100(snapshot.stintAverageLapMs),
-                    Modifier.weight(1f),
-                    TeamWhite
-                )
-                GarageMetric(
-                    "DEG",
-                    formatDegradation(snapshot.stintDegradationMsPerLap),
-                    Modifier.weight(.82f),
-                    degradationColor
-                )
-                GarageMetric(
-                    "PACE PIT",
-                    strategyWindowText,
-                    Modifier.weight(.95f),
-                    strategyWindowColor
-                )
-            }
+                TeamMenuSection.STRATEGY -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric("PRED LAP", format100(snapshot.stintNextLapForecastMs), Modifier.weight(1f))
+                        GarageMetric("STINT AVG", format100(snapshot.stintAverageLapMs), Modifier.weight(1f))
+                        GarageMetric(
+                            "DEG",
+                            formatDegradation(snapshot.stintDegradationMsPerLap),
+                            Modifier.weight(.82f),
+                            degradationColor
+                        )
+                        GarageMetric(
+                            "PACE PIT",
+                            strategyWindowText,
+                            Modifier.weight(.95f),
+                            strategyWindowColor
+                        )
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric(
+                            "RESOURCE",
+                            formatResource(snapshot),
+                            Modifier.weight(.95f),
+                            resourceLevelColor(snapshot.strategyResourcePct)
+                        )
+                        GarageMetric(
+                            "USE/LAP",
+                            snapshot.strategyUsagePerLapPct?.let { "%.2f%%".format(it) }
+                                ?: if (snapshot.strategyResourceKind != "NONE") "DATA ${snapshot.strategySampleCount}" else "—",
+                            Modifier.weight(.8f)
+                        )
+                        GarageMetric(
+                            "RANGE",
+                            snapshot.strategyEstimatedLapsRemaining?.let { "%.1f L".format(it) } ?: "—",
+                            Modifier.weight(.75f),
+                            resourceRangeColor(snapshot)
+                        )
+                        GarageMetric(
+                            "FINISH Δ",
+                            formatFinishMargin(snapshot.strategyFinishMarginLaps),
+                            Modifier.weight(.78f),
+                            finishMarginColor(snapshot.strategyFinishMarginLaps)
+                        )
+                        GarageMetric(
+                            "STRATEGY",
+                            snapshot.strategyCombined,
+                            Modifier.weight(1.05f),
+                            strategyCombinedColor(snapshot)
+                        )
+                    }
+                }
 
-            Spacer(Modifier.height(5.dp))
+                TeamMenuSection.PIT -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric(
+                            "PIT STATUS",
+                            when {
+                                pitNow -> "ACTIVE"
+                                pitSoon -> "SOON"
+                                snapshot.strategyMandatoryPit -> "REQUIRED"
+                                else -> "READY"
+                            },
+                            Modifier.weight(.9f),
+                            when {
+                                pitNow -> TeamRed
+                                pitSoon || snapshot.strategyMandatoryPit -> TeamYellow
+                                else -> TeamGreen
+                            }
+                        )
+                        GarageMetric(
+                            "DISTANCE",
+                            when {
+                                pitNow -> "IN PIT"
+                                pitDistance != null -> "${pitDistance.roundToInt()} m"
+                                else -> "—"
+                            },
+                            Modifier.weight(.9f)
+                        )
+                        GarageMetric(
+                            "PIT TIMER",
+                            if (snapshot.pitActive) format100(currentPitMs) else "—",
+                            Modifier.weight(1f),
+                            if (snapshot.pitActive) TeamYellow else TeamWhite
+                        )
+                        GarageMetric("STOPS", snapshot.pitCount.toString(), Modifier.weight(.6f))
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric("LAST PIT", format100(snapshot.pitLastMs), Modifier.weight(1f))
+                        GarageMetric("BEST PIT", format100(snapshot.pitBestMs), Modifier.weight(1f), TeamGreen)
+                        GarageMetric(
+                            "TRIGGER",
+                            snapshot.pitTrigger.ifBlank { "—" },
+                            Modifier.weight(.95f)
+                        )
+                        GarageMetric(
+                            "PIT PLAN",
+                            snapshot.strategyCombined,
+                            Modifier.weight(1f),
+                            strategyCombinedColor(snapshot)
+                        )
+                    }
+                }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                GarageMetric(
-                    "RESOURCE",
-                    formatResource(snapshot),
-                    Modifier.weight(.95f),
-                    resourceLevelColor(snapshot.strategyResourcePct)
-                )
-                GarageMetric(
-                    "USE/LAP",
-                    snapshot.strategyUsagePerLapPct?.let { "%.2f%%".format(it) }
-                        ?: if (snapshot.strategyResourceKind != "NONE") "DATA ${snapshot.strategySampleCount}" else "—",
-                    Modifier.weight(.8f),
-                    TeamWhite
-                )
-                GarageMetric(
-                    "RANGE",
-                    snapshot.strategyEstimatedLapsRemaining?.let { "%.1f L".format(it) } ?: "—",
-                    Modifier.weight(.75f),
-                    resourceRangeColor(snapshot)
-                )
-                GarageMetric(
-                    "FINISH Δ",
-                    formatFinishMargin(snapshot.strategyFinishMarginLaps),
-                    Modifier.weight(.78f),
-                    finishMarginColor(snapshot.strategyFinishMarginLaps)
-                )
-                GarageMetric(
-                    "STRATEGY",
-                    snapshot.strategyCombined,
-                    Modifier.weight(1.05f),
-                    strategyCombinedColor(snapshot)
-                )
+                TeamMenuSection.CONNECTION -> {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric(
+                            "STATUS",
+                            if (live) "LIVE" else "OFFLINE",
+                            Modifier.weight(.75f),
+                            if (live) TeamGreen else TeamRed
+                        )
+                        GarageMetric(
+                            "TRANSPORT",
+                            snapshot.transport,
+                            Modifier.weight(.9f),
+                            if (snapshot.transport == "WEBSOCKET") TeamGreen else if (live) TeamYellow else TeamRed
+                        )
+                        GarageMetric(
+                            "RTT",
+                            snapshot.rttMs?.let { "$it ms" } ?: "—",
+                            Modifier.weight(.75f),
+                            when {
+                                snapshot.rttMs == null -> TeamMuted
+                                snapshot.rttMs!! <= 200L -> TeamGreen
+                                snapshot.rttMs!! <= 600L -> TeamYellow
+                                else -> TeamRed
+                            }
+                        )
+                        GarageMetric(
+                            "AGE",
+                            if (receiveAgeMs == Long.MAX_VALUE) "—" else "${receiveAgeMs} ms",
+                            Modifier.weight(.8f),
+                            if (live) TeamWhite else TeamRed
+                        )
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        GarageMetric("GPS", "%.1f Hz".format(snapshot.gpsHz), Modifier.weight(.8f))
+                        GarageMetric("SAT", snapshot.satellites.toString(), Modifier.weight(.6f))
+                        GarageMetric(
+                            "ROOM",
+                            car.room,
+                            Modifier.weight(.9f)
+                        )
+                        GarageMetric(
+                            "LAST ERROR",
+                            snapshot.lastError?.take(18) ?: "—",
+                            Modifier.weight(1.25f),
+                            if (snapshot.lastError == null) TeamGreen else TeamRed
+                        )
+                    }
+                }
             }
         }
     }
