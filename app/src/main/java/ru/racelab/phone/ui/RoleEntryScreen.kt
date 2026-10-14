@@ -35,6 +35,12 @@ fun RoleEntryScreen(
     var carNumber by remember(initialProfile) { mutableStateOf(initialProfile.carNumber) }
     var carName by remember(initialProfile) { mutableStateOf(initialProfile.carName) }
     var raceClass by remember(initialProfile) { mutableStateOf(initialProfile.raceClass) }
+    var raceTargetLaps by remember(initialProfile) {
+        mutableStateOf(initialProfile.raceTargetLaps.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    var resourceReservePct by remember(initialProfile) {
+        mutableStateOf("%.0f".format(initialProfile.resourceReservePct))
+    }
 
     RacingTheme {
         Box(
@@ -142,6 +148,31 @@ fun RoleEntryScreen(
                                     modifier = Modifier.weight(.75f)
                                 )
                             }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = raceTargetLaps,
+                                    onValueChange = { input ->
+                                        raceTargetLaps = input.filter(Char::isDigit).take(4)
+                                    },
+                                    label = { Text("Кругов в гонке") },
+                                    placeholder = { Text("20") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = resourceReservePct,
+                                    onValueChange = { input ->
+                                        resourceReservePct = input
+                                            .filter { ch -> ch.isDigit() || ch == '.' || ch == ',' }
+                                            .replace(',', '.')
+                                            .take(4)
+                                    },
+                                    label = { Text("Резерв, %") },
+                                    placeholder = { Text("5") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                             Text(
                                 "Эти данные сохраняются и передаются на все командные экраны вместе с телеметрией.",
                                 color = EntryMuted,
@@ -163,7 +194,9 @@ fun RoleEntryScreen(
                                     driverName = driverName.trim(),
                                     carNumber = carNumber.trim(),
                                     carName = carName.trim(),
-                                    raceClass = raceClass.trim()
+                                    raceClass = raceClass.trim(),
+                                    raceTargetLaps = raceTargetLaps.toIntOrNull()?.coerceIn(0, 9999) ?: 0,
+                                    resourceReservePct = resourceReservePct.toDoubleOrNull()?.coerceIn(0.0, 25.0) ?: 5.0
                                 )
                             )
                         }
