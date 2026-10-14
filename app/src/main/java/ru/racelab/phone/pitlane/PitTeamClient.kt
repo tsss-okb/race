@@ -48,6 +48,18 @@ data class PitTeamSnapshot(
     val stintDegradationMsPerLap: Double? = null,
     val stintNextLapForecastMs: Long? = null,
     val pacePitWindow: String = "DATA",
+    val raceTargetLaps: Int = 0,
+    val resourceReservePct: Double = 5.0,
+    val strategyResourceKind: String = "NONE",
+    val strategyResourcePct: Double? = null,
+    val strategyUsagePerLapPct: Double? = null,
+    val strategyEstimatedLapsRemaining: Double? = null,
+    val strategyRaceLapsRemaining: Int? = null,
+    val strategyFinishMarginLaps: Double? = null,
+    val strategyMandatoryPit: Boolean = false,
+    val strategyResourcePitWindow: String = "DATA",
+    val strategyCombined: String = "DATA",
+    val strategySampleCount: Int = 0,
     val lapNo: Int = 0,
     val lapsCompleted: Int = 0,
     val lapCurrentMs: Long = 0L,
@@ -266,6 +278,18 @@ class PitTeamClient(private val config: PitTeamConfig) {
             stintDegradationMsPerLap = data.optNullableDouble("stintDegradationMsPerLap"),
             stintNextLapForecastMs = data.optNullableLong("stintNextLapForecastMs"),
             pacePitWindow = data.optString("pacePitWindow", "DATA").ifBlank { "DATA" },
+            raceTargetLaps = data.optInt("raceTargetLaps", 0).coerceAtLeast(0),
+            resourceReservePct = data.optDouble("resourceReservePct", 5.0).coerceIn(0.0, 25.0),
+            strategyResourceKind = data.optString("strategyResourceKind", "NONE").ifBlank { "NONE" },
+            strategyResourcePct = data.optNullableDouble("strategyResourcePct"),
+            strategyUsagePerLapPct = data.optNullableDouble("strategyUsagePerLapPct"),
+            strategyEstimatedLapsRemaining = data.optNullableDouble("strategyEstimatedLapsRemaining"),
+            strategyRaceLapsRemaining = data.optNullableInt("strategyRaceLapsRemaining"),
+            strategyFinishMarginLaps = data.optNullableDouble("strategyFinishMarginLaps"),
+            strategyMandatoryPit = data.optBoolean("strategyMandatoryPit", false),
+            strategyResourcePitWindow = data.optString("strategyResourcePitWindow", "DATA").ifBlank { "DATA" },
+            strategyCombined = data.optString("strategyCombined", "DATA").ifBlank { "DATA" },
+            strategySampleCount = data.optInt("strategySampleCount", 0).coerceAtLeast(0),
             lapNo = data.optInt("lapNo", 0),
             lapsCompleted = data.optInt("lapsCompleted", 0).coerceAtLeast(0),
             lapCurrentMs = data.optLong("lapCurrentMs", 0L),
@@ -308,4 +332,9 @@ private fun JSONObject.optNullableLong(name: String): Long? {
 private fun JSONObject.optNullableDouble(name: String): Double? {
     if (!has(name) || isNull(name)) return null
     return runCatching { getDouble(name) }.getOrNull()
+}
+
+private fun JSONObject.optNullableInt(name: String): Int? {
+    if (!has(name) || isNull(name)) return null
+    return runCatching { getInt(name) }.getOrNull()
 }
