@@ -315,6 +315,10 @@ private fun TeamGarageScreen(
         s != null && s.lastReceiveElapsedMs > 0L &&
             SystemClock.elapsedRealtime() - s.lastReceiveElapsedMs < 3_500L
     }
+    val engineerAlerts = cars.count { car ->
+        val s = snapshots[car.id]
+        s != null && (s.pitActive || s.pitLaneActive || s.pacePitWindow == "NOW" || s.pacePitWindow == "1 LAP")
+    }
 
     if (showAddDialog) {
         AddTeamCarDialog(
@@ -347,14 +351,14 @@ private fun TeamGarageScreen(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "RACELAB · TEAM GARAGE",
+                        "RACELAB · TEAM RACE ENGINEER",
                         color = TeamWhite,
                         fontFamily = RacingDisplay,
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "${cars.size} машин · ${onlineCount} онлайн · устройство ${deviceSlot}/5 · $deviceRole",
+                        "${cars.size} машин · ${onlineCount} онлайн · PIT alerts ${engineerAlerts} · устройство ${deviceSlot}/5 · $deviceRole",
                         color = TeamMuted,
                         fontSize = 12.sp
                     )
@@ -404,7 +408,7 @@ private fun TeamGarageScreen(
                     )
                 }
                 Text(
-                    "P TEAM — позиция только среди машин вашей команды по лучшему кругу. Для общей позиции гонки нужен внешний тайминг трассы.",
+                    "P TEAM — позиция среди машин команды по лучшему кругу. PIT WINDOW — рекомендация только по темпу/деградации кругов; топливо и фактический износ шин не учитываются без соответствующей телеметрии.",
                     color = TeamMuted,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
@@ -460,6 +464,25 @@ private fun TeamGarageCarRow(
     val teamGapMs = if (snapshot.lapBestMs != null && fastestTeamBestMs != null) {
         (snapshot.lapBestMs!! - fastestTeamBestMs).coerceAtLeast(0L)
     } else null
+    val strategyWindow = if (pitNow) "NOW" else snapshot.pacePitWindow
+    val strategyWindowText = if (strategyWindow == "DATA") {
+        "DATA ${snapshot.stintAnalysisLapCount}/3"
+    } else {
+        strategyWindow
+    }
+    val strategyWindowColor = when (strategyWindow) {
+        "NOW" -> TeamRed
+        "1 LAP", "2-3 LAPS", "3-5 LAPS" -> TeamYellow
+        "HOLD" -> TeamGreen
+        else -> TeamMuted
+    }
+    val degradationColor = when {
+        snapshot.stintDegradationMsPerLap == null -> TeamMuted
+        snapshot.stintDegradationMsPerLap!! >= 500.0 -> TeamRed
+        snapshot.stintDegradationMsPerLap!! >= 200.0 -> TeamYellow
+        snapshot.stintDegradationMsPerLap!! <= 0.0 -> TeamGreen
+        else -> TeamWhite
+    }
     val identity = listOfNotNull(
         snapshot.carNumber.takeIf { it.isNotBlank() }?.let { "#$it" },
         snapshot.driverName.takeIf { it.isNotBlank() }
@@ -592,6 +615,38 @@ private fun TeamGarageCarRow(
                         pitSoon -> TeamYellow
                         else -> TeamWhite
                     }
+                )
+            }
+
+            Spacer(Modifier.height(5.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                GarageMetric(
+                    "PRED LAP",
+                    format100(snapshot.stintNextLapForecastMs),
+                    Modifier.weight(1f),
+                    TeamWhite
+                )
+                GarageMetric(
+                    "STINT AVG",
+                    format100(snapshot.stintAverageLapMs),
+                    Modifier.weight(1f),
+                    TeamWhite
+                )
+                GarageMetric(
+                    "DEG",
+                    formatDegradation(snapshot.stintDegradationMsPerLap),
+                    Modifier.weight(.82f),
+                    degradationColor
+                )
+                GarageMetric(
+                    "PIT WINDOW",
+                    strategyWindowText,
+                    Modifier.weight(.95f),
+                    strategyWindowColor
                 )
             }
         }
@@ -1422,4 +1477,10 @@ private fun formatDelta100(ms: Long?): String {
     if (ms == null) return "—"
     val sign = if (ms < 0) "−" else "+"
     return sign + "%.2f".format(abs(ms) / 1000.0)
+}
+
+private fun formatDegradation(msPerLap: Double?): String {
+    if (msPerLap == null) return "—"
+    val sign = if (msPerLap < 0.0) "−" else "+"
+    return sign + "%.2f s/L".format(abs(msPerLap) / 1000.0)
 }
