@@ -44,7 +44,7 @@ class SessionFileWriter(context: Context) {
         gpsWriter.write(
             "ts,lat,lon,speed_kmh,heading,accuracy,altitude,source,lap_no,gx,gy,gz,g_total," +
                 "rpm,obd_speed,throttle,coolant,engine_load,intake_c,map_kpa,timing_deg,maf_gps,voltage_v," +
-                "oil_temp_c,fuel_pressure_kpa,short_trim,long_trim,ev_soc,ev_battery_kw,ev_motor_kw,ev_regen_kw," +
+                "oil_temp_c,fuel_level_pct,fuel_pressure_kpa,short_trim,long_trim,ev_soc,ev_battery_kw,ev_motor_kw,ev_regen_kw," +
                 "ev_battery_temp_c,ev_inverter_temp_c\n"
         )
         sensorWriter.write("ts,type,name,vendor,accuracy,hz,v0,v1,v2,v3,v4,v5\n")
@@ -64,7 +64,7 @@ class SessionFileWriter(context: Context) {
             gx, gy, gz, gt,
             obd.rpm ?: "", obd.speedKmh ?: "", obd.throttlePct ?: "", obd.coolantC ?: "",
             obd.engineLoadPct ?: "", obd.intakeC ?: "", obd.mapKpa ?: "", obd.timingDeg ?: "",
-            obd.mafGps ?: "", obd.voltageV ?: "", obd.oilTempC ?: "", obd.fuelPressureKpa ?: "",
+            obd.mafGps ?: "", obd.voltageV ?: "", obd.oilTempC ?: "", obd.fuelLevelPct ?: "", obd.fuelPressureKpa ?: "",
             obd.shortTrimPct ?: "", obd.longTrimPct ?: "",
             ev.socPct ?: "", ev.batteryPowerKw ?: "", ev.motorPowerKw ?: "", ev.regenKw ?: "",
             ev.batteryTempC ?: "", ev.inverterTempC ?: ""
@@ -157,6 +157,8 @@ class SessionFileWriter(context: Context) {
             .put("carNumber", raceProfile.carNumber)
             .put("carName", raceProfile.carName)
             .put("raceClass", raceProfile.raceClass)
+            .put("raceTargetLaps", raceProfile.raceTargetLaps)
+            .put("resourceReservePct", raceProfile.resourceReservePct)
             .put("laps", JSONArray().apply {
                 laps.forEach { lap ->
                     put(JSONObject()
