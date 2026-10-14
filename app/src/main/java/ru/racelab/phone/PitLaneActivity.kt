@@ -317,7 +317,10 @@ private fun TeamGarageScreen(
     }
     val engineerAlerts = cars.count { car ->
         val s = snapshots[car.id]
-        s != null && (s.pitActive || s.pitLaneActive || s.pacePitWindow == "NOW" || s.pacePitWindow == "1 LAP")
+        s != null && (
+            s.pitActive || s.pitLaneActive || s.strategyMandatoryPit ||
+                s.strategyCombined.contains("NOW") || s.strategyCombined.contains("1 LAP")
+            )
     }
 
     if (showAddDialog) {
@@ -408,7 +411,7 @@ private fun TeamGarageScreen(
                     )
                 }
                 Text(
-                    "P TEAM — позиция среди машин команды по лучшему кругу. PIT WINDOW — рекомендация только по темпу/деградации кругов; топливо и фактический износ шин не учитываются без соответствующей телеметрии.",
+                    "P TEAM — позиция среди машин команды по лучшему кругу. PACE PIT — по темпу. RESOURCE/STRATEGY используют реальный Fuel Level или EV SOC; FINISH Δ сравнивает запас ресурса с оставшимися кругами заданной гонки.",
                     color = TeamMuted,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
@@ -490,7 +493,8 @@ private fun TeamGarageCarRow(
     val carInfo = listOf(
         snapshot.teamName.takeIf { it.isNotBlank() } ?: car.label.ifBlank { "Команда" },
         snapshot.carName.ifBlank { "Машина —" },
-        snapshot.raceClass.ifBlank { "Класс —" }
+        snapshot.raceClass.ifBlank { "Класс —" },
+        snapshot.raceTargetLaps.takeIf { it > 0 }?.let { "RACE ${it}L" } ?: "RACE —"
     ).joinToString(" · ")
 
     Surface(
@@ -643,10 +647,49 @@ private fun TeamGarageCarRow(
                     degradationColor
                 )
                 GarageMetric(
-                    "PIT WINDOW",
+                    "PACE PIT",
                     strategyWindowText,
                     Modifier.weight(.95f),
                     strategyWindowColor
+                )
+            }
+
+            Spacer(Modifier.height(5.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                GarageMetric(
+                    "RESOURCE",
+                    formatResource(snapshot),
+                    Modifier.weight(.95f),
+                    resourceLevelColor(snapshot.strategyResourcePct)
+                )
+                GarageMetric(
+                    "USE/LAP",
+                    snapshot.strategyUsagePerLapPct?.let { "%.2f%%".format(it) }
+                        ?: if (snapshot.strategyResourceKind != "NONE") "DATA ${snapshot.strategySampleCount}" else "—",
+                    Modifier.weight(.8f),
+                    TeamWhite
+                )
+                GarageMetric(
+                    "RANGE",
+                    snapshot.strategyEstimatedLapsRemaining?.let { "%.1f L".format(it) } ?: "—",
+                    Modifier.weight(.75f),
+                    resourceRangeColor(snapshot)
+                )
+                GarageMetric(
+                    "FINISH Δ",
+                    formatFinishMargin(snapshot.strategyFinishMarginLaps),
+                    Modifier.weight(.78f),
+                    finishMarginColor(snapshot.strategyFinishMarginLaps)
+                )
+                GarageMetric(
+                    "STRATEGY",
+                    snapshot.strategyCombined,
+                    Modifier.weight(1.05f),
+                    strategyCombinedColor(snapshot)
                 )
             }
         }
@@ -1228,19 +1271,59 @@ private fun TeamEngineerBar(snapshot: PitTeamSnapshot) {
         else -> TeamWhite
     }
 
-    Row(
-        Modifier.fillMaxWidth().height(50.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        GarageMetric("PRED LAP", format100(snapshot.stintNextLapForecastMs), Modifier.weight(1f))
-        GarageMetric("STINT AVG", format100(snapshot.stintAverageLapMs), Modifier.weight(1f))
-        GarageMetric(
-            "DEG",
-            formatDegradation(snapshot.stintDegradationMsPerLap),
-            Modifier.weight(.82f),
-            degradationColor
-        )
-        GarageMetric("PIT WINDOW", windowText, Modifier.weight(.95f), windowColor)
+        Row(
+            Modifier.fillMaxWidth().height(50.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GarageMetric("PRED LAP", format100(snapshot.stintNextLapForecastMs), Modifier.weight(1f))
+            GarageMetric("STINT AVG", format100(snapshot.stintAverageLapMs), Modifier.weight(1f))
+            GarageMetric(
+                "DEG",
+                formatDegradation(snapshot.stintDegradationMsPerLap),
+                Modifier.weight(.82f),
+                degradationColor
+            )
+            GarageMetric("PACE PIT", windowText, Modifier.weight(.95f), windowColor)
+        }
+        Row(
+            Modifier.fillMaxWidth().height(50.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            GarageMetric(
+                "RESOURCE",
+                formatResource(snapshot),
+                Modifier.weight(.95f),
+                resourceLevelColor(snapshot.strategyResourcePct)
+            )
+            GarageMetric(
+                "USE/LAP",
+                snapshot.strategyUsagePerLapPct?.let { "%.2f%%".format(it) }
+                    ?: if (snapshot.strategyResourceKind != "NONE") "DATA ${snapshot.strategySampleCount}" else "—",
+                Modifier.weight(.8f)
+            )
+            GarageMetric(
+                "RANGE",
+                snapshot.strategyEstimatedLapsRemaining?.let { "%.1f L".format(it) } ?: "—",
+                Modifier.weight(.75f),
+                resourceRangeColor(snapshot)
+            )
+            GarageMetric(
+                "FINISH Δ",
+                formatFinishMargin(snapshot.strategyFinishMarginLaps),
+                Modifier.weight(.78f),
+                finishMarginColor(snapshot.strategyFinishMarginLaps)
+            )
+            GarageMetric(
+                "STRATEGY",
+                snapshot.strategyCombined,
+                Modifier.weight(1.05f),
+                strategyCombinedColor(snapshot)
+            )
+        }
     }
 }
 
@@ -1497,6 +1580,53 @@ private fun TeamBottomMetric(
             )
         }
     }
+}
+
+private fun formatResource(snapshot: PitTeamSnapshot): String {
+    val pct = snapshot.strategyResourcePct ?: return "—"
+    val label = when (snapshot.strategyResourceKind) {
+        "FUEL" -> "FUEL"
+        "ENERGY" -> "SOC"
+        else -> return "—"
+    }
+    return "%s %.1f%%".format(label, pct)
+}
+
+private fun formatFinishMargin(value: Double?): String {
+    if (value == null) return "—"
+    val sign = if (value < 0.0) "−" else "+"
+    return sign + "%.1f L".format(abs(value))
+}
+
+private fun resourceLevelColor(value: Double?): Color = when {
+    value == null -> TeamMuted
+    value <= 10.0 -> TeamRed
+    value <= 20.0 -> TeamYellow
+    else -> TeamWhite
+}
+
+private fun resourceRangeColor(snapshot: PitTeamSnapshot): Color = when {
+    snapshot.strategyEstimatedLapsRemaining == null -> TeamMuted
+    snapshot.strategyMandatoryPit -> TeamYellow
+    else -> TeamWhite
+}
+
+private fun finishMarginColor(value: Double?): Color = when {
+    value == null -> TeamMuted
+    value < 0.0 -> TeamRed
+    value < 1.0 -> TeamYellow
+    else -> TeamGreen
+}
+
+private fun strategyCombinedColor(snapshot: PitTeamSnapshot): Color = when {
+    snapshot.strategyCombined.contains("NOW") -> TeamRed
+    snapshot.strategyMandatoryPit -> TeamYellow
+    snapshot.strategyCombined.contains("1 LAP") ||
+        snapshot.strategyCombined.contains("2-3") ||
+        snapshot.strategyCombined.contains("3-5") -> TeamYellow
+    snapshot.strategyCombined.contains("HOLD") ||
+        snapshot.strategyCombined.contains("OK") -> TeamGreen
+    else -> TeamMuted
 }
 
 private fun timeParts100(ms: Long): Pair<String, String> {
