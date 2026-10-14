@@ -7,7 +7,7 @@ import ru.racelab.phone.core.ObdParser
 import java.util.UUID
 
 enum class EvChannel {
-    NONE, SOC, BATTERY_POWER_KW, MOTOR_POWER_KW, REGEN_KW, BATTERY_TEMP_C, INVERTER_TEMP_C
+    NONE, FUEL_LEVEL_PCT, SOC, BATTERY_POWER_KW, MOTOR_POWER_KW, REGEN_KW, BATTERY_TEMP_C, INVERTER_TEMP_C
 }
 
 data class CustomPid(
