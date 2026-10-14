@@ -16,6 +16,7 @@ import ru.racelab.phone.core.RaceGeometry
 import ru.racelab.phone.core.PitTimerEngine
 import ru.racelab.phone.core.MiniSectorTracker
 import ru.racelab.phone.core.RaceLine
+import ru.racelab.phone.core.RaceEngineer
 import ru.racelab.phone.sensor.MotionProcessor
 import ru.racelab.phone.sensor.MountDirection
 import ru.racelab.phone.track.TrackProfile
@@ -106,6 +107,11 @@ object RaceRuntime {
             pitDistanceM = null,
             stintNo = 1,
             stintLapNo = 0,
+            stintAnalysisLapCount = 0,
+            stintAverageLapMs = null,
+            stintDegradationMsPerLap = null,
+            stintNextLapForecastMs = null,
+            pacePitWindow = "DATA",
             pitTimerActive = false,
             pitStartedElapsedMs = null,
             pitLastMs = null,
@@ -428,6 +434,20 @@ object RaceRuntime {
         writer?.writeGps(point, activeLapNo, gX, gY, gZ, gTotal, obd, ev)
         if (update.lapCompleted != null) writer?.flush()
 
+        val rawStintLapTimes = engine.laps
+            .drop(stintStartLapCount.coerceAtMost(engine.laps.size))
+            .map { it.timeMs }
+        val paceStintLapTimes = if (stintNo > 1 && rawStintLapTimes.isNotEmpty()) {
+            rawStintLapTimes.drop(1)
+        } else {
+            rawStintLapTimes
+        }
+        val engineerMetrics = RaceEngineer.analyze(
+            lapTimesMs = paceStintLapTimes,
+            bestLapMs = engine.bestLapMs,
+            pitActive = pitLaneActive || _state.value.pitTimerActive
+        )
+
         val speedKmhNow = ((point.speedMps ?: 0.0) * 3.6).coerceAtLeast(0.0)
         var autoStop = false
         if (_state.value.sessionActive && _state.value.autoStopEnabled && engine.laps.isNotEmpty()) {
@@ -470,6 +490,11 @@ object RaceRuntime {
             stintNo = stintNo,
             stintLapNo = ((engine.laps.size - stintStartLapCount).coerceAtLeast(0) +
                 if (engine.currentLapStartMs != null) 1 else 0),
+            stintAnalysisLapCount = engineerMetrics.sampleCount,
+            stintAverageLapMs = engineerMetrics.averageLapMs,
+            stintDegradationMsPerLap = engineerMetrics.degradationMsPerLap,
+            stintNextLapForecastMs = prediction?.projectedMs ?: engineerMetrics.nextLapForecastMs,
+            pacePitWindow = engineerMetrics.pitWindow,
             lastMessage = when {
                 pitEntered -> "PIT IN • отсчёт pit lane начат"
                 pitExited -> "PIT OUT • pit lane " + formatLap(pitLaneLastMs ?: 0L)
@@ -687,12 +712,14 @@ object RaceRuntime {
         val event = pitTimer.toggle(SystemClock.elapsedRealtime(), trigger) ?: return
         val snap = event.snapshot
         writer?.writePitEvent(System.currentTimeMillis(), event.type, event.elapsedMs, trigger)
+        var fallbackStintChanged = false
         if (snap.active && (pitEntryLine == null || pitExitLine == null)) {
             pitVisitOpen = true
         } else if (!snap.active && pitVisitOpen && (pitEntryLine == null || pitExitLine == null)) {
             stintNo += 1
             stintStartLapCount = engine.laps.size
             pitVisitOpen = false
+            fallbackStintChanged = true
         }
         _state.value = _state.value.copy(
             pitTimerActive = snap.active,
@@ -704,6 +731,11 @@ object RaceRuntime {
             stintNo = stintNo,
             stintLapNo = ((engine.laps.size - stintStartLapCount).coerceAtLeast(0) +
                 if (engine.currentLapStartMs != null) 1 else 0),
+            stintAnalysisLapCount = if (fallbackStintChanged) 0 else _state.value.stintAnalysisLapCount,
+            stintAverageLapMs = if (fallbackStintChanged) null else _state.value.stintAverageLapMs,
+            stintDegradationMsPerLap = if (fallbackStintChanged) null else _state.value.stintDegradationMsPerLap,
+            stintNextLapForecastMs = if (fallbackStintChanged) null else _state.value.stintNextLapForecastMs,
+            pacePitWindow = if (snap.active) "NOW" else if (fallbackStintChanged) "DATA" else _state.value.pacePitWindow,
             lastMessage = if (snap.active) {
                 "PIT TIMER START • " + trigger
             } else {
