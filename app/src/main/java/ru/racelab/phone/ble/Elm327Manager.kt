@@ -179,7 +179,7 @@ class Elm327Manager(
     private fun buildPollCommands(): List<String> {
         val standard = listOf(
             "0104", "0105", "0106", "0107", "010A", "010B", "010C",
-            "010D", "010E", "010F", "0110", "0111", "0142", "015C"
+            "010D", "010E", "010F", "0110", "0111", "012F", "0142", "015C"
         )
         val filtered = if (supportedPids.isEmpty()) standard else standard.filter { it in supportedPids }
         return (filtered + customPids.map { it.request.trim().uppercase().replace(" ", "") })
