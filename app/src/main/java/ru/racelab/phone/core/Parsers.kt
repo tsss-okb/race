@@ -77,6 +77,7 @@ data class ObdReading(
     val mafGps: Double? = null,
     val voltageV: Double? = null,
     val oilTempC: Double? = null,
+    val fuelLevelPct: Double? = null,
     val fuelPressureKpa: Double? = null,
     val shortTrimPct: Double? = null,
     val longTrimPct: Double? = null
@@ -115,6 +116,7 @@ object ObdParser {
                 0x0F -> ObdReading(intakeC = (a - 40).toDouble())
                 0x10 -> if (b != null) ObdReading(mafGps = (a * 256 + b) / 100.0) else null
                 0x11 -> ObdReading(throttlePct = a * 100.0 / 255.0)
+                0x2F -> ObdReading(fuelLevelPct = a * 100.0 / 255.0)
                 0x42 -> if (b != null) ObdReading(voltageV = (a * 256 + b) / 1000.0) else null
                 0x5C -> ObdReading(oilTempC = (a - 40).toDouble())
                 else -> null
