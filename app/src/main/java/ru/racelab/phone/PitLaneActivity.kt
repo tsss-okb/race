@@ -308,7 +308,7 @@ private fun TeamGarageScreen(
     onSettings: () -> Unit
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
-    var section by rememberSaveable { mutableStateOf(TeamMenuSection.OVERVIEW) }
+    var section by remember { mutableStateOf(TeamMenuSection.OVERVIEW) }
     val snapshots = remember { mutableStateMapOf<String, PitTeamSnapshot>() }
 
     val rankedIds = cars
