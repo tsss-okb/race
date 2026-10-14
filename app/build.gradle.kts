@@ -14,8 +14,8 @@ android {
         applicationId = "ru.racelab.phone"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "3.7.0"
+        versionCode = 33
+        versionName = "3.8.0"
     }
 
     buildFeatures {
