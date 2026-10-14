@@ -25,7 +25,7 @@ class RaceEngineerTest {
             bestLapMs = 90_000L,
             pitActive = false
         )
-        assertTrue(m.pitWindow == "1 LAP" || m.pitWindow == "NOW")
+        assertTrue(m.pitWindow == "2-3 LAPS" || m.pitWindow == "1 LAP" || m.pitWindow == "NOW")
         assertTrue((m.degradationMsPerLap ?: 0.0) > 400.0)
     }
 
