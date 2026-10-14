@@ -29,6 +29,7 @@ enum class CanChannel {
     WHEEL_RR_KMH,
     COOLANT_C,
     OIL_TEMP_C,
+    FUEL_LEVEL_PCT,
     EV_SOC,
     EV_BATTERY_KW,
     EV_MOTOR_KW,
