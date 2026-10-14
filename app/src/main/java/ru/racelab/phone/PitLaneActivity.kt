@@ -869,6 +869,7 @@ private fun PitTeamDashboard(
                     onGarage = onGarage
                 )
                 TeamDevicesBar(teamDevices)
+                TeamEngineerBar(snapshot)
 
                 TeamPitCard(
                     active = snapshot.pitActive,
@@ -956,6 +957,7 @@ private fun PitTeamDashboard(
                     onGarage = onGarage
                 )
                 TeamDevicesBar(teamDevices)
+                TeamEngineerBar(snapshot)
 
                 Row(
                     Modifier.fillMaxWidth().weight(1f),
@@ -1201,6 +1203,44 @@ private fun TeamHeader(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TeamEngineerBar(snapshot: PitTeamSnapshot) {
+    val window = if (snapshot.pitActive || snapshot.pitLaneActive) "NOW" else snapshot.pacePitWindow
+    val windowText = if (window == "DATA") {
+        "DATA ${snapshot.stintAnalysisLapCount}/3"
+    } else {
+        window
+    }
+    val windowColor = when (window) {
+        "NOW" -> TeamRed
+        "1 LAP", "2-3 LAPS", "3-5 LAPS" -> TeamYellow
+        "HOLD" -> TeamGreen
+        else -> TeamMuted
+    }
+    val degradationColor = when {
+        snapshot.stintDegradationMsPerLap == null -> TeamMuted
+        snapshot.stintDegradationMsPerLap!! >= 500.0 -> TeamRed
+        snapshot.stintDegradationMsPerLap!! >= 200.0 -> TeamYellow
+        snapshot.stintDegradationMsPerLap!! <= 0.0 -> TeamGreen
+        else -> TeamWhite
+    }
+
+    Row(
+        Modifier.fillMaxWidth().height(50.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        GarageMetric("PRED LAP", format100(snapshot.stintNextLapForecastMs), Modifier.weight(1f))
+        GarageMetric("STINT AVG", format100(snapshot.stintAverageLapMs), Modifier.weight(1f))
+        GarageMetric(
+            "DEG",
+            formatDegradation(snapshot.stintDegradationMsPerLap),
+            Modifier.weight(.82f),
+            degradationColor
+        )
+        GarageMetric("PIT WINDOW", windowText, Modifier.weight(.95f), windowColor)
     }
 }
 
