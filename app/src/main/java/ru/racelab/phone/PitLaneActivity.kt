@@ -48,6 +48,14 @@ private val TeamRed = RacingColors.Error
 private val TeamWhite = RacingColors.White
 private val TeamMuted = RacingColors.Muted
 
+private enum class TeamMenuSection(val title: String, val shortTitle: String) {
+    OVERVIEW("ОБЗОР", "ОБЗОР"),
+    CARS("МАШИНЫ", "МАШИНЫ"),
+    STRATEGY("СТРАТЕГИЯ", "СТРАТ."),
+    PIT("PIT", "PIT"),
+    CONNECTION("СВЯЗЬ", "СВЯЗЬ")
+}
+
 class PitLaneActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -300,6 +308,7 @@ private fun TeamGarageScreen(
     onSettings: () -> Unit
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var section by rememberSaveable { mutableStateOf(TeamMenuSection.OVERVIEW) }
     val snapshots = remember { mutableStateMapOf<String, PitTeamSnapshot>() }
 
     val rankedIds = cars
@@ -322,6 +331,19 @@ private fun TeamGarageScreen(
                 s.strategyCombined.contains("NOW") || s.strategyCombined.contains("1 LAP")
             )
     }
+    val mandatoryPitCount = cars.count { snapshots[it.id]?.strategyMandatoryPit == true }
+    val pitActiveCount = cars.count { car ->
+        val s = snapshots[car.id]
+        s?.pitActive == true || s?.pitLaneActive == true
+    }
+    val fastestCarId = rankedIds.firstOrNull()
+    val fastestSnapshot = fastestCarId?.let { id -> snapshots[id] }
+    val fastestLabel = fastestSnapshot?.let { s ->
+        listOfNotNull(
+            s.carNumber.takeIf { it.isNotBlank() }?.let { "#$it" },
+            s.driverName.takeIf { it.isNotBlank() }
+        ).joinToString(" · ")
+    }.orEmpty().ifBlank { "—" }
 
     if (showAddDialog) {
         AddTeamCarDialog(
@@ -386,6 +408,29 @@ private fun TeamGarageScreen(
 
         Spacer(Modifier.height(7.dp))
 
+        TeamCommandSummary(
+            cars = cars.size,
+            online = onlineCount,
+            alerts = engineerAlerts,
+            mandatoryPit = mandatoryPitCount,
+            pitActive = pitActiveCount,
+            fastest = fastestLabel,
+            fastestLapMs = fastestTeamBestMs,
+            onOverview = { section = TeamMenuSection.OVERVIEW },
+            onStrategy = { section = TeamMenuSection.STRATEGY },
+            onPit = { section = TeamMenuSection.PIT },
+            onConnection = { section = TeamMenuSection.CONNECTION }
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        TeamMenuTabs(
+            selected = section,
+            onSelected = { section = it }
+        )
+
+        Spacer(Modifier.height(7.dp))
+
         if (cars.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Добавь первую машину команды", color = TeamMuted)
@@ -404,6 +449,7 @@ private fun TeamGarageScreen(
                         deviceRole = deviceRole,
                         teamPosition = positionById[car.id],
                         fastestTeamBestMs = fastestTeamBestMs,
+                        section = section,
                         canDelete = index > 0,
                         onSnapshot = { snapshots[car.id] = it },
                         onOpen = { onOpenCar(car) },
@@ -411,7 +457,13 @@ private fun TeamGarageScreen(
                     )
                 }
                 Text(
-                    "P TEAM — позиция среди машин команды по лучшему кругу. PACE PIT — по темпу. RESOURCE/STRATEGY используют реальный Fuel Level или EV SOC; FINISH Δ сравнивает запас ресурса с оставшимися кругами заданной гонки.",
+                    when (section) {
+                        TeamMenuSection.OVERVIEW -> "ОБЗОР: статус всей команды, лучшие времена и срочные действия."
+                        TeamMenuSection.CARS -> "МАШИНЫ: круги, текущий темп, лучший круг, дельта и скорость."
+                        TeamMenuSection.STRATEGY -> "СТРАТЕГИЯ: прогноз круга, деградация, ресурс, запас до финиша и итоговая рекомендация."
+                        TeamMenuSection.PIT -> "PIT: приближение, активный pit-lane, PIT-таймер, количество остановок и стратегия заезда."
+                        TeamMenuSection.CONNECTION -> "СВЯЗЬ: LIVE/OFFLINE, транспорт, RTT, GPS и качество телеметрии."
+                    },
                     color = TeamMuted,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
@@ -428,6 +480,7 @@ private fun TeamGarageCarRow(
     deviceRole: String,
     teamPosition: Int?,
     fastestTeamBestMs: Long?,
+    section: TeamMenuSection,
     canDelete: Boolean,
     onSnapshot: (PitTeamSnapshot) -> Unit,
     onOpen: () -> Unit,
